@@ -159,6 +159,10 @@ vi.mock('@/stores/auth', () => ({
     user: ref(null),
     token: ref<string | null>(null),
     hasRole: (r: string) => roles.current.includes(r),
+    // 2026-10-14（RBAC 控制面板）：「发送到工序」入口改判 `queue.dispatch` 权限点。
+    // 默认放行（与既有 `roles.current = ['MANAGER','CLERK']` 的全权设定对齐），
+    // 无权场景由 T7e 单独钉。
+    hasPermission: (code: string) => permissions.current.includes(code),
     hasMenuCode: () => false,
     canOperateShelf: () => false,
     getAuthHeader: () => ({}),
@@ -326,6 +330,9 @@ const recallable: { current: Ref<boolean> } = { current: ref(false) };
  *  同组角色（两个端点各自的 RBAC 声明相同，但板级保留两个独立闸）。 */
 const roles: { current: string[] } = { current: ['MANAGER', 'CLERK'] };
 
+/** 2026-10-14：下发放行权限点集合（auth mock 的 hasPermission 读它）。 */
+const permissions: { current: string[] } = { current: ['queue.dispatch'] };
+
 // 公共环境未处理 rejection（vue-query 异步 + 子组件 mount）。
 process.on('unhandledRejection', () => undefined);
 
@@ -345,6 +352,7 @@ describe('QueueBoard（生产队列看板接线 guard）', () => {
     activeShelfIdRef.value = undefined;
     recallable.current.value = false;
     roles.current = ['MANAGER', 'CLERK'];
+    permissions.current = ['queue.dispatch'];
     menuOpenCalls.length = 0;
     recallBatchMock.mockClear();
     dispatchMutateMock.mockClear();
@@ -527,10 +535,13 @@ describe('QueueBoard（生产队列看板接线 guard）', () => {
     const evt = new MouseEvent('contextmenu');
     const card = { batch_id: '3000000000001', version: 7, quantity: 4 };
 
-    // 无权（既不能召回也不能拆批）：菜单不打开，且给出可读提示而不是静默无反馈
-    // （卡片侧已 prevent 掉系统右键菜单，静默早退等于无反馈）
+    // 无权（既不能召回也不能拆批、也没有下发放行权限点）：菜单不打开，且给出可读提示
+    // 而不是静默无反馈（卡片侧已 prevent 掉系统右键菜单，静默早退等于无反馈）
+    // ⚠️ 2026-10-14：空角色集**不再**足以让菜单为空 —— 派发闸也要一起关掉
+    // （`canDispatch` 是第三个闸，板级判「是不是权限问题」时必须把它算进去）。
     recallable.current.value = false;
     roles.current = [];
+    permissions.current = [];
     vi.mocked(ElMessage.warning).mockClear();
     open(evt, card, 'pool');
     expect(menuOpenCalls).toHaveLength(0);
@@ -731,6 +742,28 @@ describe('QueueBoard（生产队列看板接线 guard）', () => {
     const items = menuOpenCalls[menuOpenCalls.length - 1]![1] as { label: string }[];
     expect(items.map((i) => i.label)).toEqual(['拆分批次']);
     expect(dispatchMutateMock).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('T7e：无 queue.dispatch 权限点 ⇒ 待下发池右键**不出现**「发送到工序」（2026-10-14 闸门接线）', async () => {
+    // 板级接线层的一条：派生层（queueBatchMenuItems）已经单测过 canDispatch 的两种取值，
+    // 这里守的是「板级确实把 auth.hasPermission 的结果喂进去了」—— 少接一次会让
+    // 派生层的守卫形同虚设（闸门写了但永远是 true）。
+    activeShelfIdRef.value = '5000000000001';
+    roles.current = ['MANAGER', 'CLERK']; // 全权角色
+    permissions.current = []; // 但没有下发放行权限点
+    const wrapper = mount(QueueBoard, {
+      global: { plugins: [[VueQueryPlugin, { queryClient: testQueryClient }]] },
+    });
+    await flushPromises();
+    const provides = (wrapper.vm.$ as unknown as { provides: Record<string, unknown> }).provides;
+    const open = provides.openBatchContextMenu as (e: MouseEvent, b: unknown, a: string) => void;
+    // 工序列表 mock 成空 ⇒ 二级菜单本来就不出现；这条断言守的是「连父项都不给」，
+    // 也就是 canDispatch=false 这条新闸确实生效了（拆批仍要给）。
+    open(new MouseEvent('contextmenu'), { batch_id: 'X', version: 1, quantity: 3 }, 'pending');
+    const items = menuOpenCalls[menuOpenCalls.length - 1]![1] as { label: string }[];
+    expect(items.map((i) => i.label)).toEqual(['拆分批次']);
+    expect(items.map((i) => i.label)).not.toContain('发送到工序');
     wrapper.unmount();
   });
 

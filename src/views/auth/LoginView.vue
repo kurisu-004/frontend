@@ -55,6 +55,7 @@ import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { User, Lock } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/stores/auth';
+import { findFirstMenuPath } from '@/utils/menu';
 import BeianFooter from '@/components/BeianFooter.vue';
 import LoginCard from './LoginCard.vue';
 import { loginSchema, toFieldErrors, type LoginInput, type LoginFieldErrors } from './loginSchema';
@@ -107,7 +108,10 @@ const onSubmit = async () => {
     // 2026-09-26：mutateAsync 收 LoginCredentials 对象（{ username, password }）。
     const u = await auth.loginMutation.mutateAsync(result.data);
     // 按角色优先级自动跳转（视图关注点，留在 LoginView）。
-    if (u.roles.includes('MANAGER')) {
+    // ⚠️ **ADMIN 必须显式列在这里**：它是元角色（`stores/auth.ts` 的 hasRole /
+    // hasPermission 对含 ADMIN 的账号通配短路），`roles` 只有 ['ADMIN'] 的账号若只走
+    // 下面的枚举匹配会全部落空 ⇒ 停在登录页报「账号无任何可用角色」。ADMIN 优先进大屏。
+    if (u.roles.includes('ADMIN') || u.roles.includes('MANAGER')) {
       router.replace('/dashboard');
       return;
     }
@@ -121,6 +125,17 @@ const onSubmit = async () => {
     }
     if (u.roles.includes('SHELF_ACCOUNT')) {
       router.replace('/scan/badge');
+      return;
+    }
+    // 枚举分支全落空（管理员自建的自定义角色，如 `QC_LEAD`）：⚠️ 当前后端在**登录阶段**
+    // 就会拒掉「只有自定义角色」的账号（角色枚举认不出未知 code ⇒ 空 ⇒ 20606 NO_ROLE /
+    // 403），本分支是**后端将来放宽后的前瞻兜底**。一旦登录放行，这类账号的可用面就是
+    // 它的菜单树（后端按原始 role code 装载）—— 取树里一个有 path 的节点作落地页（与
+    // 路由守卫 menuCode 校验失败的降级目标同一函数），不把账号卡死在登录页。
+    // 只有菜单树也为空才报「无任何可用角色」。
+    const fallback = findFirstMenuPath(u.menus);
+    if (fallback) {
+      router.replace(fallback);
       return;
     }
     noRoleError.value = '账号无任何可用角色';

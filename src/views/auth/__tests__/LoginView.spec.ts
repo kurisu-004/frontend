@@ -1,6 +1,7 @@
 // 2026-09-24 新增：LoginView 单测。
-// 覆盖：空字段校验、全空格 username trim、合法凭据成功跳转、ApiError 40101
-// 错误映射、mutationFn 调用参数、Zod 校验失败时不调 login。
+// 覆盖：空字段校验、全空格 username trim、合法凭据成功跳转（含 ADMIN 元角色与
+// 自定义角色的菜单树回退）、ApiError 40101 错误映射、mutationFn 调用参数、
+// Zod 校验失败时不调 login。
 // 2026-09-26 迁移：mock 改 @/stores/auth（替代 @/composables/useAuthSession），
 // loginMock → loginMutateAsyncMock；调用形态从 (u, p) 改为 ({ username, password })。
 // mock 内部维护 isPending / error 状态，mutateAsync mock 副作用写入；
@@ -61,6 +62,7 @@ vi.mock('vue-router', () => ({
 import LoginView from '../LoginView.vue';
 import { ApiError } from '@/api/http';
 import type { CurrentUser } from '@/types/user';
+import type { MenuNode } from '@/types/menu';
 
 // 2026-09-24 EP 组件 stub：仓内走 unplugin-vue-components 自动注册，vitest 不挂
 // 该插件；挂最小 stub 让 mount 跑得通，ElInput 用原生 input 替代便于 setValue
@@ -157,15 +159,45 @@ const globalConfig = {
 // 2026-09-24 重测：删掉该 hook 后 38 文件 413 测试全绿，移除。
 process.on('unhandledRejection', () => undefined);
 
-const makeUser = (roles: string[]): CurrentUser => ({
+const makeUser = (roles: string[], menus: MenuNode[] = []): CurrentUser => ({
   id: 'u1',
   username: 'alice',
   full_name: 'Alice',
   is_active: true,
   roles,
   shelf_ids: [],
-  menus: [],
+  menus,
+  // 2026-10-14：CurrentUser 新增必填 permissions（RBAC 面板上线）；本 spec 断的是
+  // 登录后的角色跳转，不涉及权限点闸门。
+  permissions: [],
 });
+
+/** 自定义角色账号的菜单树：分组节点 path=null（不可落点），叶子有 path。 */
+const USER_MENUS: MenuNode[] = [
+  {
+    id: 'g1',
+    version: 0,
+    parent_id: null,
+    code: 'auth_group',
+    title: '权限管理',
+    path: null,
+    icon: 'Key',
+    sort_order: 30,
+    children: [
+      {
+        id: 'u1',
+        version: 0,
+        parent_id: 'g1',
+        code: 'users_list',
+        title: '账号管理',
+        path: '/users',
+        icon: 'List',
+        sort_order: 10,
+        children: [],
+      },
+    ],
+  },
+];
 
 describe('LoginView', () => {
   beforeEach(() => {
@@ -208,6 +240,50 @@ describe('LoginView', () => {
       password: 'password123',
     });
     expect(routerReplace).toHaveBeenCalledWith('/dashboard');
+  });
+
+  // 2026-10-14（review 第 1 轮 B4）：ADMIN 是元角色，跳转判定必须显式认它 ——
+  // 只枚举 MANAGER / CLERK … 时 roles:['ADMIN'] 全部落空，账号卡在登录页报
+  // 「账号无任何可用角色」。
+  it('合法凭据 + 仅 ADMIN 角色：跳 /dashboard（元角色通配，不落「无可用角色」）', async () => {
+    loginMutateAsyncMock.mockResolvedValue(makeUser(['ADMIN']));
+    const wrapper = mount(LoginView, { global: globalConfig });
+    const inputs = wrapper.findAll('input');
+    await inputs[0].setValue('alice');
+    await inputs[1].setValue('password123');
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+    expect(routerReplace).toHaveBeenCalledWith('/dashboard');
+    expect(wrapper.text()).not.toContain('账号无任何可用角色');
+  });
+
+  // 2026-10-14：管理员可自建角色（如 QC_LEAD），它不在内置枚举里。⚠️ 当前后端**登录
+  // 即拒**「只有自定义角色」的账号（20606 NO_ROLE / 403）⇒ 本用例的菜单树回退是
+  // **后端将来放宽登录后的前瞻兜底**；逻辑保留，一旦放行就按菜单树落点。
+  it('仅自定义角色 + 非空菜单：回退到菜单树里一个有 path 的节点', async () => {
+    loginMutateAsyncMock.mockResolvedValue(makeUser(['QC_LEAD'], USER_MENUS));
+    const wrapper = mount(LoginView, { global: globalConfig });
+    const inputs = wrapper.findAll('input');
+    await inputs[0].setValue('alice');
+    await inputs[1].setValue('password123');
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+
+    expect(routerReplace).toHaveBeenCalledWith('/users');
+    expect(wrapper.text()).not.toContain('账号无任何可用角色');
+  });
+
+  it('仅自定义角色 + 菜单树为空：才显示「账号无任何可用角色」', async () => {
+    loginMutateAsyncMock.mockResolvedValue(makeUser(['QC_LEAD']));
+    const wrapper = mount(LoginView, { global: globalConfig });
+    const inputs = wrapper.findAll('input');
+    await inputs[0].setValue('alice');
+    await inputs[1].setValue('password123');
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+
+    expect(routerReplace).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain('账号无任何可用角色');
   });
 
   it('ApiError 40101：errorMessage 显示账号或密码错误', async () => {

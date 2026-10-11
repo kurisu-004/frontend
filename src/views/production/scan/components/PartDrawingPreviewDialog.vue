@@ -69,10 +69,11 @@ import { Download, Files, Loading } from '@element-plus/icons-vue';
 import { api } from '@/api/http';
 import PdfViewer from '@/components/PdfViewer.vue';
 import { getDownloadUrl, listPartFilesByOwner } from '@/api/assembly';
-// 2026-10-11：「下载文件」按钮的角色闸门。后端把 part_file 的列表 / content 对
+// 2026-10-11：「下载文件」按钮的权限闸门。后端把 part_file 的列表 / content 对
 // SHELF_ACCOUNT 放开了（工控机预览图纸打的就是这两条），但 `/part-files/{id}/url`
 // **刻意没放开**（COS 预签直链可外传）⇒ 不挂闸门就是「可见但必 403」。判据在
-// utils/partsPermissions，与后端 require_any_role 白名单同集合。
+// utils/partsPermissions，与后端 `/url` 的 `require_permission("part.drawing.print")`
+// 同点（默认授权矩阵不含 SHELF_ACCOUNT）。
 import { usePermissions } from '@/composables/usePermissions';
 import { canDownloadPartFile } from '@/utils/partsPermissions';
 import type { PartFileItem } from '@/types/part_file';

@@ -22,7 +22,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useCustomerTree } from '@/composables/useCustomerTree';
 import { useColumnVisibility } from '@/composables/useColumnVisibility';
 import { useListStatePersist } from '@/composables/useListFilterPersist';
-import { rolesArrayToMap } from '@/utils/outsourceQuotePermissions';
+import { roleMapFromHasRole, type RoleLike } from '@/utils/outsourceQuotePermissions';
 import { buildOutsourceQuoteColumnDefs } from '../outsourceQuoteColumnDefs';
 import type { OutsourceQuoteStatus } from '@/types/outsource';
 import type { OutsourceQuoteSchema } from './outsourceListSchema';
@@ -62,7 +62,7 @@ function initialSearch(): OutsourceQuoteSearchState {
 }
 
 /** 按角色注入默认 statuses（与「报价一览该看哪一档」的业务约定同源）。 */
-export function defaultStatusesForRole(rm: ReturnType<typeof rolesArrayToMap>): OutsourceQuoteStatus[] {
+export function defaultStatusesForRole(rm: RoleLike): OutsourceQuoteStatus[] {
   if (rm.MANAGER) return ['SUBMITTED'];
   if (rm.CLERK) return ['DRAFT'];
   return [];
@@ -73,7 +73,9 @@ export const useOutsourceQuoteListStore = defineStore('outsource-quote-list', ()
   const qc = useQueryClient();
   // 消费侧禁止解构 store：auth.xxx 由 store proxy 自动解包。
   const auth = useAuthStore();
-  const roleMap = computed(() => rolesArrayToMap(auth.user?.roles ?? []));
+  // 角色矩阵经 `auth.hasRole` 构造（不是 `auth.user?.roles` 直读）：含 ADMIN 的账号在
+  // hasRole 里通配短路，纯 ADMIN 账号否则拿到的全是 false ⇒ 提交 / 审批按钮全消失。
+  const roleMap = computed<RoleLike>(() => roleMapFromHasRole((role) => auth.hasRole(role)));
 
   // ============ 切片：search / 分页 / 排序 / 主查询 ============
   const search = reactive<OutsourceQuoteSearchState>(initialSearch());

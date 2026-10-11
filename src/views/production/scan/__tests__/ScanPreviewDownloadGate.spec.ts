@@ -114,8 +114,14 @@ const worker: Worker = {
   updated_at: '2026-01-01T00:00:00Z',
 };
 
-/** 预置登录态：auth store 的角色集合来自 `/iam/me` 带回来的 `user.roles`。 */
-function seedSession(roles: string[]): void {
+/** 预置登录态：auth store 的角色集合来自 `/iam/me` 带回来的 `user.roles`。
+ *
+ *  ⚠️ 2026-10-14（RBAC 控制面板）：第二个参数是**权限点全集**。下载按钮的闸门已从
+ *  「按角色枚举」迁到 `hasPermission('part.drawing.print')`（见 utils/partsPermissions），
+ *  所以 `roles: ['MANAGER']` 本身**不再**决定按钮可见性 —— 必须同时给出权限点。
+ *  这正是本轮改动的意图：角色与能力不再一一对应。
+ */
+function seedSession(roles: string[], permissions: string[] = []): void {
   localStorage.setItem(
     'auth_session',
     JSON.stringify({
@@ -129,6 +135,7 @@ function seedSession(roles: string[]): void {
         roles,
         shelf_ids: ['8800000000001'],
         menus: [],
+        permissions,
       },
     }),
   );
@@ -203,7 +210,7 @@ beforeEach(() => {
 
 describe.each(PAGES)('%s：预览弹窗的「下载文件」按钮闸门', (_name, comp) => {
   it('D1：纯 SHELF_ACCOUNT（工控机）看不到下载按钮 —— 后端 /url 不放行这个角色', async () => {
-    seedSession(['SHELF_ACCOUNT']);
+    seedSession(['SHELF_ACCOUNT'], []);
     const w = await mountPage(comp);
     await openStepPreview(w);
     // 非 PDF 分支的下载按钮是「唯一直出路」的那一个
@@ -217,8 +224,11 @@ describe.each(PAGES)('%s：预览弹窗的「下载文件」按钮闸门', (_nam
     w.unmount();
   });
 
-  it('D2：MANAGER 能看到下载按钮，且点下去真的发起 getDownloadUrl', async () => {
-    seedSession(['MANAGER', 'SHELF_ACCOUNT']);
+  it('D2：持有 part.drawing.print 权限点的账号能看到下载按钮，且点下去真的发起 getDownloadUrl', async () => {
+    // 2026-10-14：判据从角色迁到权限点。故意**不给** MANAGER 角色之外的角色 ——
+    // 用一个「角色是 SHELF_ACCOUNT 但被单独授予了图纸打印权限」的账号来证明
+    // 真正决定按钮可见性的是权限点，不是角色枚举。
+    seedSession(['SHELF_ACCOUNT'], ['part.drawing.print']);
     const w = await mountPage(comp);
     await openStepPreview(w);
     const btns = downloadButtons(w);
@@ -236,7 +246,7 @@ describe.each(PAGES)('%s：预览弹窗的「下载文件」按钮闸门', (_nam
     // 的路径」：只藏按钮而不守函数体的话，这里会发一次必 403 的 getDownloadUrl。
     // 2026-10-11：`downloadPreview` 随预览逻辑搬进 `PartDrawingPreviewDialog`，闸门
     // 的函数体也在那里 ⇒ 从该子组件实例上取，不是从页面 vm 上取。
-    seedSession(['SHELF_ACCOUNT']);
+    seedSession(['SHELF_ACCOUNT'], []);
     const w = await mountPage(comp);
     await openStepPreview(w);
     const dlg = w.findComponent({ name: 'PartDrawingPreviewDialog' });

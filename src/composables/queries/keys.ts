@@ -726,4 +726,47 @@ export const qk = {
    *  `qc.invalidateQueries({ queryKey: qk.mailDigestPrefix })` 一把全失效
    *  （三条读键都被覆盖，任意 limit / offset 形态都命中）。 */
   mailDigestPrefix: ['mail-digest'] as const,
+  // ============================================================
+  // 2026-10-14 新增：RBAC 控制面板（角色 / 授权 / 权限点 / 菜单树）queryKey 工厂。
+  //
+  // 根命名空间取 `iam-roles`，**不**挂 `usersPrefix` 下 —— 理由沿本文件
+  // `inspection` / `assembly` / `statistics` 几段的「根命名空间」取舍：键的根只要求
+  // 「同根前缀匹配」才有意义，挂了才有共享写点。
+  //
+  // ⚠️ RBAC 面板与账号管理（`users` 域）**没有共享写点**：面板的四个写端点改的是
+  //   `t_role` / `t_role_menu_grant` / `t_role_permission_grant`，一个字都不写
+  //   `t_user` / `t_user_role`；反过来账号管理的 8 个写端点也一个字都不写角色授权表。
+  //   挂 `usersPrefix` 下 ⇒ 账号域任何一次写操作（建号 / 改角色 / 绑企微……，是全仓
+  //   写点最密的域之一）都会把整个 RBAC 面板一把全刷，纯浪费往返。
+  //
+  // 四条键：
+  //   - rolesList()      —— GET /iam/roles（**常量键**：端点不接 Query extractor，一次
+  //     返全部；排序由后端负责，前端不二次排）。消费方：面板左列表 + 账号管理的
+  //     RoleDialog 角色下拉（**跨域共用这一条**，同屏去重靠的就是它）。
+  //   - roleGrants(id)   —— GET /iam/roles/{id}/grants。**参数键**：端点按角色分片返回，
+  //     roleId 走**独立键位**（不进数组对象），否则切角色会命中上一个角色的授权缓存。
+  //   - permissionsList()—— GET /iam/permissions（**常量键**：权限点全集按 domain 分组）。
+  //   - menusTree()      —— GET /iam/menus（**常量键**：系统菜单树全集）。
+  //
+  // 失效编排点（面板的 4 个写端点在 `useRolesStore` 的 mutation 回调里调）：
+  //   - createRole / updateRole / deactivateRole / saveRoleGrants → 一把失效
+  //     `qk.rolesPrefix`（覆盖全部四条键）。
+  //   - ⚠️ **saveRoleGrants 的失效是必须的、不是可选的**：授权一改，这个角色在账号管理
+  //     页的角色下拉语义、以及持有该角色的账号拿到的 `permissions` 都变了。后端在 commit
+  //     后即踢该角色的全部持有者（含操作者本人）⇒ **下一次请求就是 40105 重登**，不存在
+  //     「等 token 刷新才生效」的中间态；前端当前用户的 `permissions` 存在 auth store、
+  //     不归 query 管，故本端只失效面板域。
+  // ============================================================
+  /** 角色列表键（面板左列表 + 账号管理的 RoleDialog 下拉共用这一条）。 */
+  rolesList: () => ['iam-roles', 'list'] as const,
+  /** iam-roles 域前缀 —— 面板内任一写端点成功后一把全失效（四条读键都被覆盖）。 */
+  rolesPrefix: ['iam-roles'] as const,
+  /** 单角色授权键。roleId 走**独立键位**而非塞进对象（端点按角色分片返回，不带 id
+   *  切角色会拿上一个角色的授权冒充当前角色）。roleId 空串 → 占位键（调用方 `enabled`
+   *  闸门 + queryFn 二次守卫拦掉）。 */
+  roleGrants: (roleId: string) => ['iam-roles', 'grants', roleId] as const,
+  /** 权限点全集键（按 domain 分组，面板右区的勾选块数据源）。 */
+  permissionsList: () => ['iam-roles', 'permissions'] as const,
+  /** 系统菜单树全集键（面板右区 el-tree 的数据源）。 */
+  menusTree: () => ['iam-roles', 'menus'] as const,
 } as const;

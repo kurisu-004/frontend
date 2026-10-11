@@ -110,6 +110,7 @@ function loginAsManager(): void {
     roles: ['MANAGER'],
     shelf_ids: [],
     menus: [],
+    permissions: [],
   };
   auth.user = user;
 }
@@ -124,6 +125,7 @@ function loginAsClerk(): void {
     roles: ['CLERK'],
     shelf_ids: [],
     menus: [],
+    permissions: [],
   };
   auth.user = user;
 }

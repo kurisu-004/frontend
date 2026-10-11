@@ -1,4 +1,9 @@
 // src/composables/__fixtures__/adminMenus.ts
+// 2026-10-14 同步 backend-rust seeds/menu.sql（RBAC 控制面板）：
+//   - auth_group 新增子菜单 roles_list「角色权限」，path /iam/roles（与 router 的
+//     `path: 'iam/roles'` 逐字一致）、sort_order 40、icon Lock（与生产 t_menu.icon 对齐）。
+//   - ⚠️ **数组物理位置插在 shelves_list(30) 之后**（见该节点的注释）：侧栏按物理
+//     顺序渲染、不按 sort_order 排，位置必须与后端 seed 一致。
 // 2026-10-13 同步 backend-rust seeds/menu.sql（交期汇总邮件定时任务）：
 //   - 新增一级分组 mail_group「定时任务/邮件」（path NULL → 渲染成 el-sub-menu，不需前端
 //     路由），sort_order 45，插在 floor_group(40) 与 settings_root(50) 之间；
@@ -12,7 +17,7 @@
 //     fixture 漏跟，不修则 25 槽位与 workers_list 撞车）。
 //   - production_group 现含 6 children：process_work_type=5 / part_process_chain=10 /
 //     pending_programming=15 / worker_queue=20 / workers_list=25 / inspection_pending=30；
-//     auth_group 现含 2 children（users_list + shelves_list）。
+//     auth_group 现含 3 children（users_list + shelves_list + roles_list，2026-10-14 起）。
 // 2026-09-29 同步 backend-rust seeds/menu.sql：
 //   - pending_programming 从顶级菜单迁入 production_group children，
 //     title 由「待编程一览」精简为「待编程」；
@@ -50,7 +55,7 @@
 // 改动后必须验证：
 //   1. 每个 MenuNode.code 是 router/index.ts 里某条路由的 meta.menuCode
 //   2. 每个 MenuNode.icon 在 MenuTreeItem.vue 的 ICON_MAP 中存在
-//   3. leaf 节点（path 非 null 且 children 为空）数 = 路由可点击菜单数 = 24
+// 3. leaf 节点（path 非 null 且 children 为空）数 = 路由可点击菜单数 = 25
 
 import type { MenuNode } from '@/types/menu';
 
@@ -304,11 +309,12 @@ export const ADMIN_MENUS: MenuNode[] = [
       },
     ],
   },
-  // 7. auth_group — 权限管理（分组，2 children）
+  // 7. auth_group — 权限管理（分组，3 children）
   // 2026-09-11：worker_queue 迁到 production_group。
   // 2026-09-16：shelves_list 从 floor_group 迁入。
-  // 2026-10-04：workers_list 迁到 production_group（业务侧归类随菜单分组调整），
-  // 本分组现只余 users_list + shelves_list。
+  // 2026-10-04：workers_list 迁到 production_group（业务侧归类随菜单分组调整）。
+  // 2026-10-14：新增 roles_list（RBAC 控制面板），本分组现含
+  // users_list + shelves_list + roles_list 三个子菜单。
   {
     id: id(6),
     version: 0,
@@ -345,6 +351,26 @@ export const ADMIN_MENUS: MenuNode[] = [
         path: '/shelves',
         icon: 'Platform',
         sort_order: 30,
+        children: [],
+      },
+      {
+        // 2026-10-14 新增：RBAC 控制面板（角色权限）。**数组物理位置接在 shelves_list
+        // 之后**（sort_order=40），且必须与 sort_order 升序一致 —— MainLayout 与
+        // MenuTreeItem 都是直接 v-for 数组、渲染链路上**没有排序**，侧栏渲染顺序 ==
+        // 数组顺序；真实模式的后端菜单是 `ORDER BY m.sort_order, m.code` 出的。两层
+        // 任一处失序，dummy 模式的侧栏顺序就 ≠ 生产。
+        // 由 __tests__/adminMenus.spec.ts 的「menu tree is in ascending sort_order」
+        // 与「covers all menuCodes exactly」两条用例同时守住。
+        // icon 用 `Lock`（与生产 t_menu.icon 一致，也与父节点 auth_group 的 `Key` 区分）：
+        // `Lock` 必须在 MenuTreeItem.vue 的 ICON_MAP 内，查不到会**静默不显示**、不报错。
+        id: id(64),
+        version: 0,
+        parent_id: id(6),
+        code: 'roles_list',
+        title: '角色权限',
+        path: '/iam/roles',
+        icon: 'Lock',
+        sort_order: 40,
         children: [],
       },
     ],

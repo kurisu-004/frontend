@@ -141,6 +141,13 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 
 **access token 保活定时器**（`api/http.ts` 的 `ensureAccessTokenKeepalive`，模块级 `setTimeout` 链）：按 `localStorage` 里当前 access token 的 `exp` 自续期 —— 在「剩余寿命 ≤ 提前量(300s)」那一刻发 `/iam/refresh`（排期是 `剩余寿命 − 300s + 5s`，那 +5s 是**余量**，让定时器早到几毫秒时剩余寿命仍 ≤ 阈值、不至于空转一轮；见 `http.ts` 的 `KEEPALIVE_SLACK_SECONDS`），成功后按新 exp 重排。**它存在的唯一理由是覆盖零 HTTP 流量**：`maybeProactiveRefresh` 只在成功响应拦截器里被调，天然依赖流量，而 dashboard 的 3 个 query 都没有 `refetchInterval`（`staleTime` 只决定「下次取数放不放行」，不产生定时器）⇒ 空闲大屏 / HMI 屏零流量时 access token（TTL 900s）会静静过期，随后 WS 周期性 re-auth 拿到 TOKEN_EXPIRED。起表点共 **4** 个，判据是「token 从哪来」，**新增 token 落盘写路径时必须同步补起表**：`http.ts::persistTokens`（refresh 成功后）/ `stores/auth.ts::saveToStorage`（登录成功后 —— 登录**不经过** `persistTokens`，那条只在 `doRefresh` 里被调）/ `stores/auth.ts::loadFromStorage`（刷新浏览器恢复会话）/ `stores/auth.ts::teardownSession`（会话终止，兼**拆表点**，删盘后调用即 no-op）。`initDummyAuth` 只写内存、刻意不写 localStorage，没有起表对象。与互斥锁的关系：它**按 `exp − 提前量` 这个确定性时刻排期**，同账号多标签页共享同一份 storage 与同一个 exp ⇒ 定时器落在同一时刻，因此它正是上一条那个跨标签页竞态的主要来源，必须经 `getOrCreateRefresh()` 才能拿到互斥保护。失败兜底是**有界重试**（退避两档后放弃并打一行 warn）：一次网络抖动不该让保活链对本会话永久失效，而无限重排在后端持续不可用时会变成请求风暴；放弃后仍由 reactive 40102 / WS 4001 兜底。
 
+### RBAC（角色权限面板，2026-10-14）
+
+- **`hasRole` / `hasPermission` 对 ADMIN 元角色通配**（`stores/auth.ts`）：`roles` 含 `'ADMIN'` 时两者对任意参数返回 true。**新增任何直接读 `roles` 数组做权限判定的消费方都会绕过通配** —— 枚举精确匹配对纯 ADMIN 账号全 false，表现为「有权限却全站无入口」且不报错；一切角色 / 权限点判定走 `hasRole` / `hasPermission`。
+- **`CurrentUser.permissions` 是必填 wire 契约**（`views/auth/sessionSchema.ts` 显式声明）：后端恒下发该键，前端闸门按它判；旧 localStorage 里的用户对象由 `stores/auth.ts::loadFromStorage` 补 `?? []`（迁移补丁，不是 wire 兜底）。**部署顺序：后端必须先上** —— 反序时登录与 `/iam/me` 的守门 `parse` 抛 ZodError ⇒ 全员被踢登录页循环。
+- **读侧 vs 写侧 schema 的 strict 口径相反**：会话链路（`views/auth/sessionSchema.ts`）刻意**不** `.strict()`（后端加派生字段不该让所有人登不进去）；RBAC 面板（`views/iam/roles/composables/rbacSchema.ts`）接 `.strict()`（写侧多一个字段即抛 —— 授权清单悄悄多 / 少一项就是一次没被看见的授权决定，必须当场红）。
+- **权限点闸门**：`part.drawing.print`（常量 `PART_DRAWING_PRINT_PERMISSION` 在 `utils/partsPermissions.ts`，消费方为零件详情文件页的打印入口、报工台图纸预览弹窗的下载闸门、零件一览批量打印栏）、`queue.dispatch`（生产队列「发送到工序」入口）、`delivery_note.print`（送货单打印入口）三点都是前端读同一个码做入口显隐；`delivery_note.print` 是**前端-only** 权限点（后端打印端点已下线，纯由面板控制），另两点后端也有对应端点闸门 —— 前端跟着读同码，才不会出现「可见却 403」/「授权了却看不见」的分叉。
+
 ### tagsView per-user 持久化
 
 `src/stores/tagsView.ts` 自管 localStorage，key 为 `myerp.tags_view.<userId>`：同账号重登恢复标签栏，换账号互不可见。归属切换唯一入口 `switchOwner(userId)`，由 auth 的 `setUser()` 驱动；登出走 `switchOwner(null)`（只清内存、**不写盘**）。**store 初始化不读 localStorage**，hydrate 只由 `switchOwner` 触发。`pinia-plugin-persistedstate` 已卸载（它的 key 入参是 storeId，做不到 per-user 隔离）。

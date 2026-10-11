@@ -17,39 +17,10 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
-import {
-  House,
-  Box,
-  CircleCheck,
-  Tools,
-  Cpu,
-  OfficeBuilding,
-  Document,
-  Promotion,
-  User,
-  Key,
-  Platform,
-  DataAnalysis,
-  Connection,
-  // 2026-08-22：补全侧栏 6 个缺失图标（订单管理/新建零件/送货/
-  // 账号管理/设置/工序管理）。命名导入保持显式，tree-shaking 不退。
-  Tickets,
-  Plus,
-  Van,
-  Setting,
-  Operation,
-  // 2026-08-26：新增 users_list 用的 List；其余 8 个旧图标（Lock / Money / CollectionTag /
-  // UserFilled / Postcard / Search / PriceTag / TakeawayBox）在更早 commit 已不在文件中，
-  // 本次仅实际移除 Avatar。
-  List,
-  // 2026-09-11：工序制定（part_process_chain）用 SetUp
-  SetUp,
-  // 2026-10-13：新增「定时任务/邮件」分组（Clock）与「交期汇总邮件」子菜单（Message）。
-  // 查不到图标时模板里 v-if 静默隐藏（不报错），漏补这行 = 侧栏两个图标消失而无人报错。
-  Clock,
-  Message,
-} from '@element-plus/icons-vue';
 import type { MenuNode } from '@/types/menu';
+// 图标白名单抽到独立模块（`./menuIcons`），spec 与组件消费同一份真实清单 ——
+// 留在组件里时 spec 只能抄一份副本，删图标不会有测试信号。新增图标改那个文件。
+import { ICON_MAP } from '@/layouts/components/menuIcons';
 
 // Vue 3 <script setup> 不会自动注册自身用于递归模板。
 // 这里显式按文件路径自引用，让模板里能用 <MenuTreeItem />。
@@ -60,38 +31,6 @@ const props = defineProps<{ menu: MenuNode }>();
 const hasChildren = computed(() => props.menu.children.length > 0);
 // 叶子节点：必须有 path 且没有 children。
 const isLeaf = computed(() => !!props.menu.path && !hasChildren.value);
-
-// 2026-08-21：图标命名空间 import * as ElIcons 会把全部 ~300 个图标拉进 bundle，
-// 改为显式地图（tree-shaking 只保留下列图标）。覆盖 router meta.icon 与后端菜单树
-// t_menu.icon 的全部取值；新增菜单图标时必须在此补充命名导入，否则侧栏该图标静默不显示。
-const ICON_MAP: Record<string, unknown> = {
-  House,
-  Box,
-  CircleCheck,
-  Tools,
-  Cpu,
-  OfficeBuilding,
-  Document,
-  Promotion,
-  User,
-  Key,
-  Platform,
-  DataAnalysis,
-  Connection,
-  // 2026-08-22：补全侧栏 6 个缺失图标
-  Tickets,
-  Plus,
-  Van,
-  Setting,
-  Operation,
-  // 2026-08-26：新增 List（users_list 账号管理），与生产 t_menu.icon 对齐
-  List,
-  // 2026-09-11：工序制定（part_process_chain）
-  SetUp,
-  // 2026-10-13：定时任务/邮件分组（mail_group）与交期汇总邮件（mail_digest）
-  Clock,
-  Message,
-};
 
 // 按名字查图标；查不到返回 undefined → 模板里 v-if 隐藏图标（不报错）。
 const iconComp = computed(() => {

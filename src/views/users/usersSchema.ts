@@ -12,9 +12,10 @@
 //   2. **表单校验**：`userFormSchema`（新增 / 编辑合一）、`wxBindFormSchema`（企微绑定
 //      单输入框）。替掉旧版 el-form 的内联校验规则。
 //
-// 本文件另有一处**非 Zod** 声明：`RoleOptionData`（角色下拉候选形状）。它服务的
-// `usersConstants.ts::ROLE_OPTIONS` 是源码字面量、没有 wire 边界，运行期 parse 无消费方，
-// 故只留类型、由常量用 `satisfies` 在编译期对齐。
+// 本文件另有一处**非 Zod** 声明已删除（2026-10-14）：`RoleOptionData`（角色下拉候选
+// 形状）。它服务的 `usersConstants.ts::ROLE_OPTIONS` 字面量候选表随 RBAC 控制面板上线
+// 一并删除 —— 角色候选改由 `GET /api/v2/iam/roles` 动态供给（自定义角色如 `QC_LEAD`
+// 无法写进字面量表）。本文件现在的分组只有：列表守门 + 企微绑定守门 + 表单校验。
 //
 // ⚠️ **必填字段必须显式声明**：Zod 默认 strip 会静默丢掉后端漏发的键，前端照样「通过」
 // 校验、那一列整列失效。所以下面每个键都显式写出，且行 / 信封层用 `.strict()`
@@ -117,16 +118,6 @@ export type WxIdentityData = z.infer<typeof wxIdentitySchema>;
 
 /** 绑定查询的守门 schema：绑定态 = 对象，未绑定态 = `null`。 */
 export const wxIdentityOrNullSchema = wxIdentitySchema.nullable();
-
-/** 角色下拉候选的形状（`usersConstants.ts::ROLE_OPTIONS` 用 `satisfies` 对齐它，
- *  编译期即校验，不需要运行期守门）。
- *  ⚠️ 刻意**不**用 Zod 表达：`ROLE_OPTIONS` 是源码里的字面量、没有 wire 边界，
- *  `.parse()` 在生产路径上零调用 —— 挂一个只有单测在用的 schema 是死导出。 */
-export interface RoleOptionData {
-  /** 后端 `UserRole` 枚举原文。 */
-  value: string;
-  label: string;
-}
 
 // ============================================================
 // 表单 schema（替掉旧版 el-form 的内联校验规则）

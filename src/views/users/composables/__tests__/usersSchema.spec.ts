@@ -11,7 +11,7 @@
 //     `[]`），所以必须有另一个 `wxIdentityOrNullSchema` 接受两态。
 
 import { describe, expect, it } from 'vitest';
-import { ROLE_OPTIONS, SHELF_SCOPED_ROLE } from '../../usersConstants';
+import { SHELF_SCOPED_ROLE } from '../../usersConstants';
 import {
   toFieldErrors,
   userFormSchema,
@@ -206,23 +206,27 @@ describe('wxBindFormSchema', () => {
   });
 });
 
-describe('ROLE_OPTIONS', () => {
-  it('5 个候选的 value 互不重复，且含需绑货架的那个角色', () => {
-    expect(ROLE_OPTIONS.map((o) => o.value)).toEqual([
-      'MANAGER',
-      'CLERK',
-      'SHELF_ACCOUNT',
-      'INSPECTOR',
-      'CNC_PROGRAMMER',
-    ]);
-    expect(new Set(ROLE_OPTIONS.map((o) => o.value)).size).toBe(ROLE_OPTIONS.length);
-    // SHELF_SCOPED_ROLE 是「加的时候要选货架」的唯一角色，漏进候选 = 该账号加不上货架范围。
-    expect(ROLE_OPTIONS.some((o) => o.value === SHELF_SCOPED_ROLE)).toBe(true);
+/**
+ * 2026-10-14（RBAC 控制面板）：`ROLE_OPTIONS` 字面量候选表**已删除**，角色下拉改由
+ * `GET /api/v2/iam/roles` 动态供给（`useUsersListStore` 的 `options.roleOptions`）。
+ *
+ * 原来两条断言「5 个候选的 value 互不重复 / 每个候选都有中文 label」随表一起删除 ——
+ * 它们守的是一个**已经不存在的东西**：把自定义角色（如 `QC_LEAD`）写进字面量表根本
+ * 做不到，而漏掉的表现是「界面一切正常，只是那个角色永远选不到」，**没有任何报错**。
+ *
+ * 下面对候选表本身的守卫改成**负向断言**：`ROLE_OPTIONS` 不得复活。
+ * 「候选真的含自定义角色」的正向用例在
+ * `useUsersListStore.spec.ts`（那条走的是 store 的 roleOptions 切片）。
+ */
+describe('ROLE_OPTIONS（已删除，负向守卫）', () => {
+  it('usersConstants 不再导出 ROLE_OPTIONS（角色候选只能来自后端）', async () => {
+    const mod = await import('../../usersConstants');
+    expect('ROLE_OPTIONS' in mod).toBe(false);
   });
 
-  it('每个候选都有非空中文 label（label 空 = 下拉里一行空白）', () => {
-    for (const o of ROLE_OPTIONS) {
-      expect(o.label.length).toBeGreaterThan(0);
-    }
+  it('SHELF_SCOPED_ROLE 常量保留（它是业务分支判据，不是候选表）', () => {
+    // 它回答的是「加这个角色要不要绑货架」，与角色清单是两件事：后者现在来自 API，
+    // 前者必须留在源码里（提交 payload 时要判分支）。
+    expect(SHELF_SCOPED_ROLE).toBe('SHELF_ACCOUNT');
   });
 });
