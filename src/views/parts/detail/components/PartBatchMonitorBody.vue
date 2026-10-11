@@ -31,7 +31,8 @@
     <!--
       2026-08-27 T22：列顺序拖动接入。drag.orderedDefs 提供持久化顺序；
       用 <template v-for> 包裹以兼容 Vue 3 同元素 v-for + v-if 优先级问题。
-      操作列（fixed="right"）受 canManageBatches 控制，保留为字面量 <el-table-column>。
+      操作列（fixed="right"）受 canSplitBatch / canCancelBatch 控制，保留为字面量
+      <el-table-column>。
     -->
     <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
       <el-table-column
@@ -56,10 +57,16 @@
         </template>
       </el-table-column>
     </template>
-    <el-table-column v-if="canManageBatches" label="操作" width="130" align="center" fixed="right">
+    <el-table-column
+      v-if="canSplitBatch || canCancelBatch"
+      label="操作"
+      width="130"
+      align="center"
+      fixed="right"
+    >
       <template #default="{ row }">
         <el-button
-          v-if="!isTerminalBatch(row as PartBatch) && (row as PartBatch).quantity > 1"
+          v-if="canSplitBatch && !isTerminalBatch(row as PartBatch) && (row as PartBatch).quantity > 1"
           link
           type="primary"
           size="small"
@@ -67,7 +74,7 @@
           >拆分</el-button
         >
         <el-button
-          v-if="!isTerminalBatch(row as PartBatch)"
+          v-if="canCancelBatch && !isTerminalBatch(row as PartBatch)"
           link
           type="danger"
           size="small"
@@ -102,7 +109,10 @@ import type { OrderStatus } from '@/types/parts';
 
 defineProps<{
   batches: PartBatch[];
-  canManageBatches: boolean;
+  /** 拆批权限（`batch.split` 权限点）—— gate「拆分」按钮；整列显隐是两者的并。 */
+  canSplitBatch: boolean;
+  /** 取消批次权限（`batch.cancel` 权限点）—— gate「取消」按钮。 */
+  canCancelBatch: boolean;
   statusTagType: (s: OrderStatus) => 'primary' | 'success' | 'warning' | 'info' | 'danger';
   statusLabelOf: (s: string | null | undefined) => string;
   rowClassName: (args: { row: PartBatch }) => string;

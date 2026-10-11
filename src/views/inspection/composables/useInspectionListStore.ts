@@ -38,6 +38,8 @@ import { qk } from '@/composables/queries/keys';
 import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
 import { useListFilterPersist } from '@/composables/useListFilterPersist';
 import { useColumnVisibility } from '@/composables/useColumnVisibility';
+import { useAuthStore } from '@/stores/auth';
+import { BATCH_TRANSITION_PERMISSION } from '@/utils/productionPermissions';
 import {
   INSPECTION_SORT_KEY_SET,
   INSPECTION_SORT_KEY_TO_PROP,
@@ -116,6 +118,19 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
   //   与 listener 里**没有**注入上下文，`useQueryClient()` 的 hasInjectionContext 守卫
   //   会抛（同 src/stores/auth.ts 的硬约束）。
   const qc = useQueryClient();
+  // 消费侧禁止解构 auth store（store proxy 已自动解包 ref）。
+  const auth = useAuthStore();
+
+  /** 品检 / 送检流转的权限闸（`batch.transition`，2026-10-15 新增）。
+   *
+   *  覆盖三个写端点：品检通过（`to-ship`）/ 指定工序（`to-process`）/ 送检
+   *  （`to-inspection`）—— 后端同一组 `TO_XXX_ROLES` 闸门。改前按角色
+   *  （MANAGER / INSPECTOR）判定，改后由 RBAC 面板维护「谁能流转」（可授予自建角色）。
+   *
+   *  消费方两处，共用这一个来源：列表操作列（`buildInspectionColumnDefs` 的
+   *  `canTransition` deps）与扫码树弹窗（`store.canTransition`）。无权限时两处都**不渲染**
+   *  流转按钮，而不是渲染后禁用 —— 不给一个点了必然 403 的入口。 */
+  const canTransition = computed<boolean>(() => auth.hasPermission(BATCH_TRANSITION_PERMISSION));
 
   // ============ 切片：search（表头筛选的唯一状态源）============
   const search = reactive<InspectionSearchState>({
@@ -574,6 +589,9 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
     filters,
     actions,
     passingBatchId: () => passingBatchId.value,
+    // 函数形态而非 plain value：columnDefs 只建一次，闭包捕获 plain value 会把权限
+    // 冻在首帧；cellRender 每次渲染读一次 getter，权限变化会重新渲染该单元格。
+    canTransition: () => canTransition.value,
   });
   // listKey 与旧版 ListShell 保持一致 ⇒ 已存的「列可见性 / 列顺序」快照继续复用。
   // 注意批次列 key 由 batch_label 改成 batch_no（见 inspectionColumnDefs.ts 文件头），
@@ -602,6 +620,8 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
     columnDefs,
     columnVisibility,
     ui,
+    /** 流转权限闸（`batch.transition`）—— 扫码树弹窗（ScanTreeDialog）消费。 */
+    canTransition,
     registerActions,
   };
 });

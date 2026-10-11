@@ -19,8 +19,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { defineComponent, h } from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
+import { createPinia, setActivePinia } from 'pinia';
+import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 import type { RepairBatchListItem } from '@/api/parts';
 import RepairStartDialog from '../RepairStartDialog.vue';
+import { useAuthStore } from '@/stores/auth';
 
 const mocks = vi.hoisted(() => ({
   repairDispatch: vi.fn(),
@@ -133,10 +136,16 @@ function makeTarget(over: Partial<RepairBatchListItem> = {}): RepairBatchListIte
   };
 }
 
-async function mountDialog(target: RepairBatchListItem) {
+async function mountDialog(
+  target: RepairBatchListItem,
+  options: { canRepair?: boolean } = {},
+) {
+  const { canRepair = true } = options;
   mocks.repairDispatch.mockReset();
   mocks.repairDispatch.mockResolvedValue({});
   mocks.listProcesses.mockResolvedValue({ items: mocks.processes });
+  const pinia = createPinia();
+  setActivePinia(pinia);
   const wrapper = mount(RepairStartDialog, {
     props: { modelValue: true, target },
     global: {
@@ -151,9 +160,34 @@ async function mountDialog(target: RepairBatchListItem) {
         ElButton: ElButtonStub,
         ElIcon: slotOnly('ElIconStub'),
       },
+      plugins: [
+        pinia,
+        [
+          VueQueryPlugin,
+          {
+            queryClient: new QueryClient({
+              defaultOptions: { queries: { retry: 0 }, mutations: { retry: 0 } },
+            }),
+          },
+        ],
+      ],
     },
   });
   // 挂载时 watch(immediate) 会拉一次货架/工序字典
+  await flushPromises();
+  // 2026-10-15：种入 batch.repair 权限点（真实 auth store；mount 后 pinia 才装到 app 上，
+  // auth store setup 首行 useQueryClient 需要注入上下文）。无权限场景传
+  // { canRepair: false } —— onSubmit 早退。种完 flush 让按钮/模板按新权限重渲染。
+  useAuthStore().user = {
+    id: 'u-repair-dialog-test',
+    username: 'tester',
+    full_name: '测试账号',
+    is_active: true,
+    roles: [],
+    shelf_ids: [],
+    menus: [],
+    permissions: canRepair ? ['batch.repair'] : [],
+  };
   await flushPromises();
   return wrapper;
 }
@@ -211,5 +245,16 @@ describe('RepairStartDialog 下发载荷（整批返修，不带 quantity）', (
 
     const [, body] = mocks.repairDispatch.mock.calls[0] as [string, Record<string, unknown>];
     expect(Object.keys(body).sort()).toEqual(['next_process_id', 'version']);
+  });
+
+  it('D4：无 batch.repair 权限点 → onSubmit 早退，零请求（2026-10-15 权限闸）', async () => {
+    // 回归 guard：入口列在 RepairReceive 已按同一权限点收掉，但扫码命中会直接打开本
+    // 弹窗（不过入口列）⇒ 提交侧必须有第二道闸，否则发出去就是 403。
+    const { ElMessage } = await import('element-plus');
+    const wrapper = await mountDialog(makeTarget(), { canRepair: false });
+    await clickButton(wrapper, '完成 · 下发到生产架');
+
+    expect(mocks.repairDispatch).not.toHaveBeenCalled();
+    expect(ElMessage.warning).toHaveBeenCalledWith('没有返修下发的权限');
   });
 });

@@ -84,6 +84,7 @@ vi.mock('@/api/customer', () => ({
 
 import ScanTreeDialog from '../components/ScanTreeDialog.vue';
 import { useInspectionListStore } from '../composables/useInspectionListStore';
+import { useAuthStore } from '@/stores/auth';
 
 // ---------------------------------------------------------------- 数据（后端 wire 形态）
 const ASSEMBLY = {
@@ -408,7 +409,8 @@ const globalConfig = {
   },
 };
 
-async function mountDialog(tree: ScanTreeOut) {
+async function mountDialog(tree: ScanTreeOut, options: { canTransition?: boolean } = {}) {
+  const { canTransition = true } = options;
   const pinia = createPinia();
   setActivePinia(pinia);
   const wrapper = mount(ScanTreeDialog, {
@@ -425,6 +427,19 @@ async function mountDialog(tree: ScanTreeOut) {
     },
   });
   const store = useInspectionListStore();
+  // 2026-10-15：种入批次流转权限点（真实 auth store；mount 后 pinia 才安装到 app 上，
+  // auth store setup 首行 useQueryClient 需要注入上下文）。无权限场景传
+  // { canTransition: false } —— 操作列三个流转按钮全收掉。
+  useAuthStore().user = {
+    id: 'u-scan-tree-test',
+    username: 'tester',
+    full_name: '测试账号',
+    is_active: true,
+    roles: [],
+    shelf_ids: [],
+    menus: [],
+    permissions: canTransition ? ['batch.transition'] : [],
+  };
   // 深拷贝后再进 store：写后本地回写会就地改树（改的就是 store 里那个对象），
   // 共享同一份 module 级常量会让用例之间互相污染。
   store.mutations.scanTree = structuredClone(tree) as ScanTreeOut;
@@ -510,6 +525,20 @@ describe('ScanTreeDialog', () => {
     // 装配件 / 零件行不渲染操作按钮。
     expect(rowBy(wrapper, 'PART_9000000000011')?.findAll('button')).toHaveLength(0);
     expect(rowBy(wrapper, 'ASSEMBLY_9000000000001')?.findAll('button')).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it('无 batch.transition 权限点：品检通过 / 指定工序 / 送检三按钮全收掉（2026-10-15 权限闸）', async () => {
+    // 回归 guard：整个按钮矩阵统一过 `batch.transition`（store.canTransition）。无权限时
+    // 批次行落最后的 `—` 分支 —— 弹窗仍可打开（扫码查看是读操作），但没有任何点下去
+    // 必然 403 的流转入口，也不留「无操作可做」的空门。
+    const { wrapper } = await mountDialog(TREE_ASSEMBLY, { canTransition: false });
+    const inspectionRow = rowBy(wrapper, 'BATCH_9000000000101');
+    expect(inspectionRow?.findAll('button')).toHaveLength(0);
+    expect(inspectionRow?.text()).toContain('—');
+    const pendingRow = rowBy(wrapper, 'BATCH_9000000000103');
+    expect(pendingRow?.findAll('button')).toHaveLength(0);
+    expect(pendingRow?.text()).toContain('—');
     wrapper.unmount();
   });
 

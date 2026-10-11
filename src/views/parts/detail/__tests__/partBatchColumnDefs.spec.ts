@@ -7,7 +7,7 @@
 //   1. **列 key 集合变了** —— `useColumnVisibility` / `useColumnDrag` 两侧都按
 //      `listKey = 'part_batch_monitor'` 存用户本地的可见性 / 列序快照，改 key 等于
 //      让存量快照失配（后果：列回到默认可见、排到其余列之后）；
-//   2. **「操作」列被顺手搬进来** —— 它受 `canManageBatches` 控制且必须
+//   2. **「操作」列被顺手搬进来** —— 它受 `canSplitBatch` / `canCancelBatch` 控制且必须
 //      `fixed="right"`，两种形态都不进 defs（模板里是字面量 `<el-table-column>`）；
 //   3. **cellRender 的行为变了** —— 状态列的标签类型 / 文案来自注入的 helper，空值列的
 //      「—」占位、`batch_label` 的等宽 class 都得原样。
@@ -90,7 +90,7 @@ describe('buildPartBatchColumnDefs', () => {
     expect(defs().map((d) => d.label)).toEqual(['批次', '数量', '状态', '所在位置', '送货单']);
   });
 
-  it('B2：「操作」列不进 defs（受 canManageBatches 控制 + fixed="right"，模板里是字面量）', () => {
+  it('B2：「操作」列不进 defs（受 canSplitBatch / canCancelBatch 控制 + fixed="right"，模板里是字面量）', () => {
     expect(defs().some((d) => d.key === 'actions')).toBe(false);
     expect(defs().every((d) => d.fixed !== 'right')).toBe(true);
   });

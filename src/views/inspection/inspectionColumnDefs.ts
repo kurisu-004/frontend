@@ -20,8 +20,12 @@
 //     排到其余列之后」，不会白屏、不会误隐藏别的列。故两个 composable 侧不需改动。
 //   - 排序白名单键是 `BATCH_NO`（`INSPECTION_SORT_PROP_MAP`），列 prop 必须
 //     对上 `batch_no` 才能让表头点击排序落到正确的后端 sort_by。
+//
+// 2026-10-15（RBAC 第二批）：「品检通过 / 指定工序」两枚流转按钮按 `canTransition`
+// （`batch.transition` 权限点）条件渲染，无权限只留「详情」；「送检」入口不在此列
+// （列表页没有行内送检，送检在扫码树弹窗内，那里同样按该权限点 gate）。
 
-import { h } from 'vue';
+import { h, type VNode } from 'vue';
 import { ElButton, ElDatePicker, ElInput, ElTreeSelect } from 'element-plus';
 import { RouterLink } from 'vue-router';
 import ColumnFilterPopover from '@/components/ColumnFilterPopover.vue';
@@ -46,10 +50,14 @@ export interface BuildInspectionColumnDefsDeps {
    *  plain value 会把 loading 态冻在首次渲染的值上。cellRender 每次渲染读一次 getter，
    *  依赖登记到渲染该单元格的 render effect ⇒ 提交中/完成都会重新渲染。 */
   passingBatchId: () => string | null;
+  /** 品检 / 送检流转权限（`batch.transition` 权限点，2026-10-15 新增）。
+   *  同为函数形态：false 时操作列**不渲染**「品检通过 / 指定工序」两个按钮（详情始终在），
+   *  不给无权限账号一个点了必然 403 的入口。 */
+  canTransition: () => boolean;
 }
 
 export function buildInspectionColumnDefs(deps: BuildInspectionColumnDefsDeps): ColumnDef[] {
-  const { filters, actions, passingBatchId } = deps;
+  const { filters, actions, passingBatchId, canTransition } = deps;
 
   return [
     // 1. 序列号（表头筛选 + null 占位；fixed='left' ⇒ 不可拖）
@@ -346,29 +354,37 @@ export function buildInspectionColumnDefs(deps: BuildInspectionColumnDefsDeps): 
         // 一行转圈，其余行照常可点。判据取自 store 的 ref 而非往 data 行上挂字段 ——
         // Pinia 响应式下给 data 行加字段会让整表重渲染。
         const isPassing = passingBatchId() === r.batch_id;
-        return h('div', { class: 'row-actions' }, [
-          h(
-            ElButton,
-            {
-              link: true,
-              type: 'success',
-              size: 'small',
-              loading: isPassing,
-              onClick: () => actions.onPass(r),
-            },
-            () => '品检通过',
-          ),
-          h(
-            ElButton,
-            { link: true, type: 'warning', size: 'small', onClick: () => actions.onOpenFail(r) },
-            () => '指定工序',
-          ),
+        // 2026-10-15：流转权限（`batch.transition`）为 false 时只留「详情」—— 操作列
+        // 不再出现点了必然 403 的流转入口。「详情」是纯读，不属权限点范围。
+        const buttons: VNode[] = [];
+        if (canTransition()) {
+          buttons.push(
+            h(
+              ElButton,
+              {
+                link: true,
+                type: 'success',
+                size: 'small',
+                loading: isPassing,
+                onClick: () => actions.onPass(r),
+              },
+              () => '品检通过',
+            ),
+            h(
+              ElButton,
+              { link: true, type: 'warning', size: 'small', onClick: () => actions.onOpenFail(r) },
+              () => '指定工序',
+            ),
+          );
+        }
+        buttons.push(
           h(
             ElButton,
             { link: true, type: 'primary', size: 'small', onClick: () => actions.onDetail(r) },
             () => '详情',
           ),
-        ]);
+        );
+        return h('div', { class: 'row-actions' }, buttons);
       },
     },
   ];

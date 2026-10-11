@@ -11,6 +11,8 @@
     - PENDING / PROGRAMMING → 送检（to-inspection，行内只填数量）
     - IN_PROCESS → 送检，但还要过 location 闸门（必须在生产架上，见 canSendToInspection）
     - 其余（READY_TO_SHIP / DELIVERED / COMPLETED / CANCELLED / OUTSOURCE …）→ 不给按钮
+  2026-10-15：整个按钮矩阵还要过 `batch.transition` 权限点（store.canTransition）——
+    无权限时批次行落最后的 `—` 分支（不给「可见却 403」的入口）。
   「品检通过」「指定工序」只 emit，由壳（InspectionPending.vue）复用它已有的两个对话框 ——
   品检器在这里选数量、选工序，没有理由重造一遍。
   2026-10-10：目标货架改由后端按负载自动选，行内送检面板的品检架下拉随之删除
@@ -115,7 +117,12 @@
         -->
         <template #default="{ row }">
           <span v-if="row.node_kind !== 'BATCH'" class="muted">—</span>
-          <template v-else-if="row.status === 'INSPECTION'">
+          <!--
+            2026-10-15：三个流转按钮（品检通过 / 指定工序 / 送检）统一按 `batch.transition`
+            权限点 gate（store.canTransition）。无权限时批次行落最后的 `—` 分支 —— 不给
+            无权限账号一个点了必然 403 的入口，也不留「点开弹窗却无可执行操作」的空门。
+          -->
+          <template v-else-if="canTransition && row.status === 'INSPECTION'">
             <el-button size="small" type="success" @click="onPass(row as ActionRow)"
               >品检通过</el-button
             >
@@ -131,7 +138,7 @@
               </span>
             </el-tooltip>
           </template>
-          <template v-else-if="canSendToInspection(row as SendGateRow)">
+          <template v-else-if="canTransition && canSendToInspection(row as SendGateRow)">
             <el-button size="small" type="primary" @click="toggleSendPanel(row as ActionRow)">
               {{ sendPanel(row.id) ? '收起' : '送检' }}
             </el-button>
@@ -191,6 +198,11 @@ const emit = defineEmits<{
 }>();
 
 const store = useInspectionListStore();
+
+/** 流转权限闸（`batch.transition`，store 内按权限点派生）—— 品检通过 / 指定工序 /
+ *  送检三按钮共用。写端点（to-ship / to-process / to-inspection）后端同一组角色闸，
+ *  前端跟着读同一个权限点，才不会出现「可见却 403」。 */
+const canTransition = computed<boolean>(() => store.canTransition);
 
 // 2026-10-06：弹窗从 fullscreen 改为定宽（用户要求「不要全屏显示」）。
 // 宽度取 1200px：表格 10 列的 min-width 合计约 1370px（序列号 130 / 图号 130 /
