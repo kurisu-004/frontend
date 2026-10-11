@@ -54,7 +54,8 @@ import type { SortDir } from '@/types/parts';
  *
  *  出参是 `OutsourceCompanyListOut`：**7 字段**的公司行（无 `created_at` / `updated_at`，
  *  2026-10-09 删 —— 两列零消费方却是纯粹的缓存抖动）+ 分页信封四字段。
- *  业务错：40001（入参形状）/ 40103（未登录）/ 40300（角色无权，HTTP 403）。 */
+ *  业务错：40001（入参形状）/ 40103（未登录）/
+ *  40300（无 outsource.view 权限点，HTTP 403）。 */
 /** `GET /outsource-companies` 的入参形态（后端 `OutsourceCompanyListQuery`，4 字段）。
  *  导出供 `composables/queries/keys.ts` 的键工厂与 query hook 复用（api 层是 wire
  *  契约的唯一定义处，沿 `ListShelvesParams` 等既有做法）。 */
@@ -111,7 +112,8 @@ export async function listCompaniesByProcess(processId: string): Promise<Outsour
  *  2026-10-09 契约对齐：出参改 `R<()>`（`data: null`），前端建完一律重拉列表 ——
  *  返整份详情（含工序映射 + 工序元数据）多一次往返，而消费方一个字段都不用。
  *  业务错：40001（`name` 空白）/ 21202 或 21214（公司名重名）/ 21203（`process_ids` 里的
- *  工序不存在或不是 OUTSOURCE / INHOUSE 类别）/ 40300（角色无权）。 */
+ *  工序不存在或不是 OUTSOURCE / INHOUSE 类别）/ 40300（无 outsource.company.manage
+ *  权限点）。 */
 export async function createOutsourceCompany(payload: OutsourceCompanyCreatePayload): Promise<void> {
   await api.post('/outsource-companies', payload);
 }
