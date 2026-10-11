@@ -798,6 +798,29 @@ describe('QueueBoard（生产队列看板接线 guard）', () => {
     wrapper.unmount();
   });
 
+  it('T7g：只授 queue.allocate 时空菜单归因为「批次状态」而非权限（byPermission 口径含移动闸）', async () => {
+    // 2026-10-15：byPermission 把 `queue.allocate` 一并算上。只授了移动权限的账号在
+    // 「无召回 / 无拆批 / 无下发」的空菜单前该被告知是批次状态问题 —— 说「当前角色没有
+    // 可执行的操作」是误报（他确实有移动权限，只是这一格没得可做）。
+    activeShelfIdRef.value = '5000000000001';
+    roles.current = ['MANAGER', 'CLERK'];
+    permissions.current.value = ['queue.allocate'];
+    recallable.current.value = false;
+    const { ElMessage } = await import('element-plus');
+    const wrapper = mount(QueueBoard, {
+      global: { plugins: [[VueQueryPlugin, { queryClient: testQueryClient }]] },
+    });
+    await flushPromises();
+    const provides = (wrapper.vm.$ as unknown as { provides: Record<string, unknown> }).provides;
+    const open = provides.openBatchContextMenu as (e: MouseEvent, b: unknown, a: string) => void;
+    // 工序池 + quantity=1：召回关、拆批关、无工人目标 ⇒ 菜单为空
+    vi.mocked(ElMessage.warning).mockClear();
+    open(new MouseEvent('contextmenu'), { batch_id: 'X', version: 1, quantity: 1 }, 'pool');
+    expect(menuOpenCalls).toHaveLength(0);
+    expect(ElMessage.warning).toHaveBeenCalledWith('该批次当前没有可执行的操作');
+    wrapper.unmount();
+  });
+
   it('T9：拆批对话框 done → 板级失效 production-queue 三域（失效编排不在对话框内）', async () => {
     // 回归 guard：拆批对话框是**共享组件**（外协看板也用它），失效编排一旦留在对话框里
     // 就会锁死单域消费方（它 import 了某一方的前缀失效函数）。守法：对话���只发 `done`，
