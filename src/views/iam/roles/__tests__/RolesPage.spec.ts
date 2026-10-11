@@ -4,7 +4,7 @@
 // 2026-10-14 新增：RBAC 面板的**行为**单测（守门 schema 的用例见同目录 rbacSchema.spec.ts，
 // api 层的负向守卫见 src/api/__tests__/rbac.spec.ts）。
 //
-// 覆盖五类回归点：
+// 覆盖下列回归点：
 //
 //   1. **ADMIN 只读（双端兜底的前端那一半）**：选中 ADMIN 元角色时右区不渲染提交按钮，
 //      且 store 的 `submitGrants` 直接早退不发请求。后端对 ADMIN 的 POST grants 返 400，
@@ -13,10 +13,14 @@
 //      增量（只发新增的 code）会让后端把该角色的其它授权**全部清空** —— 一次误操作
 //      抹掉一个角色已有的全部权限，且看起来「保存成功了」。
 //   3. **切角色清勾选态**：沿用上一角色的勾选会让管理员把 A 的选择误提交到 B。
+//      反向的「同 id 重发 current-change」不清勾选（表格数据替换，见 G6）。
 //   4. **菜单树回填（check-strictly + setCheckedKeys）**：grants 到位后必须驱动 el-tree
 //      的勾选态；不回填则「角色已授 5 项、树显示 0 勾」，管理员勾一项保存即清空其余。
 //   5. **停用 / 删除链路接通**：按钮 → 二次确认 → deactivate 端点 → 成功提示带
-//      affected_user_count；取消分支不发请求。
+//      affected_user_count；取消分支不发请求；在途 loading 逐行收口，状态 tag 反映
+//      内置角色的停用态。
+//   6. **表单校验错误展示**：code 非法 / 新建态留空时弹窗内必须出错误文案，不能只是
+//      保持打开而零提示。
 //
 // mock 策略：
 //   - `vi.mock('element-plus')`：桩掉 ElMessage / ElMessageBox（node/happy-dom 下真实
@@ -67,7 +71,7 @@ const EP_STUBS = {
     props: { disabled: Boolean, loading: Boolean },
     emits: ['click'],
     template:
-      '<button class="mock-button" :disabled="disabled" @click="$emit(\'click\')"><slot /></button>',
+      '<button class="mock-button" :disabled="disabled" :data-loading="loading ? \'1\' : \'0\'" @click="$emit(\'click\')"><slot /></button>',
   }),
   'el-checkbox-group': { template: '<div><slot /></div>' },
   'el-checkbox': { template: '<label><slot /></label>' },
@@ -594,6 +598,30 @@ describe('授权保存：整包替换 + OCC version', () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(store.grants.checkedMenuCodes).toEqual(['users_list']);
   });
+
+  // B-1 回归锁（review 第 2 轮）：el-table 的 `:data` 被替换（写后失效重拉 / staleTime
+  // 到期刷新）时会对同 id 的行重发 current-change（Element Plus setData →
+  // setCurrentRowByKey 无条件 emit）。selectRole 必须同 id 早退 —— 否则勾选态被清空 +
+  // hydratedFor 打回 ''，而 grants 的对象引用没变 ⇒ 永远不再灌回，停在「空勾选 +
+  // ready=true」，此时点保存就是整包清空该角色授权。
+  it('G6：同 id 重发 current-change（表格数据替换）⇒ 勾选态保持而非清空', async () => {
+    const store = useRolesStore();
+    store.query.restoreState();
+    await new Promise((r) => setTimeout(r, 0));
+    await nextTick();
+
+    store.query.selectRole(QC_LEAD.id);
+    await nextTick();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(store.grants.checkedMenuCodes).toEqual(['users_list']);
+    expect(store.grants.ready).toBe(true);
+
+    // 直接复现表格的重发：同 id 新对象在视图层最终也走 selectRole(id)。
+    store.query.selectRole(QC_LEAD.id);
+    await nextTick();
+    expect(store.grants.checkedMenuCodes).toEqual(['users_list']);
+    expect(store.grants.checkedPermissionCodes).toEqual(['queue.dispatch']);
+  });
 });
 
 describe('菜单树回填（B1：check-strictly + setCheckedKeys / getCheckedKeys）', () => {
@@ -790,6 +818,79 @@ describe('停用 / 删除链路（页面接线）', () => {
     await findButton(opCell(wrapper, 'QC_LEAD_NEW'), '改名')!.trigger('click');
     await nextTick();
     expect(wrapper.find('.mock-input').attributes('disabled')).toBeUndefined();
+  });
+
+  // review 第 2 轮：code 表单项原来只有 hint、没有错误展示位 —— 校验失败时弹窗保持
+  // 打开但零提示（用户只会以为「点保存没反应」）。错误位与 name 同款。
+  it('P7：新建角色 code 校验失败 ⇒ 弹窗内展示错误，不发请求', async () => {
+    const wrapper = mountRolesPage();
+    await flushPromises();
+
+    await findButton(wrapper, '新建角色')!.trigger('click');
+    await nextTick();
+    // 三个输入框按模板顺序：代码 / 名称 / 备注。
+    const inputs = wrapper.findAll('.mock-input');
+    expect(inputs.length).toBeGreaterThanOrEqual(3);
+
+    // 名称填好、code 留空：schema 通过，触发「新建态 code 必填」分支。
+    await inputs[1]!.setValue('品检组长');
+    await findButton(wrapper, '保存')!.trigger('click');
+    await flushPromises();
+    expect(wrapper.text()).toContain('请输入角色代码');
+    expect(createRoleMock).not.toHaveBeenCalled();
+    // 弹窗保持打开，改完可直接重试。
+    expect(wrapper.find('.dialog-stub').exists()).toBe(true);
+
+    // 非法字符：Zod refine 的错误落到同一个展示位。
+    await inputs[0]!.setValue('bad-code');
+    await findButton(wrapper, '保存')!.trigger('click');
+    await flushPromises();
+    expect(wrapper.text()).toContain('角色代码只能包含大写字母、数字和下划线');
+    expect(createRoleMock).not.toHaveBeenCalled();
+  });
+
+  // review 第 2 轮：停用 / 删除的在途 loading 原先是全表共享一个标志，任一行操作时
+  // 所有行的按钮一起转圈。改为「在途标志 + 目标行 id」逐行判。
+  it('P8：停用 / 删除的在途 loading 只落在被点的那一行', async () => {
+    listRolesMock.mockResolvedValue([ADMIN, SYSTEM_MANAGER, QC_LEAD]);
+    let resolveDeactivate: ((v: unknown) => void) | undefined;
+    deactivateRoleMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveDeactivate = resolve;
+        }),
+    );
+    const wrapper = mountRolesPage();
+    await flushPromises();
+
+    // 确认框是 mock 直过；请求挂起 ⇒ 此刻处于在途态。
+    await findButton(opCell(wrapper, 'QC_LEAD'), '停用')!.trigger('click');
+    await flushPromises();
+
+    const loadingOf = (code: string): string | undefined =>
+      opCell(wrapper, code)
+        .findAll('button')
+        .find((b) => b.text().includes('停用'))
+        ?.attributes('data-loading');
+    expect(loadingOf('QC_LEAD')).toBe('1');
+    expect(loadingOf('MANAGER')).toBe('0');
+
+    resolveDeactivate!({ affected_user_count: 2 });
+    await flushPromises();
+    await nextTick();
+    expect(loadingOf('QC_LEAD')).toBe('0');
+  });
+
+  // review 第 2 轮：被停用的内置角色原来仍只显示「内置」，看不出已停用。
+  it('P9：停用的内置角色 tag 显示「内置·已停用」，启用中的仍显示「内置」', async () => {
+    listRolesMock.mockResolvedValue([ADMIN, { ...SYSTEM_MANAGER, is_active: false }]);
+    const wrapper = mountRolesPage();
+    await flushPromises();
+
+    const tagText = (code: string): string =>
+      wrapper.find(`.col-stub[data-label="状态"] .cell-stub[data-row-code="${code}"]`).text();
+    expect(tagText('ADMIN')).toBe('内置');
+    expect(tagText('MANAGER')).toBe('内置·已停用');
   });
 });
 

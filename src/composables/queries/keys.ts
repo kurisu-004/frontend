@@ -752,10 +752,10 @@ export const qk = {
   //   - createRole / updateRole / deactivateRole / saveRoleGrants → 一把失效
   //     `qk.rolesPrefix`（覆盖全部四条键）。
   //   - ⚠️ **saveRoleGrants 的失效是必须的、不是可选的**：授权一改，这个角色在账号管理
-  //     页的角色下拉语义、以及持有该角色的账号**下次**登录拿到的 `permissions` 都变了。
-  //     前端当前用户的 `permissions` 存在 auth store 里、不归 query 管 ⇒ 改完别人的角色
-  //     不需要刷新自己；但**改自己所属角色**的权限时，那串权限要等 token 刷新才变（与
-  //     账号管理改 SHELF_ACCOUNT 的货架范围同款约束，见 RoleDialog 的提示文案）。
+  //     页的角色下拉语义、以及持有该角色的账号拿到的 `permissions` 都变了。后端在 commit
+  //     后即踢该角色的全部持有者（含操作者本人）⇒ **下一次请求就是 40105 重登**，不存在
+  //     「等 token 刷新才生效」的中间态；前端当前用户的 `permissions` 存在 auth store、
+  //     不归 query 管，故本端只失效面板域。
   // ============================================================
   /** 角色列表键（面板左列表 + 账号管理的 RoleDialog 下拉共用这一条）。 */
   rolesList: () => ['iam-roles', 'list'] as const,

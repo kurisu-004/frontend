@@ -7,8 +7,8 @@
 // `GET /api/v2/iam/roles`（`qk.rolesList()`）动态供给 —— 角色不再封闭在后端 enum 里，
 // 管理员可以在面板自建任意 code（如 `QC_LEAD`）。写死字面量的症状不是「多了几个角色
 // 没显示」，而是**自定义角色根本无法授予给任何账号**，且界面上一片正常。
-// 消费方：`composables/useUsersListStore.ts` 的 `options.roleOptions`（共享
-// `useRolesQuery`，与 RBAC 面板左列表同一条 queryKey ⇒ 同屏去重）。
+// 消费方：`composables/useUsersListStore.ts` 的 `options.roleOptions`（自建同键 useQuery，
+// 与 RBAC 面板左列表共用**同一条 `qk.rolesList()` queryKey** ⇒ 同屏去重）。
 //
 // 负向守卫见 `composables/__tests__/usersSchema.spec.ts`：断言本文件不再出现
 // 角色候选字面量（`ROLE_OPTIONS` 已被删除，任何「复活」都应改成走 API）。

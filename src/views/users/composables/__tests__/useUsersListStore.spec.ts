@@ -91,6 +91,7 @@ import { useUsersListStore } from '../useUsersListStore';
 import { ElMessage } from 'element-plus';
 import { qk } from '@/composables/queries/keys';
 import { DEFAULT_PASSWORD } from '../../usersConstants';
+import { USERS_CONTRACT_DRIFT_TEXT } from '../../usersErrorText';
 
 /** 后端真实 wire 形态：雪花 ID 是 JSON **string**（`serialize_i64`），行内计数/version
  *  是 number；分页信封的 `total` / `limit` / `offset` 也是 number（后端 `UserListOut`
@@ -895,7 +896,9 @@ describe('useUsersListStore —— rolesMutation 守门（2026-10-14）', () => 
     await tick();
 
     expect(store.dialogs.roles.list).toEqual([]);
-    expect(ElMessage.error).toHaveBeenCalled();
+    // 守门抛出的 ZodError 走 `usersErrorText` 收口：Zod issues 的 JSON 数组不甩给
+    // 管理员（review 第 2 轮：handleWriteError 原先直接弹 `e.message`）。
+    expect(ElMessage.error).toHaveBeenCalledWith(USERS_CONTRACT_DRIFT_TEXT);
   });
 
   it('E3：合法响应 ⇒ 列表被灌上（守门不误伤正常路径）', async () => {

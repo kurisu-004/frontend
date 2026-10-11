@@ -55,6 +55,7 @@ import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { User, Lock } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/stores/auth';
+import { findFirstMenuPath } from '@/utils/menu';
 import BeianFooter from '@/components/BeianFooter.vue';
 import LoginCard from './LoginCard.vue';
 import { loginSchema, toFieldErrors, type LoginInput, type LoginFieldErrors } from './loginSchema';
@@ -124,6 +125,15 @@ const onSubmit = async () => {
     }
     if (u.roles.includes('SHELF_ACCOUNT')) {
       router.replace('/scan/badge');
+      return;
+    }
+    // 枚举分支全落空（管理员自建的自定义角色，如 `QC_LEAD`）：不把账号卡死在登录页 ——
+    // 菜单由后端按原始 role code 装载，这类账号的可用面就是它的菜单树，取树里第一个有
+    // path 的节点作落地页（与路由守卫 menuCode 校验失败的降级目标同一函数）。
+    // 只有菜单树也为空才报「无任何可用角色」。
+    const fallback = findFirstMenuPath(u.menus);
+    if (fallback) {
+      router.replace(fallback);
       return;
     }
     noRoleError.value = '账号无任何可用角色';

@@ -31,7 +31,11 @@
           </el-table-column>
           <el-table-column label="状态" width="80" align="center">
             <template #default="{ row }">
-              <el-tag v-if="row.is_system" size="small" type="info">内置</el-tag>
+              <!-- 系统角色不走「启用 / 停用」分档：它的主语义是「内置」，
+                   停用态只是附加说明（`is_system && !is_active`）。 -->
+              <el-tag v-if="row.is_system" size="small" :type="row.is_active ? 'info' : 'danger'">
+                {{ row.is_active ? '内置' : '内置·已停用' }}
+              </el-tag>
               <el-tag v-else-if="row.is_active" size="small" type="success">启用</el-tag>
               <el-tag v-else size="small" type="danger">停用</el-tag>
             </template>
@@ -57,7 +61,7 @@
                   link
                   type="warning"
                   size="small"
-                  :loading="store.dialogs.deactivate.saving"
+                  :loading="deactivateLoadingFor(row.id)"
                   @click="store.dialogs.deactivate.openDeactivate(row.id, false)"
                 >
                   停用
@@ -67,7 +71,7 @@
                   link
                   type="danger"
                   size="small"
-                  :loading="store.dialogs.deactivate.saving"
+                  :loading="deactivateLoadingFor(row.id)"
                   @click="store.dialogs.deactivate.openDeactivate(row.id, true)"
                 >
                   删除
@@ -113,10 +117,14 @@
             placeholder="如 QC_LEAD（大写）"
           />
           <div v-if="!store.dialogs.form.codeEditable" class="field-hint">
-            <template v-if="store.dialogs.form.editingIsSystem">
-              内置角色的代码固定，不可修改。
-            </template>
-            <template v-else>该角色已有账号持有，改 code 会让这些授权失去指向，故不可改。</template>
+            {{
+              store.dialogs.form.editingIsSystem
+                ? '内置角色的代码固定，不可修改。'
+                : '该角色已有账号持有，改 code 会强制这些账号重新登录，故不可改。'
+            }}
+          </div>
+          <div v-if="store.dialogs.form.errors.code" class="field-error">
+            {{ store.dialogs.form.errors.code }}
           </div>
         </el-form-item>
         <el-form-item label="名称" prop="name">
@@ -166,9 +174,15 @@ onBeforeUnmount(() => {
   store.$dispose();
 });
 
-/** el-table 的当前行变化 → 切选中角色（store 内会把勾选态整体重置）。 */
+/** el-table 的当前行变化 → 切选中角色。同 id 重发（表格数据替换）由 store 早退兜住，
+ *  勾选态不会被清（见 `useRolesStore::selectRole` 的注释）。 */
 function onCurrentChange(row: RoleDefData | null): void {
   store.query.selectRole(row ? row.id : '');
+}
+
+/** 逐行 loading：停用 / 删除在途时只让被点的那一行转圈（store 的在途标志 + 目标行 id）。 */
+function deactivateLoadingFor(rowId: string): boolean {
+  return store.dialogs.deactivate.saving && store.dialogs.deactivate.targetId === rowId;
 }
 
 function onSubmitForm(): void {

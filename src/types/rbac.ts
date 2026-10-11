@@ -29,8 +29,9 @@
 export interface RoleDef {
   /** 雪花 ID 字符串。 */
   id: string;
-  /** 角色 code：大写字符串，内置 6 个 + 管理员自建（`QC_LEAD` 等）。全局唯一、不可改
-   *  （update 的 body 里 `code?` 只在新建角色首改时用）。 */
+  /** 角色 code：大写字符串，内置 6 个 + 管理员自建（`QC_LEAD` 等）。系统角色的 code
+   *  恒不可改（后端拒绝该入参）；自定义角色后端支持级联改名，前端在 `user_count > 0`
+   *  时保守禁用（改 code 会踢掉全部持有者重登，默认不替管理员做这个决定）。 */
   code: string;
   /** 中文展示名（面板左列表与下拉显示的就是它）。 */
   name: string;

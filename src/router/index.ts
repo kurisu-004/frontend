@@ -13,6 +13,9 @@ import { useAuthStore } from '@/stores/auth';
 // 恢复长连接（WS 侧已在 4001 分支把 URL 置 undefined 停连）。api/dashboard.ts 不
 // import vue-router / stores/auth，依赖单向，不构成循环依赖。
 import { reconnectDashboard } from '@/api/dashboard';
+// 2026-10-14：菜单树降级目标（第一个有 path 的节点）抽到跨域工具，供本守卫与登录页
+// 共用（登录页对自定义角色账号做同款回退）。
+import { findFirstMenuPath } from '@/utils/menu';
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -516,17 +519,8 @@ function treeContainsCode(tree: MenuNode[], code: string): boolean {
   return false;
 }
 
-/** DFS 在用户的菜单树中找第一个有 path 的节点路径；找不到返回 null。
- *  用作 menuCode 校验失败时的降级目标：避免再次陷入相同的菜单校验循环。 */
-function findFirstMenuPath(tree: MenuNode[]): string | null {
-  const stack: MenuNode[] = [...tree];
-  while (stack.length > 0) {
-    const n = stack.pop()!;
-    if (n.path) return n.path;
-    if (n.children.length > 0) stack.push(...n.children);
-  }
-  return null;
-}
+// 降级目标（菜单树里第一个有 path 的节点）走共享工具 `findFirstMenuPath`：登录页对
+// 自定义角色账号做同款回退（见 `views/auth/LoginView.vue`），两处口径必须同源。
 
 // 全局前置守卫
 router.beforeEach(async (to, _from, next) => {

@@ -452,6 +452,9 @@ export const useUsersListStore = defineStore('users-list', () => {
    * 40901 单独分支：它是 OCC 冲突（数据被他人改过），提示与动作都与业务失败不同 ——
    * warning 而非 error，并**顺带重拉列表**，否则用户拿着列表里的旧 version 再点一次
    * 必然再次冲突。
+   *
+   * 其余一律经 `usersErrorText` 收口：Zod 守门失败时 `e.message` 是 issues 的 JSON
+   * 数组，不能直接甩给管理员（见 `../usersErrorText`）。
    */
   async function handleWriteError(e: Error & { code?: number }, fallback: string): Promise<void> {
     const code = e?.code;
@@ -465,10 +468,10 @@ export const useUsersListStore = defineStore('users-list', () => {
       formFocusUsername.value = true;
     }
     if (code === USER_NOT_FOUND_CODE) {
-      ElMessage.error(e.message ?? '账号不存在');
+      ElMessage.error(usersErrorText(e, '账号不存在'));
       return;
     }
-    ElMessage.error(WX_BIND_ERROR_TEXT[code as number] ?? e?.message ?? fallback);
+    ElMessage.error(WX_BIND_ERROR_TEXT[code as number] ?? usersErrorText(e, fallback));
   }
 
   const createMutation = useMutation({

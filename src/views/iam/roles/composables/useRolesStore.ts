@@ -79,6 +79,13 @@ export const useRolesStore = defineStore('iam-roles', () => {
   const hydratedFor = ref('');
 
   function selectRole(id: string): void {
+    // 同 id 早退：el-table 的 `:data` 被替换（写后失效重拉 / staleTime 到期刷新）时，
+    // Element Plus 会对同 id 的行**重新 emit current-change**（`setData` →
+    // `updateCurrentRowData` → `setCurrentRowByKey` 无条件 emit；行对象按引用找不到就按
+    // row-key 查出新对象）。放过去就会把勾选态清空 + hydratedFor 打回 ''，而 grants 的
+    // 对象引用没变 ⇒ watch 不再触发 ⇒ 停在「空勾选 + ready=true」，此时点保存就是整包
+    // 清空该角色授权。同 id 没有「切角色」语义，直接早退，保留用户当下的勾选。
+    if (id === selectedRoleId.value) return;
     selectedRoleId.value = id;
     // 授权包的勾选态随角色切换整体重置 —— 沿用上一角色的勾选会让管理员把 A 角色的
     // 选择误提交到 B 角色（后端是整包替换，一提交就真的生效了）。
@@ -97,18 +104,25 @@ export const useRolesStore = defineStore('iam-roles', () => {
   /** 授权包是否已就绪（保存按钮 disabled 与 `submitGrants` 早退共用这条判据）。 */
   const grantsReady = computed(() => grants.value !== undefined);
 
-  /** grants 到位后把已授权集合灌进勾选态（每次换角色 / 刷新都重灌）。
-   *  只灌一次判定用 key 是 roleId + version：保存成功后后端会自增 version，
-   *  那个时刻应当以**服务端返回的**为准重新灌，而不是保留本地勾选（虽然两者一致，
-   *  但一旦服务端做了规范化就会分叉）。 */
-  watch(grants, (g) => {
-    if (!g) return;
+  /** 把 grants 的已授权集合灌进勾选态。判据是 `role_id:version` stamp ≠ hydratedFor
+   *  （**不是**「grants 对象引用变化」）—— 只要触发源重放，同一角色的授权包在勾选态被
+   *  清后仍有自愈机会；服务端版本没变时重复触发是零成本的短路。
+   *
+   *  ⚠️ grants 按角色分片：切角色后 queryKey 先变、data 后到，中间有一拍 data 仍属上一
+   *  角色 ⇒ 必须按 `role_id` 过滤，否则会把 A 的授权灌给 B。 */
+  function syncChecksFromGrants(): void {
+    const g = grants.value;
+    if (!g || g.role_id !== selectedRoleId.value) return;
     const stamp = `${g.role_id}:${g.version}`;
     if (hydratedFor.value === stamp) return;
     hydratedFor.value = stamp;
     checkedMenuCodes.value = [...g.menu_codes];
     checkedPermissionCodes.value = [...g.permission_codes];
-  });
+  }
+
+  // 两个触发源：grants 数据到位 / 刷新（对象引用变化），以及选中角色变化（切回同一角色
+  // 时 grants 引用可能不变，靠这一路让 stamp 判定重放）。
+  watch([grants, selectedRoleId], syncChecksFromGrants);
 
   // ============ 切片：catalog（权限点分组 + 菜单树全集）============
   const catalogQuery = useRbacCatalogQuery(restored);
@@ -132,7 +146,8 @@ export const useRolesStore = defineStore('iam-roles', () => {
   /** 改名态下 code 是否可改：
    *  - 新建态恒可改；
    *  - 内置角色的 code 是后端判权的稳定键（后端只拒系统角色改 code），不可改；
-   *  - 已有人持有的角色，改 code 会让这些账号的授权失去指向（user_count === 0 才放开）。 */
+   *  - 自定义角色有人持有时保守禁用：后端支持级联改名（关联表同步改），但会踢掉全部
+   *    持有者重登，默认不替管理员做这个决定（user_count === 0 才放开）。 */
   const formCodeEditable = computed(() => {
     if (formEditingId.value === null) return true;
     const role = formEditingRole.value;
@@ -177,8 +192,11 @@ export const useRolesStore = defineStore('iam-roles', () => {
 
   // ============ 切片：dialogs.deactivate（停用 / 删除）============
   /** 停用 / 删除的一次性流程：二次确认 → 提交 → 清选中态。无独立弹窗（确认走
-   *  `ElMessageBox.confirm`），故不留 `visible` / `targetId` 之类的悬空状态。 */
+   *  `ElMessageBox.confirm`），故不留 `visible` 之类的中转状态。 */
   const deactivateSaving = ref(false);
+  /** 在途操作的目标行 id（'' = 无在途）。`deactivateSaving` 是全局在途标志，配 targetId
+   *  才能把逐行 loading 收在真正被点的那一行上（否则任一行的操作会让全表按钮一起转圈）。 */
+  const deactivateTargetId = ref('');
 
   async function openDeactivate(id: string, isDelete: boolean): Promise<void> {
     const role = roles.value.find((r) => r.id === id);
@@ -201,6 +219,7 @@ export const useRolesStore = defineStore('iam-roles', () => {
       return; // 用户取消
     }
     deactivateSaving.value = true;
+    deactivateTargetId.value = id;
     try {
       await deactivateMutation.mutateAsync({ id, version: role.version, delete: isDelete });
       // 停用/删除后若选中的正是该角色，清选中态（右区会随之一并收起）。
@@ -209,6 +228,7 @@ export const useRolesStore = defineStore('iam-roles', () => {
       // 错误已由 onError 提示。
     } finally {
       deactivateSaving.value = false;
+      deactivateTargetId.value = '';
     }
   }
 
@@ -421,6 +441,7 @@ export const useRolesStore = defineStore('iam-roles', () => {
     },
     deactivate: {
       saving: deactivateSaving,
+      targetId: deactivateTargetId,
       openDeactivate,
     },
   };
