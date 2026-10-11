@@ -151,7 +151,13 @@ export const useUsersListStore = defineStore('users-list', () => {
     const e = listQuery.error.value;
     return e ? e.message : null;
   });
-  const emptyText = computed<string>(() => errorMsg.value ?? '暂无账号');
+  // 2026-10-14：Zod 守门失败时 `e.message` 是 issues 的 JSON 数组，直接渲进空态就是
+  // 把契约漂移暴露给管理员。经 `usersErrorText` 收口后，非 ZodError（ApiError / 网络错）
+  // 仍逐字透传 `e.message`，行为不变。
+  const emptyText = computed<string>(() => {
+    const e = listQuery.error.value;
+    return e ? usersErrorText(e, '暂无账号') : '暂无账号';
+  });
 
   /** 表头筛选 confirm 的统一入口（页码拨回 1）。改 search 不动 page 会停在「第 5 页但
    *  只有 1 页结果」的空态。 */

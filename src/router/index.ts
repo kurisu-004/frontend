@@ -13,7 +13,7 @@ import { useAuthStore } from '@/stores/auth';
 // 恢复长连接（WS 侧已在 4001 分支把 URL 置 undefined 停连）。api/dashboard.ts 不
 // import vue-router / stores/auth，依赖单向，不构成循环依赖。
 import { reconnectDashboard } from '@/api/dashboard';
-// 2026-10-14：菜单树降级目标（第一个有 path 的节点）抽到跨域工具，供本守卫与登录页
+// 2026-10-14：菜单树降级目标（一个有 path 的节点）抽到跨域工具，供本守卫与登录页
 // 共用（登录页对自定义角色账号做同款回退）。
 import { findFirstMenuPath } from '@/utils/menu';
 
@@ -335,7 +335,7 @@ const routes: RouteRecordRaw[] = [
         // `auth_group` 等既有分组节点的既有做法。
         //
         // ⚠️ `menuCode` 必须与后端 `seeds/menu.sql` 的 `mail_digest` code **逐字一致**：
-        // 不一致时路由守卫第 3 条（menuCode 不在菜单树 → 重定向到菜单树里第一个有 path
+        // 不一致时路由守卫第 3 条（menuCode 不在菜单树 → 重定向到菜单树里一个有 path
         // 的节点）会把用户踢出本页，且现象是「点菜单闪一下又回到别的页」。
         path: 'mail/digest',
         name: 'MailDigestSettings',
@@ -519,7 +519,7 @@ function treeContainsCode(tree: MenuNode[], code: string): boolean {
   return false;
 }
 
-// 降级目标（菜单树里第一个有 path 的节点）走共享工具 `findFirstMenuPath`：登录页对
+// 降级目标（菜单树里一个有 path 的节点）走共享工具 `findFirstMenuPath`：登录页对
 // 自定义角色账号做同款回退（见 `views/auth/LoginView.vue`），两处口径必须同源。
 
 // 全局前置守卫
@@ -559,7 +559,7 @@ router.beforeEach(async (to, _from, next) => {
   }
 
   // 3) menuCode 校验：菜单树中存在对应 code 即放行。
-  //    单一权限源。降级目标：用户菜单树中第一个可达路径；
+  //    单一权限源。降级目标：用户菜单树中一个有 path 的节点；
   //    若菜单树为空（极端情况）→ /login。
   const code = to.meta.menuCode;
   if (code && !treeContainsCode(auth.menus, code)) {

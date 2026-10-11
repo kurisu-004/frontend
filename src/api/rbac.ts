@@ -33,7 +33,7 @@ export interface CreateRolePayload {
  * 新建角色（`POST /api/v2/iam/roles`）。
  *
  * **无 `version`**：新建时行还不存在，无 OCC 锚可传（与账号管理的 `createUser` 同口径）。
- * 失败抛 `ApiError`：20602 角色 code 重复、40001 参数校验失败。
+ * 失败抛 `ApiError`：角色 code 重复 → 40000（HTTP 400）、40001 参数校验失败。
  */
 export async function createRole(payload: CreateRolePayload): Promise<RoleDef> {
   const resp = await api.post<RoleDef>('/iam/roles', payload);
@@ -57,7 +57,8 @@ export interface UpdateRolePayload {
 
 /** 编辑角色（`POST /api/v2/iam/roles/{id}/update`）。
  *
- * 失败抛 `ApiError`：20601 角色不存在 / 20602 code 重复 / 40901 OCC 冲突 / 40001 参数校验失败。 */
+ * 失败抛 `ApiError`：40400 角色不存在（HTTP 404）/ 40000 code 重复（HTTP 400）/
+ * 40901 OCC 冲突 / 40001 参数校验失败。 */
 export async function updateRole(id: string, payload: UpdateRolePayload): Promise<RoleDef> {
   const resp = await api.post<RoleDef>(`/iam/roles/${id}/update`, payload);
   return resp.data;
@@ -79,7 +80,7 @@ export interface DeactivateRoleResult {
 /** 停用 / 删除角色（`POST /api/v2/iam/roles/{id}/deactivate`）。
  *
  *  一个端点两种语义，由 body 的 `delete` 布尔分流（沿用账号管理 `deactivateUser` 的形态）。
- * 失败抛 `ApiError`：20601 角色不存在 / 40901 OCC 冲突 / 40001 参数校验失败。 */
+ * 失败抛 `ApiError`：40400 角色不存在（HTTP 404）/ 40901 OCC 冲突 / 40001 参数校验失败。 */
 export async function deactivateRole(
   id: string,
   payload: DeactivateRolePayload,
@@ -111,8 +112,8 @@ export interface SaveRoleGrantsPayload {
 /** 保存单个角色的授权（`POST /api/v2/iam/roles/{id}/grants`）。
  *
  * ⚠️ **整包替换**：两个数组就是提交时的全集，后端直接覆盖，不做 diff。
- * 失败抛 `ApiError`：20601 角色不存在 / 40901 OCC 冲突 / 40001 参数校验失败 /
- * 对 ADMIN 返 400（前端对 ADMIN 根本不渲染提交按钮，这是第二道闸）。 */
+ * 失败抛 `ApiError`：40400 角色不存在（HTTP 404）/ 40901 OCC 冲突 / 40001 参数校验失败 /
+ * 对 ADMIN 拒写 → 40000（HTTP 400；前端对 ADMIN 根本不渲染提交按钮，这是第二道闸）。 */
 export async function saveRoleGrants(
   id: string,
   payload: SaveRoleGrantsPayload,

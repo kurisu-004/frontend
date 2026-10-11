@@ -145,7 +145,24 @@ vi.mock('element-plus', () => ({
 
 import { createApp } from 'vue';
 import { usePartsListStore } from '../usePartsListStore';
+import { useAuthStore } from '@/stores/auth';
+import type { CurrentUser } from '@/types/user';
 import type { PartListItem } from '@/types/parts';
+
+/** 最小 CurrentUser：canBatchPrint 只读 roles / permissions，其余字段给初值。 */
+function makeUser(partial: Partial<CurrentUser>): CurrentUser {
+  return {
+    id: '1',
+    username: 'tester',
+    full_name: '测试',
+    is_active: true,
+    roles: [],
+    shelf_ids: [],
+    menus: [],
+    permissions: [],
+    ...partial,
+  };
+}
 
 function makeRow(id: string, status = 'IN_PROCESS'): PartListItem {
   const row = {
@@ -200,14 +217,41 @@ describe('usePartsListStore', () => {
     expect(store.dispatch).toBeDefined();
     // 视图级权限 / 配置
     expect(typeof store.canEdit).toBe('boolean');
+    expect(typeof store.canBatchPrint).toBe('boolean');
     expect(typeof store.isCncProgrammer).toBe('boolean');
     expect(store.columnVisibility).toBeDefined();
     expect(Array.isArray(store.columnDefs)).toBe(true);
     // 未登录态：canEdit === false → price 列 gate → 15 列（9 base + 6 tail）
     expect(store.canEdit).toBe(false);
+    expect(store.canBatchPrint).toBe(false);
     expect(store.columnDefs.length).toBe(15);
     // registerTableGetter 存在（getTable 是 store 内部闭包，不导出）
     expect(typeof store.registerTableGetter).toBe('function');
+  });
+
+  // ============ 2026-10-14：批量打印入口改判权限点 `part.drawing.print` ============
+  // 后端 `POST /parts/print-drawing-batch` 走该权限点；前端入口（PartsList.vue 的
+  // toggle + PartsBatchBar.vue）必须读同一个点，否则面板收回 / 授予后两端分叉
+  // （可见却 403 / 授权了却看不见）。三档：ADMIN 通配 / 持有权限点 / 不持有。
+  it('canBatchPrint：ADMIN 元角色通配放行', () => {
+    useAuthStore().user = makeUser({ roles: ['ADMIN'], permissions: [] });
+    const store = usePartsListStore();
+    expect(store.canBatchPrint).toBe(true);
+  });
+
+  it('canBatchPrint：持有 part.drawing.print ⇒ true（INSPECTOR 也能看到入口）', () => {
+    useAuthStore().user = makeUser({ roles: ['INSPECTOR'], permissions: ['part.drawing.print'] });
+    const store = usePartsListStore();
+    expect(store.canBatchPrint).toBe(true);
+    // 行内编辑 / 导入仍按角色判（canEdit）—— 两条闸门互不影响。
+    expect(store.canEdit).toBe(false);
+  });
+
+  it('canBatchPrint：不持有该权限点 ⇒ false（哪怕是 MANAGER，被收回后入口同步消失）', () => {
+    useAuthStore().user = makeUser({ roles: ['MANAGER'], permissions: [] });
+    const store = usePartsListStore();
+    expect(store.canBatchPrint).toBe(false);
+    expect(store.canEdit).toBe(true);
   });
 
   // 用例 2：嵌套解包 —— store.batch.batchMode 直接是 boolean（不是 Ref）

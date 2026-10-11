@@ -710,6 +710,18 @@ describe('useUsersListStore', () => {
     expect(ElMessage.error).toHaveBeenCalledWith('后端 500');
   });
 
+  // 2026-10-14：坏响应（ZodError）时 `e.message` 是 issues 的 JSON 数组，不能直接渲进
+  // 空态。`emptyText` 与 `useUsersQuery` 的 toast 桥接共用 `usersErrorText` 收口。
+  it('坏响应（守门 ZodError）⇒ emptyText 走契约漂移文案，不暴露 Zod issues', async () => {
+    listUsersMock.mockResolvedValue({ items: [{ id: 'broken' }], total: 1, limit: 20, offset: 0 });
+    const store = useUsersListStore();
+    store.query.restoreState();
+    await tick();
+
+    expect(store.query.emptyText).toBe(USERS_CONTRACT_DRIFT_TEXT);
+    expect(ElMessage.error).toHaveBeenCalledWith(USERS_CONTRACT_DRIFT_TEXT);
+  });
+
   it('企微绑定查询失败走 watch → ElMessage.error（否则弹窗静默渲染成「未绑态」）', async () => {
     const { ElMessage } = await import('element-plus');
     getWxIdentityMock.mockRejectedValue(new Error('后端 20601'));

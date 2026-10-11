@@ -13,7 +13,9 @@
   触发时 iframe 已挂载。
 -->
 <template>
-  <div v-if="store.canEdit && store.batch.batchMode" class="batch-bar">
+  <!-- 闸门与「批量打印图纸」入口同判据：权限点 `part.drawing.print`（2026-10-14；
+       见 usePartsListStore::canBatchPrint）。本栏内只剩打印动作，不再挂 canEdit。 -->
+  <div v-if="store.canBatchPrint && store.batch.batchMode" class="batch-bar">
     <div class="bar-info">
       <span v-if="store.batch.batchSelectedPartCount > 0">
         零件 <strong>{{ store.batch.batchSelectedPartCount }}</strong> 件

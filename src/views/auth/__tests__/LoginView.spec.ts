@@ -257,9 +257,10 @@ describe('LoginView', () => {
     expect(wrapper.text()).not.toContain('账号无任何可用角色');
   });
 
-  // 2026-10-14（review 第 2 轮 B3）：管理员可自建角色（如 QC_LEAD），它不在内置枚举里，
-  // 但后端菜单按原始 role code 装载 ⇒ 这类账号的可用面就是它的菜单树，不能卡死在登录页。
-  it('仅自定义角色 + 非空菜单：回退到菜单树里第一个有 path 的节点', async () => {
+  // 2026-10-14：管理员可自建角色（如 QC_LEAD），它不在内置枚举里。⚠️ 当前后端**登录
+  // 即拒**「只有自定义角色」的账号（20606 NO_ROLE / 403）⇒ 本用例的菜单树回退是
+  // **后端将来放宽登录后的前瞻兜底**；逻辑保留，一旦放行就按菜单树落点。
+  it('仅自定义角色 + 非空菜单：回退到菜单树里一个有 path 的节点', async () => {
     loginMutateAsyncMock.mockResolvedValue(makeUser(['QC_LEAD'], USER_MENUS));
     const wrapper = mount(LoginView, { global: globalConfig });
     const inputs = wrapper.findAll('input');

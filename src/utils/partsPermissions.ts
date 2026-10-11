@@ -17,9 +17,9 @@
 // 两边才是同一份数据。
 //
 // ⚠️ **签名一字不改**（消费方 `PartDrawingPreviewDialog.vue` / `PartFilesTabsCard.vue`
-// 仍按原样传角色 map，git diff 为空）：形参保留是为了不改调用方，而它已经**不再参与
-// 判定**。⚠️ 后端要求后端必须先上：旧后端的 `/iam/me` 不返 `permissions`，闸门恒为 false
-// ⇒ 图纸下载/打印入口全员消失。
+// 仍按原样传角色 map，调用形态未变、只有注释订正）：形参保留是为了不改调用方，而它已经
+// **不再参与判定**。⚠️ 部署顺序：后端必须先上 —— 旧后端的 `/iam/me` 不返 `permissions`，
+// 闸门恒为 false ⇒ 图纸下载/打印入口全员消失。
 //
 // ADMIN 元角色在 `hasPermission` 里有通配短路（见 stores/auth.ts），故纯 ADMIN 账号
 // 不受本文件影响。
@@ -48,10 +48,12 @@ export function canPrintPartDrawing(role: PartRoleMapLike): boolean {
 /**
  * 图纸文件下载入口是否可见（`GET /part-files/{id}/url` 的前端闸门）。
  *
- * 与 `canPrintPartDrawing` **共用同一个权限点**（逐字相同），与后端
- * `PartFileService::get_file_with_url` 的 `require_any_permission` 白名单一一对应。
- * ⚠️ 这个权限点**刻意不含**报工台 HMI：后端 part_file 的列表 / content 对
- * SHELF_ACCOUNT 放开了（工控机预览图纸打的就是这两条），而 `/part-files/{id}/url`
+ * 与 `canPrintPartDrawing` **共用同一个权限点**（逐字相同）：后端
+ * `PartFileService::get_file_with_url` 与零件图纸打印端点共用同一个
+ * `require_permission("part.drawing.print")` 闸门（默认授权矩阵与打印矩阵逐格相同，
+ * 由管理员在 RBAC 面板维护）。
+ * ⚠️ 这个权限点的**默认矩阵不含**报工台 HMI（SHELF_ACCOUNT）：后端 part_file 的列表 /
+ * content 对它放开了（工控机预览图纸打的就是这两条），而 `/part-files/{id}/url`
  * 没跟着放开 —— 它回的是 COS 预签直链（1 小时有效），拿到即可脱离本后端直接访问、
  * 直链可外发；工控机看图纸走 content（后端代理、逐次过 RBAC）就够了。所以前端三页图纸
  * 预览弹窗的「下载文件」按钮必须对未授予该权限点的账号隐藏，否则就是「可见但必 403」。
