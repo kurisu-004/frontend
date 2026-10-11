@@ -10,12 +10,12 @@
 //
 // 覆盖：
 //   - R1：recallBatch 以**单参数对象** `{ batch_id, version }` 调 recallToPending；
-//   - R1b：canRecall 与后端 MANAGER/CLERK 对齐；
+//   - R1b：canRecall 由 `queue.recall` 权限点判定；
 //   - R1c：出参缺字段 → mutationFn 的 Zod 守门抛错（契约漂移不会静默通过）；
 //   - R2：用户取消确认弹窗 → 不发请求；
 //   - R2b：确认弹窗文案（标题 / 正文 / 按钮）；
 //   - R3：卡片缺 version → 早退 + warning，不发请求（后端必填，发了必然 40001）；
-//   - R4：角色既非 MANAGER 也非 CLERK → 早退不发请求（后端返 40300）；
+//   - R4：无 `queue.recall` 权限点 → 早退不发请求（后端端点同码闸，返 40300）；
 //   - R5：onSuccess 触发四域失效（pending / board / snapshot + qk.partsPrefix）+ 成功 toast；
 //   - R6：onError 也跑同一串失效 + 错误 toast（409 OCC 必须与服务器对账）；
 //   - R6b：mutation 不重试（信任 main.ts 全局 mutations.retry: 0）。
@@ -59,7 +59,7 @@ vi.mock('@/api/productionQueue', () => ({
   refillQueue: vi.fn(),
 }));
 
-/** 角色桩：默认 MANAGER + CLERK 都有权；用例内可改。
+/** 权限桩：默认持有 `queue.recall`；用例内可改。
  *  2026-10-15：canRecall 已由角色判定迁到 `queue.recall` 权限点判定，本 spec 改读
  *  `permissions`；hasRole 保留 mock 形态完整（composable 不再消费它）。 */
 const roles = vi.hoisted(() => ({ list: ['MANAGER', 'CLERK'] as string[] }));

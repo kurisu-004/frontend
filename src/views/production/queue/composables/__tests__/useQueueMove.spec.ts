@@ -437,7 +437,7 @@ describe('useQueueMove — queue 域的移动 / 自动分配写操作', () => {
     // 早退同样走一次失效对账（与 version / 货架早退同款，见 reconcileAfterEarlyReturn）。
     const { useQueueMove } = await import('../useQueueMove');
     const { ElMessage } = await import('element-plus');
-    permissions.list = []; // 角色全权缺失的账号在真实链路里由 hasPermission 返回 false
+    permissions.list = []; // 无该权限点的账号在真实链路里由 hasPermission 返回 false
     const q = testApp.runWithContext(() => useQueueMove());
 
     expect(await q.moveBatchToWorker('3', CARD_VERSION, 'w2', 's1')).toBe(false);

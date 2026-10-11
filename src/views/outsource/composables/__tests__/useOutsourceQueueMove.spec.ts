@@ -404,9 +404,10 @@ describe('useOutsourceQueueMove — 外协收发写操作', () => {
   });
 
   it('M20：无 outsource.move 权限点 → 发送 / 回收两个包装都在首部早退（零请求）', async () => {
-    // 2026-10-15 新增的行为变更：改前本文件是零闸门（拖拽 / 右键都能触发，后端提交时
-    // 返 403）；迁到权限点后无权账号在包装入口即早退（warning + 不发请求），早退仍走一次
-    // 失效对账（与 version / 公司守卫同款）。
+    // 2026-10-15 新增的行为变更：改前两个包装是零闸门（拖拽路径不设防；右键路径仅由看板
+    // 菜单侧的角色版 canMove 先闸「回收生产」，包装入口不设防），后端提交时以 403 兜底；
+    // 迁到权限点后无权账号在包装入口即早退（warning + 不发请求），早退仍走一次失效对账
+    // （与 version / 公司守卫同款）。
     const { ElMessage } = await import('element-plus');
     permissions.list = [];
     const q = testApp.runWithContext(() => useOutsourceQueueMove());

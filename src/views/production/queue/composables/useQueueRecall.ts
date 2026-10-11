@@ -46,7 +46,7 @@ export interface QueueRecallVars {
 
 export interface UseQueueRecallReturn {
   /** 是否有召回权限（`queue.recall` 权限点，与后端端点闸对齐）。
-   *  右键菜单在 open 之前用它闸掉无权角色 —— 后端对其它角色返 40300，
+   *  右键菜单在 open 之前用它闸掉无权账号 —— 后端对无该权限点的请求返 40300，
    *  前端不该让用户点完才知道。 */
   canRecall: ComputedRef<boolean>;
   /** 召回 mutation（mutation.isPending / mutate）。 */

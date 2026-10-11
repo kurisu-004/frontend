@@ -14,7 +14,7 @@
        - provide 键 `openBatchContextMenu`：`(evt, batch, area) => void`，三个容器
          （待下发池 / 工序池 / 工人列）各自 inject 并把自己的**区域常量**传上来
          （消费侧一律带 noop 缺省）；
-       - 菜单项由本组件按 **区域 × 角色 × 批次状态 × 目标集** 派生（纯函数
+       - 菜单项由本组件按 **区域 × 权限点 × 批次状态 × 目标集** 派生（纯函数
          `buildQueueBatchMenuItems`，见 composables/queueBatchMenuItems.ts 的矩阵表）：
          待下发池 = 拆批 + 发到工序；工序池 = 召回 + 拆批 + 派给工人；工人列 = 召回 +
          转交给工人；
@@ -240,8 +240,8 @@ const { error, moveBatchToWorker, moveBatchToPool, moveBatchBetweenWorkers } = q
  *  权限点放宽都会只动一处，故不复用同一个布尔。 */
 const canSplit = computed<boolean>(() => auth.hasPermission(BATCH_SPLIT_PERMISSION));
 
-/** 下发权限闸（2026-10-14 新增，RBAC 面板）—— 按**权限点**判，与上面按角色判的闸
- *  是不同来源：`queue.dispatch` 是 RBAC 面板里可授予任意角色的权限点（含自建角色）。
+/** 下发权限闸（2026-10-14 新增，RBAC 面板）—— 按**权限点**判：`queue.dispatch` 是
+ *  RBAC 面板里可授予任意角色（含自建角色）的权限点。
  *
  *  ⚠️ 这是**行为变更**：改之前本页对「发送到工序」是零闸门（任何登录用户右键都能看到
  *  入口，后端在提交时返 403）。现在未持有该权限点的账号看不到这一项。
@@ -271,7 +271,7 @@ watch(activeTab, (next) => {
 });
 
 // ============================================================
-// 右键菜单（区域 × 角色 × 批次状态 × 目标集 的派生在纯函数里，见 queueBatchMenuItems.ts）
+// 右键菜单（区域 × 权限点 × 批次状态 × 目标集 的派生在纯函数里，见 queueBatchMenuItems.ts）
 // ============================================================
 
 /** 「发送到工序」的目标集 —— 共享 `useProcessesQuery` 的**全量**工序（INHOUSE +
@@ -356,7 +356,7 @@ function openSplitDialog(batch: BatchCardModel): void {
  *
  *  菜单项派生出来是**空数组**时不弹菜单、改为一句 warning：卡片侧的
  *  `@contextmenu.prevent` 已经把系统右键菜单吞掉了，静默早退等于「右键卡片彻底没反应」，
- *  而弹一个空白菜单框同样没法解释。文案按**空的原因**分级 —— 全权角色也会遇到「有权但
+ *  而弹一个空白菜单框同样没法解释。文案按**空的原因**分级 —— 全权账号也会遇到「有权但
  *  这一格批次没得可做」（余量 ≤ 1 不可拆、目标集为空、切 tab 窗口反查不到自己所在列），
  *  对他说「当前角色没有可执行的操作」是把批次状态问题误报成权限问题。各写操作内部另有
  *  第二道闸（`useQueueRecall.recallBatch` / move 包装的守卫），菜单打开与最终提交两处都

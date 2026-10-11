@@ -17,7 +17,7 @@
 //   - T5：provide 三个 move 包装（含 WORKER→WORKER 包装）—— 工人列落点与候选池
 //     抽屉的 @add 全靠 inject 拿包装，漏 provide 就退化为「不发请求」。
 //     2026-10-10：同时钉住「不再 provide shelfId」（撤回目标架改由后端自动选）。
-//   - T6：provide openBatchContextMenu + 区域参数 + 菜单项矩阵派生（无权角色得到一句
+//   - T6：provide openBatchContextMenu + 区域参数 + 菜单项矩阵派生（无权限账号得到一句
 //     warning 而不是静默无反馈 / 空白菜单）。
 //   - T7：菜单项 onClick → 复用现成 composable（useQueueRecall.recallBatch /
 //     useQueueDispatch.dispatchMutation / useQueueMove 的三个 move 包装），板级不新增
@@ -323,7 +323,7 @@ const PROC_INHOUSE = '2000000000001';
 /** 召回权限开关（默认 false ⇒ opener 直接早退，与本 spec 的 auth mock 一致）。
  *  真 ref 而不是裸布尔：看板把权限派生进菜单 items 的 computed，裸布尔在 computed 眼里
  *  没有任何依赖 —— 只算一次就锁死快照，「用例改了开关就该立刻反映到 items」恒假。 */
-/** 拆批权限开关（默认 true ⇒ 菜单里始终有「拆分批次」候选，剩下的差异才是区域/角色）。
+/** 拆批权限开关（默认 true ⇒ 菜单里始终有「拆分批次」候选，剩下的差异才是区域/权限点）。
  *  真 ref 而不是裸布尔：看板把权限派生进菜单 items，裸布尔在 computed 眼里没有任何
  *  依赖 —— 只算一次就锁死快照，「用例改了开关就该立刻反映到 items」恒假。 */
 const recallable: { current: Ref<boolean> } = { current: ref(false) };
@@ -570,7 +570,7 @@ describe('QueueBoard（生产队列看板接线 guard）', () => {
     wrapper.unmount();
   });
 
-  it('T6b：三区菜单矩阵由「区域 × 角色 × 批次状态」逐格派生（纯函数本身的矩阵见 queueBatchMenuItems.spec）', async () => {
+  it('T6b：三区菜单矩阵由「区域 × 权限点 × 批次状态」逐格派生（纯函数本身的矩阵见 queueBatchMenuItems.spec）', async () => {
     // 本用例只守**接线**：板级把哪个区域、哪张卡、哪些目标集递进派生函数。
     activeShelfIdRef.value = '5000000000001';
     recallable.current.value = true;
@@ -757,7 +757,7 @@ describe('QueueBoard（生产队列看板接线 guard）', () => {
     // 这里守的是「板级确实把 auth.hasPermission 的结果喂进去了」—— 少接一次会让
     // 派生层的守卫形同虚设（闸门写了但永远是 true）。
     activeShelfIdRef.value = '5000000000001';
-    roles.current = ['MANAGER', 'CLERK']; // 全权角色
+    roles.current = ['MANAGER', 'CLERK']; // 角色集不影响判定（三个闸都只看权限点）
     // 但没有下发放行权限点（保留 batch.split，让菜单非空、断言落在「少的是哪一项」上，
     // 否则空菜单会走 warning 分支而看不到 items）。
     permissions.current.value = ['batch.split'];
@@ -782,7 +782,7 @@ describe('QueueBoard（生产队列看板接线 guard）', () => {
     // 召回放行维持一条非空菜单（待下发区在本 spec 的工序列表为空时只有拆分一项，
     // 拆掉就无从断言「菜单里少的是哪一项」）。
     activeShelfIdRef.value = '5000000000001';
-    roles.current = ['MANAGER', 'CLERK']; // 角色全权，但权限点没给
+    roles.current = ['MANAGER', 'CLERK']; // 角色集不影响判定（只看权限点），但权限点没给
     permissions.current.value = ['queue.dispatch'];
     recallable.current.value = true;
     const wrapper = mount(QueueBoard, {

@@ -78,7 +78,8 @@ export const useOutsourceQuoteListStore = defineStore('outsource-quote-list', ()
   // 消费侧禁止解构 store：auth.xxx 由 store proxy 自动解包。
   const auth = useAuthStore();
   // 角色矩阵经 `auth.hasRole` 构造（不是 `auth.user?.roles` 直读）：含 ADMIN 的账号在
-  // hasRole 里通配短路，纯 ADMIN 账号否则拿到的全是 false ⇒ 提交 / 审批按钮全消失。
+  // hasRole 里通配短路，纯 ADMIN 账号的默认档位才不会落空。roleMap 只服务列表默认筛选
+  // （见 defaultStatusesForRole），写权限按钮已改判权限点、与本矩阵无关。
   const roleMap = computed<RoleLike>(() => roleMapFromHasRole((role) => auth.hasRole(role)));
 
   // ============ 切片：search / 分页 / 排序 / 主查询 ============

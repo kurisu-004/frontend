@@ -1,4 +1,4 @@
-<!-- 报价一览页 — 外协报价 CRUD + MANAGER 审批
+<!-- 报价一览页 — 外协报价 CRUD + 报价审批（`outsource.quote.approve` 权限点）
 
      2026-10-09 重构（列表交互 + 迁 TanStack Query + 表头筛选）：
      - 列表状态从 `useOutsourceQuoteTable()` composable + `OutsourceQuoteTable` 的

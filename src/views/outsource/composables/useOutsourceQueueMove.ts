@@ -5,7 +5,8 @@
 //     `moveMutation`，视图层（Sortable 落点 / 卡片右键菜单）只消费这两个函数、
 //     不直接 import 本文件；
 //   - 权限（2026-10-15 新增）：两个包装入口按 `outsource.move` 权限点早退（warning +
-//     零请求，fail-closed）；改前本文件是零闸门、全由后端 403 兜底。
+//     零请求，fail-closed）；改前本文件是零闸门、全由后端 403 兜底（右键入口当时的角色闸
+//     在看板菜单侧，不在包装内）。
 //   - 收发合一的理由：`t_part_batch` 的 `location` / `current_holder_id` / `version`
 //     三列在三个方向上是同一组列，拆成三个端点只会把同一份事务边界写三遍；
 //   - 每个包装的入参都带 `version`（OCC 锚，取自卡片 model，经卡片
@@ -186,10 +187,12 @@ export function useOutsourceQueueMove(): UseOutsourceQueueMoveReturn {
 
   /** 收发权限闸（`outsource.move` 权限点，2026-10-15 新增）—— 两个方向包装共用。
    *
-   *  ⚠️ 行为变更：改前本文件是**零闸门**（任何登录用户都能通过拖拽 / 右键触发，后端在
-   *  提交时返 403）；改后无权账号在包装入口即早退（warning + 零请求）。拖拽路径的落点
-   *  回滚不变 —— 节点归位由**源侧**的 onRemove（restoreNodeToSource）负责；早退仍走一次
-   *  失效对账，与 version / 公司守卫同款（见 reconcileAfterEarlyReturn）。 */
+   *  ⚠️ 行为变更：改前两个包装本身是**零闸门** —— 拖拽路径无任何权限拦截；右键路径虽由
+   *  看板菜单侧的角色版 `canMove`（MANAGER / CLERK / INSPECTOR）先闸「回收生产」，但闸在
+   *  菜单派生层、包装入口不设防，后端在提交时以 403 兜底。改后无权账号在包装入口即早退
+   *  （warning + 零请求）。拖拽路径的落点回滚不变 —— 节点归位由**源侧**的 onRemove
+   *  （restoreNodeToSource）负责；早退仍走一次失效对账，与 version / 公司守卫同款
+   *  （见 reconcileAfterEarlyReturn）。 */
   async function guardMovePermission(): Promise<boolean> {
     if (auth.hasPermission(OUTSOURCE_MOVE_PERMISSION)) return true;
     ElMessage.warning('没有外协收发的权限');
