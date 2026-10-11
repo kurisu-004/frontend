@@ -99,6 +99,7 @@ vi.mock('@/api/process', () => ({
 }));
 
 import { useInspectionListStore } from '../useInspectionListStore';
+import { useAuthStore } from '@/stores/auth';
 import { qk } from '@/composables/queries/keys';
 import { INSPECTION_SORT_KEY_TO_PROP } from '@/types/inspection';
 import type { InspectionQueueItem } from '@/api/inspection';
@@ -228,6 +229,38 @@ describe('useInspectionListStore', () => {
     // 批次 / 数量两列 prop 直出（key 与数据字段对上）。
     expect(defs[3]?.prop).toBe('batch_no');
     expect(defs[4]?.prop).toBe('quantity');
+  });
+
+  it('canTransition 由 batch.transition 权限点判定（2026-10-15 新增闸，ADMIN 通配）', () => {
+    // 回归 guard：列表操作列与扫码树两个消费方共用这一个 computed。判据写错（如退回
+    // 角色集 / 写死 true）会让无权限账号看到点了必然 403 的流转入口。
+    const store = useInspectionListStore();
+    const seedUser = (overrides: { roles?: string[]; permissions: string[] }): void => {
+      useAuthStore().user = {
+        id: 'u-inspection-store-test',
+        username: 'tester',
+        full_name: '测试账号',
+        is_active: true,
+        roles: overrides.roles ?? [],
+        shelf_ids: [],
+        menus: [],
+        permissions: overrides.permissions,
+      };
+    };
+
+    // 无 user（默认）→ false
+    expect(store.canTransition).toBe(false);
+
+    seedUser({ permissions: ['batch.transition'] });
+    expect(store.canTransition).toBe(true);
+
+    // 权限点被收回 → false（哪怕角色还在）
+    seedUser({ roles: ['MANAGER', 'INSPECTOR'], permissions: [] });
+    expect(store.canTransition).toBe(false);
+
+    // ADMIN 元角色通配：permissions 为空也放行
+    seedUser({ roles: ['ADMIN'], permissions: [] });
+    expect(store.canTransition).toBe(true);
   });
 
   // ============ buildParams 7 维映射 ============

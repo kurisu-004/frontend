@@ -24,6 +24,8 @@ import { ElMessage } from 'element-plus';
 import { CircleCheck, Select } from '@element-plus/icons-vue';
 import { repairDispatch } from '@/api/parts';
 import { listProcesses } from '@/api/process';
+import { useAuthStore } from '@/stores/auth';
+import { BATCH_REPAIR_PERMISSION } from '@/utils/productionPermissions';
 import type { RepairBatchListItem } from '@/api/parts';
 import type { Process } from '@/types/process';
 
@@ -38,6 +40,9 @@ const emit = defineEmits<{
   'update:modelValue': [v: boolean];
   confirm: [];
 }>();
+
+// 消费侧禁止解构 auth store（store proxy 已自动解包 ref）。
+const auth = useAuthStore();
 
 const actionTab = ref<'dispatch' | 'inspect'>('dispatch');
 const processId = ref<string>('');
@@ -72,6 +77,13 @@ async function reloadOptions(): Promise<void> {
 
 async function onSubmit(): Promise<void> {
   if (!props.target) return;
+  // 权限闸（`batch.repair`，2026-10-15 新增）：入口列在 RepairReceive 已按同一权限点
+  // 收掉，这里是第二道（扫码命中也会直接打开本弹窗，那条路径不过入口列）。无权限时
+  // 早退不发请求，也不发注定被后端 403 的 repair-dispatch。
+  if (!auth.hasPermission(BATCH_REPAIR_PERMISSION)) {
+    ElMessage.warning('没有返修下发的权限');
+    return;
+  }
   const isInspect = actionTab.value === 'inspect';
   const submitting = isInspect ? submittingInspect : submittingDispatch;
   submitting.value = true;

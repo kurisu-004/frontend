@@ -13,7 +13,7 @@
 //   - `version` 必填（OCC 乐观锁，无 `#[serde(default)]` ⇒ 缺省 40001），取卡片
 //     model 的 `t_part_batch.version`；
 //   - 出参 `RecallOut { batch_id, part_id, version }`，`version` 是召回后的新版本；
-//   - RBAC：MANAGER 或 CLERK（后端 require_any_role，其余 40300）；
+//   - RBAC：`queue.recall` 权限点（2026-10-15 起前端读权限点，与后端端点闸对齐，其余 40300）；
 //   - 副作用：status → PENDING，且 location / current_holder_id / current_process_id
 //     / current_process_step_id 四列一起清 NULL；
 //   - 允许的源状态：IN_PROCESS（货架在池 / 工人持有）或历史 PROGRAMMING。
@@ -29,6 +29,7 @@ import { useMutation, useQueryClient, type UseMutationReturnType } from '@tansta
 import { recallToPending } from '@/api/productionQueue';
 import type { RecallOutDto } from '@/api/productionQueue.contract';
 import { useAuthStore } from '@/stores/auth';
+import { QUEUE_RECALL_PERMISSION } from '@/utils/productionPermissions';
 import { qk } from '@/composables/queries/keys';
 import type { BatchCardModel } from '@/types/batchCard';
 import { recallOutSchema } from './productionQueueSchema';
@@ -44,8 +45,8 @@ export interface QueueRecallVars {
 }
 
 export interface UseQueueRecallReturn {
-  /** 是否有召回权限（MANAGER / CLERK，与后端 require_any_role 对齐）。
-   *  右键菜单在 open 之前用它闸掉无权角色 —— 后端对其它角色返 40300，
+  /** 是否有召回权限（`queue.recall` 权限点，与后端端点闸对齐）。
+   *  右键菜单在 open 之前用它闸掉无权账号 —— 后端对无该权限点的请求返 40300，
    *  前端不该让用户点完才知道。 */
   canRecall: ComputedRef<boolean>;
   /** 召回 mutation（mutation.isPending / mutate）。 */
@@ -60,9 +61,10 @@ export function useQueueRecall(): UseQueueRecallReturn {
   // 消费侧禁止解构 auth store（store proxy 已自动解包 ref）。
   const auth = useAuthStore();
 
-  /** 权限闸门 —— 与后端 `require_any_role([Manager, Clerk])` 逐字对齐：
-   *  少放一个角色 ⇒ 用户点了吃 40300；多放一个 ⇒ 用户点了才知道没权限。 */
-  const canRecall = computed<boolean>(() => auth.hasRole('MANAGER') || auth.hasRole('CLERK'));
+  /** 权限闸门（2026-10-15 由角色判定迁到权限点 `queue.recall`）—— 与后端端点闸对齐：
+   *  少放一个 ⇒ 用户点了吃 40300；多放一个 ⇒ 用户点了才知道没权限。迁移后「谁能召回」
+   *  由 RBAC 面板维护（可为自建角色单独授予 / 从 MANAGER 收回），前端读同一个码。 */
+  const canRecall = computed<boolean>(() => auth.hasPermission(QUEUE_RECALL_PERMISSION));
 
   /** 召回后集中失效，逐条理由：
    *   - 待下发列表：批次回到「待下发」池（列表 + 徽标 + 排序全变）；

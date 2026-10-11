@@ -13,9 +13,10 @@
 //   - B4：深链 `?tab=<process_id>` 生效；非法值（已删除 / 自产工序）在工序列表解析后校正到
 //     第一个 OUTSOURCE 工序。
 //   - B5：手动刷新失效**两个前缀**（快照 + 单工序看板），语义是「我把当前屏幕当成不可信」。
-//   - B6：右键菜单项按**区域 × 角色 × 批次状态 × 报价路径**逐格派生：候选池卡 = 召回 +
+//   - B6：右键菜单项按**区域 × 权限点 × 批次状态 × 报价路径**逐格派生：候选池卡 = 召回 +
 //     拆分批次 + 发送到外协公司二级菜单；公司列卡 = 回收生产 / 回收品检 + 拆分批次。
-//     Inspector 拿不到拆批；`can_send=false` 的候选行拿不到「发送到」。
+//     Inspector 拿不到拆批（2026-10-15 起改为：无 batch.split 权限点拿不到拆批）；
+//     `can_send=false` 的候选行拿不到「发送到」。
 //   - B7：拆批对话框挂在 el-tabs **之外**（骨架态下已挂载），且 `done` → 板级失效外协
 //     两域（失效编排在板级，不在共享对话框内）。
 //   - B8：provide 三件套（sendToCompany / openOutsourceBatchMenu / activeOutsourceProcessId）
@@ -67,7 +68,13 @@ const moveMock = vi.hoisted(() => ({
   send: vi.fn(async () => true),
   receiveToProduction: vi.fn(async () => true),
 }));
-const authMock = vi.hoisted(() => ({ roles: ['MANAGER', 'CLERK', 'INSPECTOR'] as string[] }));
+const authMock = vi.hoisted(() => ({
+  // roles 仅为 mock 形态完整保留（板级判定 2026-10-15 起全走 permissions）。
+  roles: ['MANAGER', 'CLERK', 'INSPECTOR'] as string[],
+  // 板级两个权限闸 canMove（`outsource.move`）/ canSplit（`batch.split`）都读这里；默认
+  // 放行，无权场景由 B6b / B6j 单独钉。
+  permissions: ['batch.split', 'outsource.move'] as string[],
+}));
 /** el-tabs 桩的「切到某个 tab」驱动器（真实 el-tabs 靠点 tab 头 emit update:modelValue）。 */
 const tabSwitch = vi.hoisted(() => ({ to: '' }));
 const invalidateSpy = vi.hoisted(() => vi.fn(async () => undefined));
@@ -100,15 +107,18 @@ vi.mock('@/views/outsource/composables/useOutsourceQueueProcessQuery', () => ({
 vi.mock('@/views/outsource/composables/useOutsourceQueueMove', () => ({
   useOutsourceQueueMove: () => ({
     error: ref(null),
-    // canMove 跟着 authMock 的角色走：后端 move 端点是
-    // require_any_role([Manager, Clerk, Inspector])，少放一个角色用户点了才吃 40300
-    canMove: computed(() => authMock.roles.length > 0),
+    // canMove 桩跟 authMock.permissions 走，与真实实现（`outsource.move` 权限点）同源；
+    // 真实映射由 useOutsourceQueueMove.spec 的 M14 守。
+    canMove: computed(() => authMock.permissions.includes('outsource.move')),
     sendToCompany: moveMock.send,
     receiveToProduction: moveMock.receiveToProduction,
   }),
 }));
 vi.mock('@/stores/auth', () => ({
-  useAuthStore: () => ({ hasRole: (r: string) => authMock.roles.includes(r) }),
+  useAuthStore: () => ({
+    hasRole: (r: string) => authMock.roles.includes(r),
+    hasPermission: (code: string) => authMock.permissions.includes(code),
+  }),
 }));
 /** QueryClient 的最小替身：`invalidateQueries` 记失效调用（串行化调用点），
  *  `setQueryData` / `getQueryData` 让用例能预置并读到「tab body 已经填好的缓存」（板级
@@ -391,6 +401,7 @@ beforeEach(() => {
     },
   ];
   authMock.roles = ['MANAGER', 'CLERK', 'INSPECTOR'];
+  authMock.permissions = ['batch.split', 'outsource.move'];
   recallableMock.current = true;
   menuOpenCalls.length = 0;
   qcStub.cache.clear();
@@ -477,15 +488,18 @@ describe('OutsourceBoard（外协看板壳）', () => {
     wrapper.unmount();
   });
 
-  it('B6a：公司列卡的菜单 = 回收生产 + 拆分批次（三角色都有权；2026-10-10 起无「回收品检」）', () => {
+  it('B6a：公司列卡的菜单 = 回收生产 + 拆分批次（持 outsource.move + batch.split 权限点；2026-10-10 起无「回收品检」）', () => {
     const wrapper = mountBoard();
     openHeld(wrapper);
     expect(menuLabels()).toEqual(['回收生产', '拆分批次']);
     wrapper.unmount();
   });
 
-  it('B6b：Inspector 拿得到回收、拿不到拆批（逐项过滤，不是「一次性闸」）', () => {
+  it('B6b：无 batch.split 权限点拿不到拆批（逐项过滤，不是「一次性闸」）', () => {
+    // 2026-10-15：拆批闸已由角色判定迁到权限点 —— 角色集不再决定拆批入口，权限点集合才决定。
     authMock.roles = ['INSPECTOR'];
+    // 保留 outsource.move ⇒「回收生产」仍在菜单里，断言落在「少的是拆批」上。
+    authMock.permissions = ['outsource.move'];
     const wrapper = mountBoard();
     openHeld(wrapper);
     expect(menuLabels()).toEqual(['回收生产']);
@@ -560,8 +574,9 @@ describe('OutsourceBoard（外协看板壳）', () => {
   });
 
   it('B6j：一个动作都没有时不弹菜单，改为一句 warning（右键已被 prevent 掉系统菜单）', () => {
-    // 一个角色都不给：既不能收发（canMove 假）、也不能拆批、也不能召回
+    // 一个权限都不给：既不能收发（canMove 假）、也不能拆批（权限点空）、也不能召回
     authMock.roles = [];
+    authMock.permissions = [];
     recallableMock.current = false;
     const wrapper = mountBoard();
     openHeld(wrapper);

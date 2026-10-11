@@ -83,6 +83,7 @@ vi.mock('@/api/process', () => ({
 
 import InspectionTable from '../components/InspectionTable.vue';
 import { useInspectionListStore } from '../composables/useInspectionListStore';
+import { useAuthStore } from '@/stores/auth';
 import type { InspectionQueueItem } from '@/api/inspection';
 
 // 后端 wire 形态：total / limit / offset 是 JSON string；item 恰 13 字段。
@@ -183,7 +184,8 @@ function tick(): Promise<void> {
   return new Promise((r) => setTimeout(r, 20));
 }
 
-async function mountTable() {
+async function mountTable(options: { canTransition?: boolean } = {}) {
+  const { canTransition = true } = options;
   // 自己持有 pinia 引用：测试侧要用同一个 pinia 拿到组件内部那个 store 实例
   //（组件 setup 里的 useInspectionListStore() 与测试里的调用必须命中同一实例）。
   const pinia = createPinia();
@@ -205,7 +207,26 @@ async function mountTable() {
     },
   });
   await flushPromises();
+  // 2026-10-15：种入批次流转权限点（真实 auth store）。mount 之后种是因为 pinia 这时
+  // 才被安装到 app 上（auth store setup 首行 useQueryClient 需要注入上下文）；种完
+  // flush 让操作列按新权限重渲染。无权限场景传 { canTransition: false }。
+  seedPermissions(canTransition ? ['batch.transition'] : []);
+  await flushPromises();
   return wrapper;
+}
+
+/** 直接给真实 auth store 的 user 种权限集（不走登录 / localStorage）。 */
+function seedPermissions(permissions: string[]): void {
+  useAuthStore().user = {
+    id: 'u-inspection-table-test',
+    username: 'tester',
+    full_name: '测试账号',
+    is_active: true,
+    roles: [],
+    shelf_ids: [],
+    menus: [],
+    permissions,
+  };
 }
 
 describe('InspectionTable', () => {
@@ -269,6 +290,14 @@ describe('InspectionTable', () => {
       '指定工序',
       '详情',
     ]);
+    wrapper.unmount();
+  });
+
+  it('无 batch.transition 权限点：操作列只留「详情」（2026-10-15 权限闸）', async () => {
+    // 回归 guard：两个流转按钮（品检通过 / 指定工序）按 `batch.transition` 权限点条件
+    // 渲染；无权限时收掉，不给「可见却 403」的入口。「详情」是纯读，不受闸门影响。
+    const wrapper = await mountTable({ canTransition: false });
+    expect(wrapper.findAll('.mock-ep-button').map((b) => b.text())).toEqual(['详情']);
     wrapper.unmount();
   });
 

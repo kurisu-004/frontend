@@ -10,7 +10,8 @@
 //      `batchesLoading` / `errorMsg`；
 //   2. 权限矩阵：`canEditPart` / `canCancelPart` / `canDeletePart` / `canInspect` /
 //      `canManageDrawings` / `canManage3DModels` / `canManageCncFiles` /
-//      `canManageSetupSheet` / `canManageBatches`（逐条对齐后端角色集，见下）；
+//      `canManageSetupSheet` / `canSplitBatch` / `canCancelBatch`（零件域自身按角色判定；
+//      `canInspect` 与两个批次动作 2026-10-15 起按权限点判定，见各条注释）；
 //   3. 行内编辑态：`editing` / `form` / `buildUpdatePayload()`；
 //   4. 装配件详情（`assemblyDetail`）+ 状态 / 事件标签 helpers。
 //
@@ -49,6 +50,12 @@ import { enrichAssemblyItem, getAssemblyForPart } from '@/api/assembly';
 import type { PartBatch, PartEvent, PartUpdatePayload } from '@/api/parts';
 import type { AssemblyDetail } from '@/types/assembly';
 import { usePermissions } from '@/composables/usePermissions';
+import { useAuthStore } from '@/stores/auth';
+import {
+  BATCH_CANCEL_PERMISSION,
+  BATCH_SPLIT_PERMISSION,
+  BATCH_TRANSITION_PERMISSION,
+} from '@/utils/productionPermissions';
 import { usePartBatchesQuery } from '@/composables/queries/usePartBatchesQuery';
 // fetchAssembly 走客户 enrich（PartAssemblyLinkCard 客户列展示所需），数据源是
 // useCustomersQuery 共享缓存（唯一 queryKey + 30s staleTime 去重窗口，多 subscriber
@@ -118,7 +125,10 @@ export interface UsePartDetailReturn {
   canManage3DModels: ComputedRef<boolean>;
   canManageCncFiles: ComputedRef<boolean>;
   canManageSetupSheet: ComputedRef<boolean>;
-  canManageBatches: ComputedRef<boolean>;
+  /** 拆批权限（`batch.split` 权限点，2026-10-15 由 canManageBatches 拆出）。 */
+  canSplitBatch: ComputedRef<boolean>;
+  /** 取消批次权限（`batch.cancel` 权限点，2026-10-15 由 canManageBatches 拆出）。 */
+  canCancelBatch: ComputedRef<boolean>;
 
   // ---------- 行内编辑 ----------
   editing: Ref<boolean>;
@@ -169,9 +179,11 @@ export function usePartDetail(
    */
   isActive: MaybeRefOrGetter<boolean> = true,
 ): UsePartDetailReturn {
-  const { isManager, isClerk, isInspector, isCncProgrammer: isCnc } = usePermissions();
+  const { isManager, isClerk, isCncProgrammer: isCnc } = usePermissions();
+  // 消费侧禁止解构 auth store（store proxy 已自动解包 ref）。
+  const auth = useAuthStore();
 
-  // ============ 权限矩阵（逐条对齐后端角色集，见每条的注释）============
+  // ============ 权限矩阵（零件域自身仍按角色；品检流转与批次动作已迁权限点）============
   /** 行内编辑 / 取消订单：`POST /parts/{id}/update`、`/parts/{id}/cancel`
    *  → 后端 `part/handler/crud.rs::CRUD_PART_ROLES = [Manager, Clerk]`、
    *  `part/handler/lifecycle.rs::cancel` 的 `[Manager, Clerk]`。 */
@@ -180,19 +192,17 @@ export function usePartDetail(
   /** 软删：`POST /parts/{id}/soft-delete` → 后端 `require_role(Role::Manager)`（单角色）。 */
   const canDeletePart = computed(() => isManager.value);
   /**
-   * 品检流转（通过 / 打回）：**`[Manager, Inspector]`**。
+   * 品检流转（通过 / 打回，含 `to-ship` / `to-process` / `to-inspection`）：
    *
-   * ⚠️ 2026-10-10 修：此前写成 `isManager || isClerk || isInspector`，多给了 CLERK ——
-   * 而后端 `prod/batch/handler/transition.rs::TO_XXX_ROLES = &[Role::Manager,
-   * Role::Inspector]`，`require_any_role` 在进 service 之前就拒 ⇒ **文员看得到两个品检
-   * 按钮，点下去必然 403**。
+   * ⚠️ 2026-10-15 **由角色判定（MANAGER / INSPECTOR）迁到权限点 `batch.transition`**
+   * （RBAC 面板第二批）。迁移理由与 `partsPermissions.ts` 同款：角色与「能不能做这件事」
+   * 不再一一对应 —— 管理员可以给自建角色单独授予 / 从 MANAGER 收回流转；继续按角色判会
+   * 与后端实际放行集合分叉。ADMIN 元角色在 `hasPermission` 里有通配短路。
    *
-   * ⚠️ **角色集必须与后端 `TO_XXX_ROLES` 逐字对齐**：这条同时覆盖
-   * `POST /prod/batches/{id}/to-ship`、`/to-process`、`/to-inspection` 与对应批量端点
-   * （同一个常量）。后端加 / 减角色时这里必须同步改，否则就是「看得到点不动」或
-   * 「能点但没人看得到」两种现场症状之一。
+   * ⚠️ 部署顺序：后端必须先上（旧 `/iam/me` 不返该权限点 ⇒ 非 ADMIN 账号两个品检按钮
+   * 全员消失，且无报错）。
    */
-  const canInspect = computed(() => isManager.value || isInspector.value);
+  const canInspect = computed(() => auth.hasPermission(BATCH_TRANSITION_PERMISSION));
   /** 图纸 / 3D 模型 / CAD 2D：`POST /part-files`（kind = DRAWING / 3D_MODEL / CAD_2D）
    *  → 后端 `part_file` 域 `[Manager, Clerk, CncProgrammer]`，软删按 kind 派生
    *  `[Manager, Clerk]`。前端取 `[Manager, Clerk]` 是**更严**的一档（宁可不显示按钮，
@@ -207,11 +217,12 @@ export function usePartDetail(
    *  `[Manager, Clerk]`（`handler.rs` 的按-kind 派生表），后端两档不一致；前端按上传
    * 那一档（更严）判，不会给 Clerk 一个后端其实允许、但现场口径也说不清的入口。 */
   const canManageSetupSheet = computed(() => isManager.value || isCnc.value);
-  /** 批次管理（拆批 / 取消批次）：`POST /batches/split` 与
-   *  `POST /prod/batches/{id}/cancel` → 后端
-   *  `prod/batch/service/batch_ops.rs` 两处 `require_any_role([Manager, Clerk])`，
-   *  逐字对齐。 */
-  const canManageBatches = computed(() => isManager.value || isClerk.value);
+  /** 拆批（`POST /batches/split`）—— 2026-10-15 由「批次管理」角色判定拆出并迁到
+   *  `batch.split` 权限点。与「取消批次」分列：后端是两个独立端点、两组独立 RBAC 声明，
+   *  将来任一放宽只动一处。 */
+  const canSplitBatch = computed(() => auth.hasPermission(BATCH_SPLIT_PERMISSION));
+  /** 取消批次（`POST /prod/batches/{id}/cancel`）—— 迁到 `batch.cancel` 权限点。 */
+  const canCancelBatch = computed(() => auth.hasPermission(BATCH_CANCEL_PERMISSION));
 
   // ============ 主数据（三条 query hook，本文件只做投影）============
   const detailQuery = usePartDetailQuery(partId, isActive);
@@ -413,7 +424,8 @@ export function usePartDetail(
     canManage3DModels,
     canManageCncFiles,
     canManageSetupSheet,
-    canManageBatches,
+    canSplitBatch,
+    canCancelBatch,
     // 行内编辑
     editing,
     form,

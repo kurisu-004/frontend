@@ -4,6 +4,9 @@
 //   - 提供 2 个方向包装（sendToCompany / receiveToProduction），全部收口同一个
 //     `moveMutation`，视图层（Sortable 落点 / 卡片右键菜单）只消费这两个函数、
 //     不直接 import 本文件；
+//   - 权限（2026-10-15 新增）：两个包装入口按 `outsource.move` 权限点早退（warning +
+//     零请求，fail-closed）；改前本文件是零闸门、全由后端 403 兜底（右键入口当时的角色闸
+//     在看板菜单侧，不在包装内）。
 //   - 收发合一的理由：`t_part_batch` 的 `location` / `current_holder_id` / `version`
 //     三列在三个方向上是同一组列，拆成三个端点只会把同一份事务边界写三遍；
 //   - 每个包装的入参都带 `version`（OCC 锚，取自卡片 model，经卡片
@@ -53,6 +56,7 @@ import { useMutation, useQueryClient } from '@tanstack/vue-query';
 import { moveOutsourceBatch } from '@/api/outsource';
 import type { OutsourceMoveRequestDto, OutsourceMoveResultDto } from '@/api/outsource.contract';
 import { useAuthStore } from '@/stores/auth';
+import { OUTSOURCE_MOVE_PERMISSION } from '@/utils/outsourcePermissions';
 import type {
   OutsourceQueueCandidateData,
   OutsourceQueueHeldBatchData,
@@ -100,9 +104,9 @@ export interface ReceiveToProductionInput {
 export interface UseOutsourceQueueMoveReturn {
   /** 最近一次写操作错误信息（视图层 el-alert 展示）。成功时置 null。 */
   error: Ref<string | null>;
-  /** 是否有收发权限 —— 与后端 `require_any_role([Manager, Clerk, Inspector])` 逐字
-   *  对齐：少放一个角色 ⇒ 用户点了吃 40300；多放一个 ⇒ 用户点了才知道没权限。
-   *  菜单 / 投放容器在 open 之前用它闸掉无权角色。 */
+  /** 是否有收发权限（`outsource.move` 权限点，2026-10-15 由角色判定迁来）。
+   *  菜单 / 投放容器在 open 之前用它闸掉无权账号 —— 后端对无权限请求返 40300，
+   *  前端不该让用户点完才知道。 */
   canMove: ComputedRef<boolean>;
   /** 候选卡 → 外协公司（发送）。APPROVAL 走 `quote_id`，DIRECT 走 `direct = true`。 */
   sendToCompany: (input: SendToCompanyInput) => Promise<boolean>;
@@ -117,9 +121,7 @@ export function useOutsourceQueueMove(): UseOutsourceQueueMoveReturn {
   const auth = useAuthStore();
   const error = ref<string | null>(null);
 
-  const canMove = computed<boolean>(
-    () => auth.hasRole('MANAGER') || auth.hasRole('CLERK') || auth.hasRole('INSPECTOR'),
-  );
+  const canMove = computed<boolean>(() => auth.hasPermission(OUTSOURCE_MOVE_PERMISSION));
 
   /** 写操作完成后集中失效「单工序看板 + 快照」两个域（全是前缀失效，理由见文件头）。
    *  返回 Promise 让 mutation 回调 await 完整失效链再弹 toast，避免两个域的 refetch
@@ -183,6 +185,21 @@ export function useOutsourceQueueMove(): UseOutsourceQueueMoveReturn {
     },
   });
 
+  /** 收发权限闸（`outsource.move` 权限点，2026-10-15 新增）—— 两个方向包装共用。
+   *
+   *  ⚠️ 行为变更：改前两个包装本身是**零闸门** —— 拖拽路径无任何权限拦截；右键路径虽由
+   *  看板菜单侧的角色版 `canMove`（MANAGER / CLERK / INSPECTOR）先闸「回收生产」，但闸在
+   *  菜单派生层、包装入口不设防，后端在提交时以 403 兜底。改后无权账号在包装入口即早退
+   *  （warning + 零请求）。拖拽路径的落点回滚不变 —— 节点归位由**源侧**的 onRemove
+   *  （restoreNodeToSource）负责；早退仍走一次失效对账，与 version / 公司守卫同款
+   *  （见 reconcileAfterEarlyReturn）。 */
+  async function guardMovePermission(): Promise<boolean> {
+    if (auth.hasPermission(OUTSOURCE_MOVE_PERMISSION)) return true;
+    ElMessage.warning('没有外协收发的权限');
+    await reconcileAfterEarlyReturn();
+    return false;
+  }
+
   /** version 守卫（三个包装共用）。
    *
    *  `POST /outsource-queue/move` 的 `version` 是必填的 OCC 锚（后端 serde 无
@@ -214,6 +231,7 @@ export function useOutsourceQueueMove(): UseOutsourceQueueMoveReturn {
    *  / `isCandidateDraggable`）—— 那条是给用户看的可执行性提示，不是请求组装约束。 */
   async function sendToCompany(input: SendToCompanyInput): Promise<boolean> {
     const { candidate, companyId } = input;
+    if (!(await guardMovePermission())) return false;
     if (!(await guardVersion(candidate.version))) return false;
     if (!companyId) {
       ElMessage.warning('请先选择外协公司');
@@ -259,6 +277,7 @@ export function useOutsourceQueueMove(): UseOutsourceQueueMoveReturn {
    *  用户补选工序。 */
   async function receiveToProduction(input: ReceiveToProductionInput): Promise<boolean> {
     const { companyId, batch } = input;
+    if (!(await guardMovePermission())) return false;
     if (!(await guardVersion(batch.version))) return false;
     const nextProcessId =
       input.nextProcessId ||

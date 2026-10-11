@@ -25,6 +25,7 @@
 //   - P6 同步改写：onAdd 收到的 item 缺 data-batch-id（或 item 本身缺失）→ 不 mutate。
 //   - P7 / P8：2026-10-02 拖入高亮跨组件联动在本卡片侧的契约锚点 —— 根 div 的
 //     data-process-id（源侧 onMove 靠它识别悬停目标）与 dropping prop → .is-dropping。
+//   - P14（2026-10-15）：canDispatch=false 时点击 / 拖入都不 mutate（fail-closed 权限闸）。
 //   - P9：2026-10-02 投放确认守卫 —— onAdd 只认「原生 drop 且落点在本卡内」，
 //     dragend（Esc 取消 / 非 Sortable 区域松手）与 target 在本卡外都不得 mutate。
 //   - P5b / P10 / P10b：2026-10-02 两条补充语义 —— 落点是卡内**后代元素**也算命中
@@ -162,6 +163,9 @@ function mountCard(
       count,
       selectedIds,
       dispatchMutation: makeMutationStub(mutate),
+      // 2026-10-15：canDispatch（queue.dispatch 权限点，板级派生后透传）为必传 prop。
+      // fail-closed 缺省 false ⇒ 存量用例显式给 true 保持原语义；无权场景由 P14 钉。
+      canDispatch: true,
       ...extraProps,
     },
     global: globalConfig,
@@ -526,11 +530,41 @@ describe('PendingPoolCard（2026-09-30 懒加载 + bulk-only 收敛）', () => {
   });
 
   it('P8：dropping prop 驱动 .is-dropping 高亮（false 时不带该类）', async () => {
-    const wrapper = mountCard(ref<Set<string>>(new Set<string>()), 7, vi.fn(), { dropping: true });
+    const wrapper = mountCard(ref<Set<string>>(new Set()), 7, vi.fn(), { dropping: true });
     await flushPromises();
     expect(wrapper.find('.pool-card').classes()).toContain('is-dropping');
     await wrapper.setProps({ dropping: false });
     expect(wrapper.find('.pool-card').classes()).not.toContain('is-dropping');
+    wrapper.unmount();
+  });
+
+  it('P14：canDispatch=false（无 queue.dispatch 权限点）→ 点击 / 拖入都不 mutate', async () => {
+    // 2026-10-15 新增闸（fail-closed）：板级把权限点派生成 canDispatch 透传，本卡是它在
+    // 点击 / 拖入两条路径上的最后一道。点击在「空选」检查之前就早退（提示无权限而不是
+    // 请选择批次）；拖入在同步守卫链末尾、确认框之前早退（不能弹框让用户为一个不会发生
+    // 的下发做决策）。
+    const { ElMessage, ElMessageBox } = await import('element-plus');
+    const mutate = vi.fn();
+    const wrapper = mountCard(ref<Set<string>>(new Set(['3000000000001'])), 7, mutate, {
+      canDispatch: false,
+    });
+    await flushPromises();
+
+    // ① 点击路径：不发请求、提示无权限（而非「请先选择待下发批次」）
+    await wrapper.find('.pool-card').trigger('click');
+    expect(mutate).not.toHaveBeenCalled();
+    expect(ElMessage.warning).toHaveBeenCalledWith('没有下发批次的权限');
+
+    // ② 拖入路径：三道投放守卫全过（真实 drop + 落点卡内 + 来源待下发池），但权限闸
+    // 在确认框之前早退 —— 不弹框、不 mutate
+    vi.mocked(ElMessageBox.confirm).mockClear();
+    await capturedOnAdd()({
+      item: { dataset: { batchId: '3000000000009' } },
+      from: poolSource(),
+      originalEvent: insideDrop(wrapper.find('.pool-card').element),
+    });
+    expect(ElMessageBox.confirm).not.toHaveBeenCalled();
+    expect(mutate).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 });

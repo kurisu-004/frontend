@@ -73,9 +73,13 @@ interface Props {
    *  透传。Sortable 只从源的 options.onMove 派发，投放目标自身收不到 onMove ⇒
    *  本组件不持有该状态，只按 prop 渲染 .is-dropping。 */
   dropping?: boolean;
+  /** 是否持有下发权限点（`queue.dispatch`，2026-10-15 新增闸，由板级 QueueBoard 派生后
+   *  逐层透传）。**fail-closed：缺省 false** —— 漏传时宁可不发请求（提示无权限），也不
+   *  放行一次注定被后端 403 拒的下发。点击 / 拖入两条路径都在第一个 await 之前早退。 */
+  canDispatch?: boolean;
 }
 
-const props = withDefaults(defineProps<Props>(), { dropping: false });
+const props = withDefaults(defineProps<Props>(), { dropping: false, canDispatch: false });
 
 /** 左侧 4px 竖条色 = 工序色。工序色是 el-color-picker color-format="hex8"
  *  产出的 `#RRGGBBAA`（9 字符），CSS border-left-color 直接吃，不做任何字符串加工；
@@ -104,9 +108,15 @@ useDraggable(dropRef, {
 });
 
 /** 单击工序卡 → 对已选 batchIds 下发到该工序。
- *  selectedIds 空 → ElMessage.warning 兜底；非空 → dispatchMutation.mutate。
+ *  权限（`queue.dispatch`）与空选两道闸都**不发请求**：前者是 fail-closed 的第二道
+ *  （菜单入口已由 canDispatch 收掉，但工序卡本身是首屏常驻的拖拽目标，必须自己守），
+ *  后者是操作前置条件。selectedIds 非空 → dispatchMutation.mutate。
  *  单件下发 = `batchIds.length === 1`（后端 dispatch 已是 bulk-only 形态）。 */
 function onClick() {
+  if (!props.canDispatch) {
+    ElMessage.warning('没有下发批次的权限');
+    return;
+  }
   const ids = Array.from(props.selectedIds.value);
   if (ids.length === 0) {
     ElMessage.warning('请先选择待下发批次');
@@ -162,9 +172,11 @@ type AddEvent = DraggableEvent & { originalEvent?: Event };
  *  高亮的清理由源侧 onEnd 负责（end 只派发给源，跨容器 drop 时本目标的 onEnd 永不
  *  触发，故此处不能也不该复位 dropping）。
  *
- *  三道守卫与 item / batchId 提取全部**同步**跑在第一个 await
- *  之前 —— 它们是「这次根本不算投放」的静默短路，不该被一个弹窗拦在中间（用户按了 Esc
- *  却还要再点一次「取消」才能消掉弹窗）。守卫全过才弹确认框，取消即不发请求。
+ *  三道守卫、item / batchId 提取与权限闸（`canDispatch`）全部**同步**跑在第一个 await
+ *  之前 —— 它们是「这次根本不算投放 / 不能投放」的短路，不该被一个弹窗拦在中间（用户
+ *  按了 Esc 却还要再点一次「取消」才能消掉弹窗）。守卫全过才弹确认框，取消即不发请求。
+ *  权限闸刻意排在三道守卫**之后**：拖起来又取消（dragend / Esc）不进权限分支、不吃提示，
+ *  只在一次真实投放的落点确认后才检查权限。
  *
  *  async 化不引入 DOM 回滚义务：拖拽源走三参重载（传了 list），库内建 onRemove 的
  *  第一句 `from.insertBefore(item, from.children[oldIndex])` 在同一个 _onDrop 里、
@@ -192,6 +204,12 @@ async function onDrop(evt: DraggableEvent) {
   if (!item) return;
   const batchId = item.dataset.batchId;
   if (!batchId) return;
+  // 权限闸（2026-10-15）：与上面三道守卫同属**同步守卫链**，只在这里、不前置到函数
+  // 开头 —— 前置会让「拖起来又按 Esc 取消」也吃一句无权限提示。守卫全过才轮到它。
+  if (!props.canDispatch) {
+    ElMessage.warning('没有下发批次的权限');
+    return;
+  }
   const confirmed = await confirmDangerous(
     '确认下发',
     `确认将批次下发到工序「${props.process.code} ${props.process.name}」？`,

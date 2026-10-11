@@ -104,6 +104,7 @@ vi.mock('@/api/process', () => ({
 
 import InspectionPending from '../InspectionPending.vue';
 import { useInspectionListStore } from '../composables/useInspectionListStore';
+import { useAuthStore } from '@/stores/auth';
 
 // ---------------------------------------------------------------- 数据
 /** 扫到独立件的一棵树（一个零件 + 两个批次，含一个 INSPECTION 批次可操作）。 */
@@ -205,6 +206,20 @@ async function mountPage() {
     },
   });
   // onMounted 里的 restoreState / nextTick / tableRef.sort 跑完再交回测试。
+  await flushPromises();
+  // 2026-10-15：种入批次流转权限点（真实 auth store；mount 后 pinia 才装到 app 上）。
+  // 本壳的表格与扫码树都被桩掉，操作列按钮不在此层断言 —— 种子只为让壳内 store 的
+  // 权限态与生产路径同值，避免「扫码 → 弹窗」两段接线在无权限态下被静默改写。
+  useAuthStore().user = {
+    id: 'u-inspection-pending-test',
+    username: 'tester',
+    full_name: '测试账号',
+    is_active: true,
+    roles: [],
+    shelf_ids: [],
+    menus: [],
+    permissions: ['batch.transition'],
+  };
   await flushPromises();
   return { wrapper, store: useInspectionListStore() };
 }
