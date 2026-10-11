@@ -124,7 +124,7 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
   /** 品检 / 送检流转的权限闸（`batch.transition`，2026-10-15 新增）。
    *
    *  覆盖三个写端点：品检通过（`to-ship`）/ 指定工序（`to-process`）/ 送检
-   *  （`to-inspection`）—— 后端同一组 `TO_XXX_ROLES` 闸门。改前按角色
+   *  （`to-inspection`）—— 后端同组 `batch.transition` 权限点。改前按角色
    *  （MANAGER / INSPECTOR）判定，改后由 RBAC 面板维护「谁能流转」（可授予自建角色）。
    *
    *  消费方两处，共用这一个来源：列表操作列（`buildInspectionColumnDefs` 的
