@@ -15,7 +15,8 @@
 //   - B5：手动刷新失效**两个前缀**（快照 + 单工序看板），语义是「我把当前屏幕当成不可信」。
 //   - B6：右键菜单项按**区域 × 角色 × 批次状态 × 报价路径**逐格派生：候选池卡 = 召回 +
 //     拆分批次 + 发送到外协公司二级菜单；公司列卡 = 回收生产 / 回收品检 + 拆分批次。
-//     Inspector 拿不到拆批；`can_send=false` 的候选行拿不到「发送到」。
+//     Inspector 拿不到拆批（2026-10-15 起改为：无 batch.split 权限点拿不到拆批）；
+//     `can_send=false` 的候选行拿不到「发送到」。
 //   - B7：拆批对话框挂在 el-tabs **之外**（骨架态下已挂载），且 `done` → 板级失效外协
 //     两域（失效编排在板级，不在共享对话框内）。
 //   - B8：provide 三件套（sendToCompany / openOutsourceBatchMenu / activeOutsourceProcessId）
@@ -67,7 +68,12 @@ const moveMock = vi.hoisted(() => ({
   send: vi.fn(async () => true),
   receiveToProduction: vi.fn(async () => true),
 }));
-const authMock = vi.hoisted(() => ({ roles: ['MANAGER', 'CLERK', 'INSPECTOR'] as string[] }));
+const authMock = vi.hoisted(() => ({
+  roles: ['MANAGER', 'CLERK', 'INSPECTOR'] as string[],
+  // 2026-10-15：拆批闸由角色判定迁到 `batch.split` 权限点，auth mock 需同步给
+  // hasPermission 供板级 canSplit 读；默认放行，无权场景由 B6b / B6j 单独钉。
+  permissions: ['batch.split'] as string[],
+}));
 /** el-tabs 桩的「切到某个 tab」驱动器（真实 el-tabs 靠点 tab 头 emit update:modelValue）。 */
 const tabSwitch = vi.hoisted(() => ({ to: '' }));
 const invalidateSpy = vi.hoisted(() => vi.fn(async () => undefined));
@@ -108,7 +114,10 @@ vi.mock('@/views/outsource/composables/useOutsourceQueueMove', () => ({
   }),
 }));
 vi.mock('@/stores/auth', () => ({
-  useAuthStore: () => ({ hasRole: (r: string) => authMock.roles.includes(r) }),
+  useAuthStore: () => ({
+    hasRole: (r: string) => authMock.roles.includes(r),
+    hasPermission: (code: string) => authMock.permissions.includes(code),
+  }),
 }));
 /** QueryClient 的最小替身：`invalidateQueries` 记失效调用（串行化调用点），
  *  `setQueryData` / `getQueryData` 让用例能预置并读到「tab body 已经填好的缓存」（板级
@@ -391,6 +400,7 @@ beforeEach(() => {
     },
   ];
   authMock.roles = ['MANAGER', 'CLERK', 'INSPECTOR'];
+  authMock.permissions = ['batch.split'];
   recallableMock.current = true;
   menuOpenCalls.length = 0;
   qcStub.cache.clear();
@@ -484,8 +494,10 @@ describe('OutsourceBoard（外协看板壳）', () => {
     wrapper.unmount();
   });
 
-  it('B6b：Inspector 拿得到回收、拿不到拆批（逐项过滤，不是「一次性闸」）', () => {
+  it('B6b：无 batch.split 权限点拿不到拆批（逐项过滤，不是「一次性闸」）', () => {
+    // 2026-10-15：拆批闸已由角色判定迁到权限点 —— 角色集不再决定拆批入口，权限点集合才决定。
     authMock.roles = ['INSPECTOR'];
+    authMock.permissions = [];
     const wrapper = mountBoard();
     openHeld(wrapper);
     expect(menuLabels()).toEqual(['回收生产']);
@@ -560,8 +572,9 @@ describe('OutsourceBoard（外协看板壳）', () => {
   });
 
   it('B6j：一个动作都没有时不弹菜单，改为一句 warning（右键已被 prevent 掉系统菜单）', () => {
-    // 一个角色都不给：既不能收发（canMove 假）、也不能拆批、也不能召回
+    // 一个权限都不给：既不能收发（canMove 假）、也不能拆批（权限点空）、也不能召回
     authMock.roles = [];
+    authMock.permissions = [];
     recallableMock.current = false;
     const wrapper = mountBoard();
     openHeld(wrapper);

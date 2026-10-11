@@ -23,6 +23,10 @@ import { useCustomerTree } from '@/composables/useCustomerTree';
 import { useColumnVisibility } from '@/composables/useColumnVisibility';
 import { useListStatePersist } from '@/composables/useListFilterPersist';
 import { roleMapFromHasRole, type RoleLike } from '@/utils/outsourceQuotePermissions';
+import {
+  OUTSOURCE_QUOTE_APPROVE_PERMISSION,
+  OUTSOURCE_QUOTE_EDIT_PERMISSION,
+} from '@/utils/outsourcePermissions';
 import { buildOutsourceQuoteColumnDefs } from '../outsourceQuoteColumnDefs';
 import type { OutsourceQuoteStatus } from '@/types/outsource';
 import type { OutsourceQuoteSchema } from './outsourceListSchema';
@@ -267,18 +271,20 @@ export const useOutsourceQuoteListStore = defineStore('outsource-quote-list', ()
   }
 
   /** 操作列自适应宽度：按当前 items 中按钮数最多的行算（每按钮约 76px + 12px padding，
-   *  最小 160px 防空列表抖动）。 */
+   *  最小 160px 防空列表抖动）。
+   *
+   *  2026-10-15：按钮数改按**权限点**计（与 `OutsourceQuoteTable` 的实际渲染判据同源：
+   *  提交 = `canEdit` = outsource.quote.edit + DRAFT；通过 / 拒绝 = outsource.quote.approve
+   *  + SUBMITTED；删除 = outsource.quote.edit + DRAFT/REJECTED）。角色不再参与写权限，
+   *  否则自建角色会出现「列宽按角色算、按钮按权限画」的错位。 */
   const actionColumnWidth = computed(() => {
+    const canEditQuote = auth.hasPermission(OUTSOURCE_QUOTE_EDIT_PERMISSION);
+    const canApproveQuote = auth.hasPermission(OUTSOURCE_QUOTE_APPROVE_PERMISSION);
     const maxBtns = items.value.reduce((max, q) => {
       let n = 0;
-      // 权限判定在 store 侧做（roleMap 已就位），避免视图侧再算一遍。
-      if ((roleMap.value.MANAGER || roleMap.value.CLERK) && q.status === 'DRAFT') n++; // 提交
-      if (roleMap.value.MANAGER && q.status === 'SUBMITTED') n += 2; // 通过 + 拒绝
-      if (
-        (roleMap.value.MANAGER || roleMap.value.CLERK) &&
-        (q.status === 'DRAFT' || q.status === 'REJECTED')
-      )
-        n++; // 删除
+      if (canEditQuote && q.status === 'DRAFT') n++; // 提交
+      if (canApproveQuote && q.status === 'SUBMITTED') n += 2; // 通过 + 拒绝
+      if (canEditQuote && (q.status === 'DRAFT' || q.status === 'REJECTED')) n++; // 删除
       return Math.max(max, n);
     }, 0);
     return Math.max(160, maxBtns * 76 + 12);
