@@ -19,6 +19,7 @@
       </el-checkbox>
       <span class="selected-hint">已选 {{ selectedIdsValue.size }} 件</span>
       <el-button
+        v-if="canDispatch"
         type="primary"
         size="small"
         :loading="autoDispatchMutation.isPending.value"
@@ -66,6 +67,7 @@
 
 <script setup lang="ts">
 import { computed, inject, ref, watch } from 'vue';
+import { ElMessage } from 'element-plus';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
 import type { BatchMenuOpener } from '@/composables/useBatchContextMenu';
 import type { QueuePendingBatchDto } from '@/api/productionQueue.contract';
@@ -82,6 +84,10 @@ interface Props {
   selectedIds: UseQueueDispatchReturn['selectedIds'];
   setSelectedIds: (ids: string[]) => void;
   autoDispatchMutation: UseQueueDispatchReturn['autoDispatchMutation'];
+  /** 是否持有下发权限点（`queue.dispatch`，由板级 QueueBoard 派生后透传）。false 时
+   *  「自动下发」按钮整只收掉（v-if），onAutoDispatch 另有一道早退兜底（按钮显隐与处理
+   *  函数各守一次，防 v-if 哪天被改成 disabled / 挪位）。 */
+  canDispatch: boolean;
 }
 
 const props = defineProps<Props>();
@@ -187,6 +193,11 @@ function onCardContextMenu(evt: MouseEvent, card: BatchCardModel): void {
 }
 
 function onAutoDispatch() {
+  // 第二道闸（第一道是按钮 v-if）：无权限时早退，不发请求。
+  if (!props.canDispatch) {
+    ElMessage.warning('没有下发批次的权限');
+    return;
+  }
   const ids = Array.from(selectedIdsValue.value);
   if (ids.length === 0) return;
   props.autoDispatchMutation.mutate({ batchIds: ids });

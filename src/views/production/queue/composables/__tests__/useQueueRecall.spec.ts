@@ -5,7 +5,8 @@
 // 后端契约：`POST /api/v2/prod/queue/recall`，入参 `{ batch_id, version, note? }`，
 // 其中 **`batch_id` 是 body 字段且必须发 JSON 字符串**（后端 `deserialize_i64` 只接受
 // 字符串，发数字返 40001 —— 这是 2026-10-08 契约变更里最容易踩的一处）；
-// `version` 必填（无 `#[serde(default)]`，缺省 40001）。RBAC：MANAGER 或 CLERK。
+// `version` 必填（无 `#[serde(default)]`，缺省 40001）。RBAC：`queue.recall` 权限点
+// （2026-10-15 起前端读权限点；改前按 MANAGER/CLERK 角色集判）。
 //
 // 覆盖：
 //   - R1：recallBatch 以**单参数对象** `{ batch_id, version }` 调 recallToPending；
@@ -25,8 +26,8 @@
 //   - vi.mock('element-plus')：ElMessage 桩成 no-op（node env 下真实 ElMessage 会因
 //     `document is not defined` 污染输出），ElMessageBox.confirm 桩成可控 resolve /
 //     reject（reject = 用户点「取消」）；
-//   - vi.mock('@/stores/auth')：只桩 useQueueRecall 消费的那一面（hasRole），避免把
-//     整个 auth store 拉进本 spec；
+//   - vi.mock('@/stores/auth')：只桩 useQueueRecall 消费的那一面（hasPermission），避免
+//     把整个 auth store 拉进本 spec；
 //   - app.use(VueQueryPlugin) + 传 QueryClient，并 vi.spyOn(qc, 'invalidateQueries')
 //     验证失效链的 queryKey 序列。
 
@@ -58,11 +59,15 @@ vi.mock('@/api/productionQueue', () => ({
   refillQueue: vi.fn(),
 }));
 
-/** 角色桩：默认 MANAGER + CLERK 都有权；用例内可改。 */
+/** 角色桩：默认 MANAGER + CLERK 都有权；用例内可改。
+ *  2026-10-15：canRecall 已由角色判定迁到 `queue.recall` 权限点判定，本 spec 改读
+ *  `permissions`；hasRole 保留 mock 形态完整（composable 不再消费它）。 */
 const roles = vi.hoisted(() => ({ list: ['MANAGER', 'CLERK'] as string[] }));
+const permissions = vi.hoisted(() => ({ list: ['queue.recall'] as string[] }));
 vi.mock('@/stores/auth', () => ({
   useAuthStore: () => ({
     hasRole: (r: string) => roles.list.includes(r),
+    hasPermission: (code: string) => permissions.list.includes(code),
   }),
 }));
 
@@ -124,6 +129,7 @@ describe('useQueueRecall（已下发批次召回）', () => {
     // 默认 = 用户点确认
     vi.mocked(ElMessageBox.confirm).mockResolvedValue(undefined as never);
     roles.list = ['MANAGER', 'CLERK'];
+    permissions.list = ['queue.recall'];
 
     testQueryClient = new QueryClient({
       defaultOptions: { mutations: { retry: 0 }, queries: { retry: 0 } },
@@ -161,18 +167,22 @@ describe('useQueueRecall（已下发批次召回）', () => {
     ).rejects.toThrow();
   });
 
-  it('R1b：canRecall 与后端 MANAGER/CLERK 对齐', () => {
+  it('R1b：canRecall 由 `queue.recall` 权限点判定（2026-10-15 由角色集迁来）', () => {
     const r = testApp.runWithContext(() => useQueueRecall());
     expect(r.canRecall.value).toBe(true);
 
-    roles.list = ['CLERK'];
-    expect(testApp.runWithContext(() => useQueueRecall()).canRecall.value).toBe(true);
-
-    roles.list = ['MANAGER'];
-    expect(testApp.runWithContext(() => useQueueRecall()).canRecall.value).toBe(true);
-
-    roles.list = ['INSPECTOR'];
+    // 权限点被收回（角色还在）→ false —— 迁移后「谁能召回」只由权限点决定
+    permissions.list = [];
     expect(testApp.runWithContext(() => useQueueRecall()).canRecall.value).toBe(false);
+
+    // 别的权限点不管用
+    permissions.list = ['queue.dispatch'];
+    expect(testApp.runWithContext(() => useQueueRecall()).canRecall.value).toBe(false);
+
+    // 角色集不再参与判定：给一个无角色但持有权限点的账号 → true
+    roles.list = [];
+    permissions.list = ['queue.recall'];
+    expect(testApp.runWithContext(() => useQueueRecall()).canRecall.value).toBe(true);
   });
 
   it('R2：用户取消确认弹窗 → 不发请求', async () => {
@@ -215,9 +225,9 @@ describe('useQueueRecall（已下发批次召回）', () => {
     expect(realRecallToPending).not.toHaveBeenCalled();
   });
 
-  it('R4：既非 MANAGER 也非 CLERK → 早退不发请求', async () => {
+  it('R4：无 `queue.recall` 权限点 → 早退不发请求', async () => {
     const { ElMessage, ElMessageBox } = await import('element-plus');
-    roles.list = ['INSPECTOR'];
+    permissions.list = [];
     const r = testApp.runWithContext(() => useQueueRecall());
 
     await r.recallBatch(makeCard());

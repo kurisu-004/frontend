@@ -87,6 +87,7 @@
                 :selected-ids="queueDispatch.selectedIds"
                 :set-selected-ids="queueDispatch.setSelectedIds"
                 :auto-dispatch-mutation="queueDispatch.autoDispatchMutation"
+                :can-dispatch="canDispatch"
                 @hover-process="hoveredProcessId = $event"
               />
             </el-splitter-panel>
@@ -95,6 +96,7 @@
                 :processes="panelProcesses"
                 :selected-ids="queueDispatch.selectedIds"
                 :dispatch-mutation="queueDispatch.dispatchMutation"
+                :can-dispatch="canDispatch"
                 :hovered-process-id="hoveredProcessId"
               />
             </el-splitter-panel>
@@ -134,6 +136,11 @@ import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useQueryClient } from '@tanstack/vue-query';
 import { useAuthStore } from '@/stores/auth';
+import {
+  BATCH_SPLIT_PERMISSION,
+  QUEUE_ALLOCATE_PERMISSION,
+  QUEUE_DISPATCH_PERMISSION,
+} from '@/utils/productionPermissions';
 import { useQueueMove } from './composables/useQueueMove';
 import { useQueueDispatch, invalidateQueuePendingAll } from './composables/useQueueDispatch';
 import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
@@ -225,22 +232,27 @@ const queueDispatch = useQueueDispatch();
 const recall = useQueueRecall();
 const { error, moveBatchToWorker, moveBatchToPool, moveBatchBetweenWorkers } = queueMove;
 
-/** 拆批权限闸 —— 与后端 `POST /batches/split` 的 `require_any_role([Manager, Clerk])`
- *  逐字对齐（Inspector 能收发但**不能**拆批）。
+/** 拆批权限闸（2026-10-15 由角色判定迁到权限点 `batch.split`）—— RBAC 面板给自建
+ *  角色单独授予 / 收回拆批后，前端读同一个码才不会与后端放行集合分叉。
  *
- *  当前与 `recall.canRecall` 恰好是同一组角色，但它们是**两个端点各自独立的 RBAC 声明**
- *  （`POST /prod/queue/recall` 与 `POST /batches/split`），将来任一端点放宽都会只动一处，
- *  故不复用同一个布尔。 */
-const canSplit = computed<boolean>(() => auth.hasRole('MANAGER') || auth.hasRole('CLERK'));
+ *  当前与 `recall.canRecall`（`queue.recall`）恰好默认同组角色，但它们是**两个端点各自
+ *  独立的 RBAC 声明**（`POST /prod/queue/recall` 与 `POST /batches/split`），将来任一
+ *  权限点放宽都会只动一处，故不复用同一个布尔。 */
+const canSplit = computed<boolean>(() => auth.hasPermission(BATCH_SPLIT_PERMISSION));
 
-/** 下发权限闸（2026-10-14 新增，RBAC 面板）—— 按**权限点**判，与上面两条按角色判的闸
- *  是不同来源：`queue.dispatch` 是 RBAC 面板里可授予任意角色的权限点（含自建角色），
- *  `canRecall` / `canSplit` 仍是后端写死的角色白名单。
+/** 下发权限闸（2026-10-14 新增，RBAC 面板）—— 按**权限点**判，与上面按角色判的闸
+ *  是不同来源：`queue.dispatch` 是 RBAC 面板里可授予任意角色的权限点（含自建角色）。
  *
  *  ⚠️ 这是**行为变更**：改之前本页对「发送到工序」是零闸门（任何登录用户右键都能看到
  *  入口，后端在提交时返 403）。现在未持有该权限点的账号看不到这一项。
  *  ADMIN 元角色在 `hasPermission` 里有通配短路，所以管理员账号不受影响。 */
-const canDispatch = computed<boolean>(() => auth.hasPermission('queue.dispatch'));
+const canDispatch = computed<boolean>(() => auth.hasPermission(QUEUE_DISPATCH_PERMISSION));
+
+/** 移动 / 分配权限闸（2026-10-15 新增）—— 只用于「空菜单是不是权限造成的」这句判定的
+ *  第五个闸（`byPermission`）。三个 move 包装内部还有各自的第一道闸（见 useQueueMove），
+ *  本处不 gate 菜单项（「派给工人 / 转交给工人」的入口显隐仍由目标集是否为空决定，
+ *  拖拽路径没有可隐藏的入口）。 */
+const canAllocate = computed<boolean>(() => auth.hasPermission(QUEUE_ALLOCATE_PERMISSION));
 
 // activeTab 默认 = __pending__（首屏即待下发 tab，符合任务规约「待下发 Tab 在最前」）；
 // URL ?tab=XXX 可覆盖（深链到具体工序），覆盖优先级 > 默认。放在右键菜单那一段之前：
@@ -394,10 +406,16 @@ provide<BatchMenuOpener>('openBatchContextMenu', (evt, batch, area) => {
     },
   });
   if (items.length === 0) {
-    // 本页的三个权限闸是 canRecall / canSplit / canDispatch（派活 / 转交 / 下发各一条），
-    // 三个都 false 才能断定「空」是权限造成的。漏算 canDispatch 的症状是：只被授了
-    // 「下发」权限点（或反之）的账号看到「当前角色没有可执行的操作」，而实际上他有。
-    const byPermission = !recall.canRecall.value && !canSplit.value && !canDispatch.value;
+    // 本页的权限闸共四个：canRecall / canSplit / canDispatch / canAllocate（移动类动作
+    // 的闸在 useQueueMove 包装内，不在菜单派生层，但「空是不是权限造成的」必须把它一起
+    // 算上 —— 只被授了移动权限的账号看到「当前角色没有可执行的操作」是误报）。
+    // 漏算 canDispatch / canAllocate 的症状是：只被授了对应权限的账号被告知「没有可执行
+    // 的操作」，而实际上他有。
+    const byPermission =
+      !recall.canRecall.value &&
+      !canSplit.value &&
+      !canDispatch.value &&
+      !canAllocate.value;
     ElMessage.warning(
       byPermission ? '当前角色对该批次没有可执行的操作' : '该批次当前没有可执行的操作',
     );

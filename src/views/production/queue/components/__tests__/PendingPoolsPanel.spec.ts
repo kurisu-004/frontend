@@ -26,6 +26,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, ref, type Ref } from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 import PendingPoolsPanel from '../PendingPoolsPanel.vue';
+import PendingPoolCard from '../PendingPoolCard.vue';
 import type { ProcessCategory } from '@/types/process';
 import type { UseQueueDispatchReturn } from '../../composables/useQueueDispatch';
 
@@ -101,6 +102,7 @@ function mountPanel(
   processes: PanelProcess[] = PROCESSES,
   hoveredProcessId: string | null = null,
   mutate = vi.fn(),
+  canDispatch = true,
 ) {
   return mount(PendingPoolsPanel, {
     props: {
@@ -111,6 +113,8 @@ function mountPanel(
         mutateAsync: vi.fn(async () => undefined),
       } as unknown as UseQueueDispatchReturn['dispatchMutation'],
       hoveredProcessId,
+      // 2026-10-15：canDispatch 由板级派生后透传给每张 PendingPoolCard；透传回归由 V9 守。
+      canDispatch,
     },
     global: globalConfig,
   });
@@ -241,6 +245,23 @@ describe('PendingPoolsPanel（拖入高亮透传口 + 按 category 分组）', (
     const after = wrapper.findAll('.pool-card');
     expect(after[0].classes()).toContain('is-dropping');
     expect(after[2].classes()).not.toContain('is-dropping');
+    wrapper.unmount();
+  });
+
+  it('V9：canDispatch 透传给每张 PendingPoolCard（2026-10-15 权限闸接线）', async () => {
+    // 回归 guard：板级 → 面板 → 卡片这条属性链断掉时，卡片走 fail-closed 缺省 false ⇒
+    // 有权限的账号也会在点击 / 拖入时吃「没有下发批次的权限」。两组卡片都要覆盖（两个
+    // v-for 各接一次 :can-dispatch）。
+    const wrapper = mountPanel(PROCESSES, null, vi.fn(), false);
+    await flushPromises();
+    const cards = wrapper.findAllComponents(PendingPoolCard);
+    expect(cards).toHaveLength(2);
+    for (const card of cards) expect(card.props('canDispatch')).toBe(false);
+
+    await wrapper.setProps({ canDispatch: true });
+    for (const card of wrapper.findAllComponents(PendingPoolCard)) {
+      expect(card.props('canDispatch')).toBe(true);
+    }
     wrapper.unmount();
   });
 });

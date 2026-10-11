@@ -16,6 +16,7 @@
 //   - H4b：onStart → emit hover-process(null)（防御性复位：拖拽开始即清零，覆盖 onEnd
 //     尚未触发的窗口；不是某条具体残留场景的回归守卫）。
 //   - H5：渲染 batch 列表（BatchCard）+ 全选 / 自动下发工具条基本接线。
+//   - H5d：canDispatch=false → 「自动下发」按钮收掉（2026-10-15 权限闸）。
 //   - H6：卡片右键 → 注入的 opener 被调一次，第三参区域标签为 'pending'。
 //
 // 测试策略：
@@ -175,6 +176,8 @@ function mountPanel(
     selected?: string[];
     setSelectedIds?: (ids: string[]) => void;
     autoDispatchMutate?: ReturnType<typeof vi.fn>;
+    /** 2026-10-15：下发权限点（板级派生后透传），默认 true 保持存量用例原语义。 */
+    canDispatch?: boolean;
     /** 覆盖 provide（本容器只消费 `openBatchContextMenu`，缺省 noop 是板级契约的兜底）。 */
     provided?: Record<string, unknown>;
   } = {},
@@ -190,6 +193,7 @@ function mountPanel(
         mutate: extra.autoDispatchMutate ?? vi.fn(),
         isPending: ref(false),
       } as unknown as UseQueueDispatchReturn['autoDispatchMutation'],
+      canDispatch: extra.canDispatch ?? true,
     },
     global: { ...globalConfig, provide: extra.provided ?? {} },
   });
@@ -339,6 +343,19 @@ describe('PendingBatchesPanel（2026-10-02 拖入高亮事件源）', () => {
     await selected.find('.el-button-stub').trigger('click');
     expect(autoDispatchMutate).toHaveBeenCalledWith({ batchIds: ['3000000000009'] });
     selected.unmount();
+  });
+
+  it('H5d：canDispatch=false → 「自动下发」按钮整只收掉（2026-10-15 权限闸）', async () => {
+    // 与 H5b 同场景（有选中），只差权限点：按钮 v-if 收掉，用户看不到一个点下去必然
+    // 提示无权限的入口。onAutoDispatch 内的早退是第二道兜底（防 v-if 被改成 disabled）。
+    const wrapper = mountPanel([makeDto()], {
+      autoDispatchMutate: vi.fn(),
+      selected: ['3000000000009'],
+      canDispatch: false,
+    });
+    await flushPromises();
+    expect(wrapper.find('.el-button-stub').exists()).toBe(false);
+    wrapper.unmount();
   });
 
   it('H5c：batches 为空 → 渲染空态（且不挂 Sortable 列表容器）', async () => {

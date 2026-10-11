@@ -160,9 +160,11 @@ vi.mock('@/stores/auth', () => ({
     token: ref<string | null>(null),
     hasRole: (r: string) => roles.current.includes(r),
     // 2026-10-14（RBAC 控制面板）：「发送到工序」入口改判 `queue.dispatch` 权限点。
-    // 默认放行（与既有 `roles.current = ['MANAGER','CLERK']` 的全权设定对齐），
-    // 无权场景由 T7e 单独钉。
-    hasPermission: (code: string) => permissions.current.includes(code),
+    // 2026-10-15：拆批 / 移动闸也迁到权限点，且 `canDispatch` / `canSplit` /
+    // `canAllocate` 三条 computed 现在**在模板渲染时被求值**（:can-dispatch 透传给两个
+    // 子面板）—— 用 plain 对象承载权限集会因「无响应式依赖」缓存住首次值，用例内改集合
+    // 不再反映。故权限集改用真 ref（与 `recallable` 同款理由），computed 才能跟着失效。
+    hasPermission: (code: string) => permissions.current.value.includes(code),
     hasMenuCode: () => false,
     canOperateShelf: () => false,
     getAuthHeader: () => ({}),
@@ -326,12 +328,17 @@ const PROC_INHOUSE = '2000000000001';
  *  依赖 —— 只算一次就锁死快照，「用例改了开关就该立刻反映到 items」恒假。 */
 const recallable: { current: Ref<boolean> } = { current: ref(false) };
 
-/** 拆批权限（auth mock 的 hasRole 读它）。默认给 MANAGER+CLERK 全权，与 canRecall
- *  同组角色（两个端点各自的 RBAC 声明相同，但板级保留两个独立闸）。 */
+/** 角色集合（auth mock 的 hasRole 读它）。2026-10-15 起板级三个权限闸（拆批 / 下发 /
+ *  移动）都改判权限点，hasRole 仅保留 mock 形态完整；`roles` 仍由本 spec 的存量用例
+ *  改值（它们同时改 permissions，行为不变）。 */
 const roles: { current: string[] } = { current: ['MANAGER', 'CLERK'] };
 
-/** 2026-10-14：下发放行权限点集合（auth mock 的 hasPermission 读它）。 */
-const permissions: { current: string[] } = { current: ['queue.dispatch'] };
+/** 2026-10-15：拆批闸改按权限点判定（auth mock 的 hasPermission 读它）。
+ *  默认给全权集合（batch.split + queue.dispatch），与 canRecall 的 open 状态对齐 ——
+ *  无权场景由 T6 与新增的无 batch.split 用例分别钉。
+ *  ⚠️ 必须用真 ref：`canDispatch` / `canSplit` / `canAllocate` 三条 computed 在模板
+ *  渲染时被求值，plain 对象不是响应式依赖 ⇒ 用例内改集合不会让 computed 失效。 */
+const permissions = { current: ref<string[]>(['batch.split', 'queue.dispatch']) };
 
 // 公共环境未处理 rejection（vue-query 异步 + 子组件 mount）。
 process.on('unhandledRejection', () => undefined);
@@ -352,7 +359,7 @@ describe('QueueBoard（生产队列看板接线 guard）', () => {
     activeShelfIdRef.value = undefined;
     recallable.current.value = false;
     roles.current = ['MANAGER', 'CLERK'];
-    permissions.current = ['queue.dispatch'];
+    permissions.current.value = ['batch.split', 'queue.dispatch'];
     menuOpenCalls.length = 0;
     recallBatchMock.mockClear();
     dispatchMutateMock.mockClear();
@@ -541,7 +548,7 @@ describe('QueueBoard（生产队列看板接线 guard）', () => {
     // （`canDispatch` 是第三个闸，板级判「是不是权限问题」时必须把它算进去）。
     recallable.current.value = false;
     roles.current = [];
-    permissions.current = [];
+    permissions.current.value = [];
     vi.mocked(ElMessage.warning).mockClear();
     open(evt, card, 'pool');
     expect(menuOpenCalls).toHaveLength(0);
@@ -751,7 +758,9 @@ describe('QueueBoard（生产队列看板接线 guard）', () => {
     // 派生层的守卫形同虚设（闸门写了但永远是 true）。
     activeShelfIdRef.value = '5000000000001';
     roles.current = ['MANAGER', 'CLERK']; // 全权角色
-    permissions.current = []; // 但没有下发放行权限点
+    // 但没有下发放行权限点（保留 batch.split，让菜单非空、断言落在「少的是哪一项」上，
+    // 否则空菜单会走 warning 分支而看不到 items）。
+    permissions.current.value = ['batch.split'];
     const wrapper = mount(QueueBoard, {
       global: { plugins: [[VueQueryPlugin, { queryClient: testQueryClient }]] },
     });
@@ -759,11 +768,33 @@ describe('QueueBoard（生产队列看板接线 guard）', () => {
     const provides = (wrapper.vm.$ as unknown as { provides: Record<string, unknown> }).provides;
     const open = provides.openBatchContextMenu as (e: MouseEvent, b: unknown, a: string) => void;
     // 工序列表 mock 成空 ⇒ 二级菜单本来就不出现；这条断言守的是「连父项都不给」，
-    // 也就是 canDispatch=false 这条新闸确实生效了（拆批仍要给）。
+    // 也就是 canDispatch=false 这条闸确实生效了（拆批仍在）。
     open(new MouseEvent('contextmenu'), { batch_id: 'X', version: 1, quantity: 3 }, 'pending');
     const items = menuOpenCalls[menuOpenCalls.length - 1]![1] as { label: string }[];
     expect(items.map((i) => i.label)).toEqual(['拆分批次']);
     expect(items.map((i) => i.label)).not.toContain('发送到工序');
+    wrapper.unmount();
+  });
+
+  it('T7f：无 batch.split 权限点 ⇒ 工序池右键**不出现**「拆分批次」（2026-10-15 拆批闸迁权限点）', async () => {
+    // 与 T7e 同款：拆批闸由角色判定迁到 `batch.split` 权限点后，板级必须把
+    // `auth.hasPermission(BATCH_SPLIT_PERMISSION)` 的结果喂给派生层。用工序池区域 +
+    // 召回放行维持一条非空菜单（待下发区在本 spec 的工序列表为空时只有拆分一项，
+    // 拆掉就无从断言「菜单里少的是哪一项」）。
+    activeShelfIdRef.value = '5000000000001';
+    roles.current = ['MANAGER', 'CLERK']; // 角色全权，但权限点没给
+    permissions.current.value = ['queue.dispatch'];
+    recallable.current.value = true;
+    const wrapper = mount(QueueBoard, {
+      global: { plugins: [[VueQueryPlugin, { queryClient: testQueryClient }]] },
+    });
+    await flushPromises();
+    const provides = (wrapper.vm.$ as unknown as { provides: Record<string, unknown> }).provides;
+    const open = provides.openBatchContextMenu as (e: MouseEvent, b: unknown, a: string) => void;
+    open(new MouseEvent('contextmenu'), { batch_id: 'X', version: 1, quantity: 3 }, 'pool');
+    const items = menuOpenCalls[menuOpenCalls.length - 1]![1] as { label: string }[];
+    expect(items.map((i) => i.label)).toEqual(['召回到待下发']);
+    expect(items.map((i) => i.label)).not.toContain('拆分批次');
     wrapper.unmount();
   });
 

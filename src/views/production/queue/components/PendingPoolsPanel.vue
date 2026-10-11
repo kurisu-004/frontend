@@ -27,6 +27,7 @@
         :count="p.count"
         :selected-ids="selectedIds"
         :dispatch-mutation="dispatchMutation"
+        :can-dispatch="canDispatch"
         :dropping="p.id === hoveredProcessId"
       />
     </div>
@@ -39,6 +40,7 @@
         :count="p.count"
         :selected-ids="selectedIds"
         :dispatch-mutation="dispatchMutation"
+        :can-dispatch="canDispatch"
         :dropping="p.id === hoveredProcessId"
       />
     </div>
@@ -67,6 +69,10 @@ const props = defineProps<{
   selectedIds: UseQueueDispatchReturn['selectedIds'];
   /** 下发 mutation 透传给 PendingPoolCard。 */
   dispatchMutation: UseQueueDispatchReturn['dispatchMutation'];
+  /** 是否持有下发权限点（`queue.dispatch`）—— 由板级 `QueueBoard` 派生后透传，本面板与
+   *  PendingPoolCard 都不自行读 auth store（单域单一判定点）。false 时卡片的分发动作
+   *  在点击 / 拖入时早退（fail-closed：缺省 false）。 */
+  canDispatch: boolean;
   /** 当前被拖拽悬停的工序 id（父级 QueueBoard 持有，源面板
    *  PendingBatchesPanel 的 onMove 上报）。命中该 id 的工序卡渲染 .is-dropping 高亮，
    *  null = 无悬停目标、全部不亮。 */

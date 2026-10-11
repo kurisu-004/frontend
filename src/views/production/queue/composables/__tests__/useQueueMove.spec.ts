@@ -35,7 +35,7 @@
 //   - T13：导出面含 moveBatchBetweenWorkers（WorkerColumn 靠 inject key 消费它）。
 //
 // 测试策略：
-//   - vi.mock('@/api/productionQueue') + vi.mock('element-plus')；
+//   - vi.mock('@/api/productionQueue') + vi.mock('element-plus') + vi.mock('@/stores/auth')；
 //   - vi.spyOn(qc, 'invalidateQueries') 验证 mutation 回调的失效链。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -122,11 +122,22 @@ vi.mock('element-plus', () => ({
   },
 }));
 
+/** 2026-10-15：三个 move 包装 + runAutoAllocate 入口新增 `queue.allocate` 权限闸，
+ *  本 spec 需补 auth mock（此前本文件零 auth 依赖）。默认全权放行，无权场景由 T17 钉。
+ *  用 vi.hoisted：vi.mock 工厂被提升到模块顶部求值，闭包引用模块体变量会命中 TDZ。 */
+const permissions = vi.hoisted(() => ({ list: ['queue.allocate'] as string[] }));
+vi.mock('@/stores/auth', () => ({
+  useAuthStore: () => ({
+    hasPermission: (code: string) => permissions.list.includes(code),
+  }),
+}));
+
 let testApp: ReturnType<typeof createApp>;
 let testQueryClient: QueryClient;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  permissions.list = ['queue.allocate'];
   testQueryClient = new QueryClient({
     defaultOptions: { mutations: { retry: 0 }, queries: { retry: 0 } },
   });
@@ -418,5 +429,31 @@ describe('useQueueMove — queue 域的移动 / 自动分配写操作', () => {
     expect(realMoveBatch).not.toHaveBeenCalled();
     expect(ElMessage.warning).toHaveBeenCalledWith('批次版本信息缺失，无法移动');
     expect(ElMessage.warning).not.toHaveBeenCalledWith('批次货架信息缺失，无法分配');
+  });
+
+  it('T17：无 queue.allocate 权限点 → 三个包装 + runAutoAllocate 全部早退（零请求）', async () => {
+    // 2026-10-15 新增的行为变更：本文件改前是**零闸门**（任何登录用户能拖 / 能点，后端
+    // 在提交时返 403）；迁到权限点后无权账号在入口即早退，不再发注定被拒的请求。
+    // 早退同样走一次失效对账（与 version / 货架早退同款，见 reconcileAfterEarlyReturn）。
+    const { useQueueMove } = await import('../useQueueMove');
+    const { ElMessage } = await import('element-plus');
+    permissions.list = []; // 角色全权缺失的账号在真实链路里由 hasPermission 返回 false
+    const q = testApp.runWithContext(() => useQueueMove());
+
+    expect(await q.moveBatchToWorker('3', CARD_VERSION, 'w2', 's1')).toBe(false);
+    expect(await q.moveBatchToPool('3', CARD_VERSION, 'w1')).toBe(false);
+    expect(await q.moveBatchBetweenWorkers('3', CARD_VERSION, 'w1', 'w2')).toBe(false);
+    await q.runAutoAllocate({
+      process_id: '2000000000001',
+      shelf_id: '5000000000001',
+      mode: 'COUNT',
+      fill_ratio: 0.5,
+    });
+
+    expect(realMoveBatch).not.toHaveBeenCalled();
+    expect(realAutoAllocate).not.toHaveBeenCalled();
+    expect(ElMessage.warning).toHaveBeenCalledWith('没有移动批次的权限');
+    // 早退同样失效对账（卡片已被 Sortable 搬到落点列，服务器侧没有任何变化）
+    expectQueueDomainInvalidated();
   });
 });
