@@ -200,8 +200,8 @@ const emit = defineEmits<{
 const store = useInspectionListStore();
 
 /** 流转权限闸（`batch.transition`，store 内按权限点派生）—— 品检通过 / 指定工序 /
- *  送检三按钮共用。写端点（to-ship / to-process / to-inspection）后端同一组角色闸，
- *  前端跟着读同一个权限点，才不会出现「可见却 403」。 */
+ *  送检三按钮共用。写端点（to-ship / to-process / to-inspection）后端同一组**权限点闸**，
+ *  前端跟着读同一个码，才不会出现「可见却 403」。 */
 const canTransition = computed<boolean>(() => store.canTransition);
 
 // 2026-10-06：弹窗从 fullscreen 改为定宽（用户要求「不要全屏显示」）。

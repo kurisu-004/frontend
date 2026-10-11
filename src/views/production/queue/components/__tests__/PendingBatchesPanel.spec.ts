@@ -17,6 +17,8 @@
 //     尚未触发的窗口；不是某条具体残留场景的回归守卫）。
 //   - H5：渲染 batch 列表（BatchCard）+ 全选 / 自动下发工具条基本接线。
 //   - H5d：canDispatch=false → 「自动下发」按钮收掉（2026-10-15 权限闸）。
+//   - H5e：canDispatch=false → 直调 onAutoDispatch 早退（零请求 + warning；按钮 v-if
+//     之外的第二道闸，2026-10-15 权限闸）。
 //   - H6：卡片右键 → 注入的 opener 被调一次，第三参区域标签为 'pending'。
 //
 // 测试策略：
@@ -37,6 +39,17 @@ import type { UseQueueDispatchReturn } from '../../composables/useQueueDispatch'
 const captured = vi.hoisted(() => ({
   calls: [] as { list: unknown; options: Record<string, unknown> }[],
 }));
+
+/** H5e 断言 warning 文案用（CLAUDE.md：真实 ElMessage 会碰 document / 内部
+ *  normalizeAppendTo，桩成 no-op 记断言）。 */
+const elMessage = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
+  warning: vi.fn(),
+  info: vi.fn(),
+}));
+
+vi.mock('element-plus', () => ({ ElMessage: elMessage }));
 
 vi.mock('vue-draggable-plus', () => ({
   // 必须自己复刻 vue-draggable-plus 的重载判定，否则二参重载的 options 会被误当 list。
@@ -208,6 +221,7 @@ function capturedOptions(): Record<string, unknown> {
 describe('PendingBatchesPanel（2026-10-02 拖入高亮事件源）', () => {
   beforeEach(() => {
     captured.calls.length = 0;
+    elMessage.warning.mockClear();
   });
 
   it('H1：Sortable 配置挂在源容器上，且带 list（本面板是可拖源，工序卡侧是纯目标）', async () => {
@@ -355,6 +369,24 @@ describe('PendingBatchesPanel（2026-10-02 拖入高亮事件源）', () => {
     });
     await flushPromises();
     expect(wrapper.find('.el-button-stub').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('H5e：canDispatch=false → 直调 onAutoDispatch 早退（零请求 + warning）', async () => {
+    // H5d 只钉「按钮消失」（第一道闸）；这里仿 ProcessWorkTypeMappingTab.spec P10 的直调
+    // 形态，绕过 DOM 直接调写函数钉第二道闸 —— 零请求 + 无权限文案。少了这条，把
+    // onAutoDispatch 首行的早退删掉、只留 v-if 不会有任何测试信号。
+    const autoDispatchMutate = vi.fn();
+    const wrapper = mountPanel([makeDto()], {
+      autoDispatchMutate,
+      selected: ['3000000000009'],
+      canDispatch: false,
+    });
+    await flushPromises();
+    const vm = wrapper.vm as unknown as { onAutoDispatch: () => void };
+    vm.onAutoDispatch();
+    expect(autoDispatchMutate).not.toHaveBeenCalled();
+    expect(elMessage.warning).toHaveBeenCalledWith('没有下发批次的权限');
     wrapper.unmount();
   });
 

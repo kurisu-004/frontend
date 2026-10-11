@@ -249,7 +249,7 @@ const canSplit = computed<boolean>(() => auth.hasPermission(BATCH_SPLIT_PERMISSI
 const canDispatch = computed<boolean>(() => auth.hasPermission(QUEUE_DISPATCH_PERMISSION));
 
 /** 移动 / 分配权限闸（2026-10-15 新增）—— 只用于「空菜单是不是权限造成的」这句判定的
- *  第五个闸（`byPermission`）。三个 move 包装内部还有各自的第一道闸（见 useQueueMove），
+ *  第四个闸（`byPermission`）。三个 move 包装内部还有各自的第一道闸（见 useQueueMove），
  *  本处不 gate 菜单项（「派给工人 / 转交给工人」的入口显隐仍由目标集是否为空决定，
  *  拖拽路径没有可隐藏的入口）。 */
 const canAllocate = computed<boolean>(() => auth.hasPermission(QUEUE_ALLOCATE_PERMISSION));

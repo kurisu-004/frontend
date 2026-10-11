@@ -1,7 +1,7 @@
 // 2026-10-09 新建：外协两区（可发送候选池 / 外协公司列）的右键菜单项**派生**。
 //
 // 与生产队列侧同款分层：菜单本体在 `@/composables/useBatchContextMenu.ts`，本文件只
-// 产出 `MenuItem[]`。派生矩阵是「区域 × 角色 × 批次状态 × 报价路径」四维，抽成纯函数
+// 产出 `MenuItem[]`。派生矩阵是「区域 × 权限点 × 批次状态 × 报价路径」四维，抽成纯函数
 // 后逐格单测（见 __tests__/outsourceBatchMenuItems.spec.ts）。
 //
 // 区域枚举来自共享的 `BatchArea`；板的 provide/inject 契约另在 outsourceBoardTypes.ts。
@@ -25,11 +25,11 @@ export interface OutsourceBatchMenuInput {
   area: OutsourceBatchArea;
   /** 被右键的那张卡（只读 `quantity` / `batch_id` / `version`）。 */
   batch: BatchCardModel;
-  /** 收发权限（MANAGER + CLERK + INSPECTOR）。只闸「回收生产」。 */
+  /** 收发权限（`outsource.move` 权限点，2026-10-15 由角色判定迁来）。只闸「回收生产」。 */
   canMove: boolean;
-  /** 拆批权限（MANAGER + CLERK）。Inspector 能收发但**不能**拆批。 */
+  /** 拆批权限（`batch.split` 权限点，2026-10-15 由角色判定迁来）。 */
   canSplit: boolean;
-  /** 召回到待下发权限（MANAGER + CLERK）。只闸候选池区。 */
+  /** 召回到待下发权限（`queue.recall` 权限点，2026-10-15 由角色判定迁来）。只闸候选池区。 */
   canRecall: boolean;
   /** area='outsource-candidate'：候选行 DTO —— 发送白名单的五条锚（`send_mode` /
    *  `quote_id` / `outsource_company_id` / `company_options` / `can_send`）都在它上面。 */

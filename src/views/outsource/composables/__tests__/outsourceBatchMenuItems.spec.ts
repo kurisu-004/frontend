@@ -2,7 +2,7 @@
 //
 // 2026-10-09 新增：外协两区右键菜单项**派生矩阵**的逐格 spec。
 //
-// 与生产队列侧同款分层：派生是纯函数（四维：区域 × 角色 × 批次状态 × 报价路径），不碰
+// 与生产队列侧同款分层：派生是纯函数（四维：区域 × 权限点 × 批次状态 × 报价路径），不碰
 // api / store / DOM，所以矩阵可以整张铺开逐格断言。板级 spec 只守接线。
 //
 // 覆盖：
@@ -10,7 +10,7 @@
 //     没有「回收品检」—— `kind='INSPECTION_SHELF'` 变体后端已删除（见
 //     api/outsource.contract.ts 的 OutsourceMoveLocationDto）。
 //   - O2：候选池 = 召回 + 拆分批次 + 发送到外协公司（二级菜单）；
-//   - O3：角色闸逐项生效（Inspector 拿得到回收、拿不到拆批 / 召回）；
+//   - O3：权限闸逐项生效（能收发但无拆批权 → 公司列只剩回收；无召回权 → 候选池少召回）；
 //   - O4：批次闸 —— 余量 ≤ 1 不给拆批；PENDING 未上架的行既不给召回、也不给「发送到」
 //     （后者的 from 守卫与拖拽置灰同源）；
 //   - O5：发送白名单 —— APPROVAL 只给报价锁定的一家；DIRECT 给 company_options 里的；
@@ -163,7 +163,7 @@ describe('buildOutsourceBatchMenuItems（外协两区的菜单项派生）', () 
     expect(labels(items)).toEqual(['召回到待下发', '拆分批次', '发送到外协公司']);
   });
 
-  it('O3a：Inspector 拿得到回收、拿不到拆批（逐项过滤，不是「一次性闸」）', () => {
+  it('O3a：无拆批权 → 公司列只剩回收生产（逐项过滤，不是「一次性闸」）', () => {
     const items = buildOutsourceBatchMenuItems(input({ canSplit: false }));
     expect(labels(items)).toEqual(['回收生产']);
   });

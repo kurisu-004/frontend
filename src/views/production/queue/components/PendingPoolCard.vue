@@ -73,9 +73,9 @@ interface Props {
    *  透传。Sortable 只从源的 options.onMove 派发，投放目标自身收不到 onMove ⇒
    *  本组件不持有该状态，只按 prop 渲染 .is-dropping。 */
   dropping?: boolean;
-  /** 是否持有下发权限点（`queue.dispatch`，由板级 QueueBoard 派生后逐层透传）。
-   *  **fail-closed：缺省 false** —— 漏传时宁可不发请求（提示无权限），也不放行一次
-   *  注定被后端 403 拒的下发。点击 / 拖入两条路径都在第一个 await 之前早退。 */
+  /** 是否持有下发权限点（`queue.dispatch`，2026-10-15 新增闸，由板级 QueueBoard 派生后
+   *  逐层透传）。**fail-closed：缺省 false** —— 漏传时宁可不发请求（提示无权限），也不
+   *  放行一次注定被后端 403 拒的下发。点击 / 拖入两条路径都在第一个 await 之前早退。 */
   canDispatch?: boolean;
 }
 

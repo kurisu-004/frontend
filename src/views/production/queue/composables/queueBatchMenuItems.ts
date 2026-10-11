@@ -1,7 +1,7 @@
 // 2026-10-09 新建：生产队列三区（待下发池 / 工序候选池 / 工人列）的右键菜单项**派生**。
 //
-// 为什么是纯函数而不是板级 computed：菜单项的矩阵是「区域 × 角色 × 批次状态 × 目标集」
-// 四维派生，其中只有「角色」与「目标集」依赖运行时数据，区域与批次状态都是常量判据。
+// 为什么是纯函数而不是板级 computed：菜单项的矩阵是「区域 × 权限点 × 批次状态 × 目标集」
+// 四维派生，其中只有「权限点」与「目标集」依赖运行时数据，区域与批次状态都是常量判据。
 // 抽成纯函数后这四维可以逐格单测（见 __tests__/queueBatchMenuItems.spec.ts），板级只
 // 负责把 composable 的写操作包装、query 数据塞进来。
 //
@@ -33,10 +33,12 @@ export interface QueueBatchMenuInput {
   area: QueueBatchArea;
   /** 被右键的那张卡（只读 `quantity` / `batch_id` / `version` / `shelf_id`）。 */
   batch: BatchCardModel;
-  /** 召回权限（MANAGER + CLERK）。待下发池不消费它（见下方「不给召回」的注释）。 */
+  /** 召回权限（`queue.recall` 权限点，2026-10-15 由角色判定迁来）。待下发池不消费它
+   *  （见下方「不给召回」的注释）。 */
   canRecall: boolean;
-  /** 拆批权限（MANAGER + CLERK）。**只管角色**，批次自身的可拆性（余量 > 1）由派生
-   *  函数叠加 —— 两道闸的来源不同，混在一个布尔里就看不出是权限问题还是批次问题。 */
+  /** 拆批权限（`batch.split` 权限点，2026-10-15 由角色判定迁来）。**只管权限点**，批次
+   *  自身的可拆性（余量 > 1）由派生函数叠加 —— 两道闸的来源不同，混在一个布尔里就看不出
+   *  是权限问题还是批次问题。 */
   canSplit: boolean;
   /** 下发权限（`queue.dispatch` 权限点，2026-10-14 新增）。
    *
@@ -120,9 +122,10 @@ export function buildQueueBatchMenuItems(input: QueueBatchMenuInput): MenuItem[]
     // 目标集为空（工序列表还在加载 / 真的一道工序都没有）时**不给**这一项：给一个点开是
     // 空白的二级菜单比不给更难解释。
     //
-    // ⚠️ `canDispatch` 闸与上面两条同类但**来源不同**：它判的是权限点（`queue.dispatch`
-    // 权限点），另两条判的是角色。少放一个角色 / 少一个权限点都会变成「入口可见、点下去
-    // 403」，所以这里必须挡在**给不给这一项**这一层，而不是靠提交时报错。
+    // ⚠️ `canDispatch` 闸与上面两条同类，三条现在都是权限点口径（`queue.dispatch` /
+    // `queue.recall` / `batch.split`，2026-10-15 起角色判定全部迁到权限点）。少一个权限点
+    // 都会变成「入口可见、点下去 403」，所以这里必须挡在**给不给这一项**这一层，而不是靠
+    // 提交时报错。
     if (input.canDispatch && children.length > 0) {
       items.push({ label: '发送到工序', children });
     }

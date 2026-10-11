@@ -26,6 +26,12 @@ import type { DeliveryNoteStatus } from '@/types/deliveryNote';
 /** 放行送货单打印的权限点（与 RBAC 面板里的 `delivery_note.print` 逐字一致）。 */
 export const DELIVERY_NOTE_PRINT_PERMISSION = 'delivery_note.print';
 
+/** 送货单查看的权限点（与 RBAC 面板里的 `delivery_note.view` 逐字一致）。
+ *
+ *  ⚠️ 前端当前**零消费方**（读点由后端权限与菜单共同决定，前端不加按钮闸）；在此登记是
+ *  为了让常量表与后端 seeds 的 20 码全集对齐 —— 不要按「无人 import」删除。 */
+export const DELIVERY_NOTE_VIEW_PERMISSION = 'delivery_note.view';
+
 export interface RoleMapLike {
   MANAGER?: boolean;
   CLERK?: boolean;

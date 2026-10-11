@@ -8,7 +8,8 @@
 //
 // 导出面全集也钉死：改名 / 误删会让消费侧编译失败（那是好事），但常量表本身仍值得一条
 // 显式防漂移断言。注：读点（`production.view` 等）与 `batch.deliver` 目前无前端消费方，
-// 是**有意**收录的完整清单，不按「有无消费方」裁剪。
+// 也一并收录 —— 本文件的 12 个常量是**生产域**的完整清单，不按「有无消费方」裁剪；
+// 其它域的码（零件 / 送货单 / 外协）在同目录各自的常量文件里，勿在此处补。
 
 import { describe, expect, it } from 'vitest';
 import * as permissionConstants from '../productionPermissions';

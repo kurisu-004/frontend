@@ -84,9 +84,9 @@ interface Props {
   selectedIds: UseQueueDispatchReturn['selectedIds'];
   setSelectedIds: (ids: string[]) => void;
   autoDispatchMutation: UseQueueDispatchReturn['autoDispatchMutation'];
-  /** 是否持有下发权限点（`queue.dispatch`，由板级 QueueBoard 派生后透传）。false 时
-   *  「自动下发」按钮整只收掉（v-if），onAutoDispatch 另有一道早退兜底（按钮显隐与处理
-   *  函数各守一次，防 v-if 哪天被改成 disabled / 挪位）。 */
+  /** 是否持有下发权限点（`queue.dispatch`，2026-10-15 新增闸，由板级 QueueBoard 派生后
+   *  透传）。false 时「自动下发」按钮整只收掉（v-if），onAutoDispatch 另有一道早退兜底
+   *  （按钮显隐与处理函数各守一次，防 v-if 哪天被改成 disabled / 挪位）。 */
   canDispatch: boolean;
 }
 

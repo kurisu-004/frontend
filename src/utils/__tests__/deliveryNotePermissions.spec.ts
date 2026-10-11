@@ -18,11 +18,17 @@
 // 另有一条**签名兼容**守卫：`canPrint(note, role)` 的 `role` 形参一字未改（三个消费方
 // 的 git diff 为空），但它已不参与判定 —— 钉住「换角色值不改结论」，把「判据真搬走了」
 // 写进用例；少了这条，改回读 role map 不会有任何测试信号。
+//
+// 2026-10-15（RBAC 面板第二批）：补一组常量表断言（逐字锁码 + 导出面），形态对齐同目录
+// `productionPermissions.spec.ts` —— 上半篇的 helper 用例只碰判定逻辑，常量拼写漂移没有
+// 任何测试信号。`delivery_note.view` 前端**零消费方**（读点由后端权限与菜单共同决定），
+// 登记它是为了让常量表与后端 seeds 的 20 码全集对齐。
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { createApp } from 'vue';
 import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
+import * as permissionModule from '../deliveryNotePermissions';
 import {
   canDeliver,
   canPrint,
@@ -77,6 +83,32 @@ beforeEach(() => {
   app.use(createPinia());
   app.use(VueQueryPlugin, { queryClient: new QueryClient() });
   setActivePinia(app.config.globalProperties.$pinia);
+});
+
+describe('deliveryNotePermissions 常量表（2026-10-15 第二批）', () => {
+  it('2 个权限点 code 与后端 seeds 逐字一致', () => {
+    expect(permissionModule.DELIVERY_NOTE_PRINT_PERMISSION).toBe('delivery_note.print');
+    expect(permissionModule.DELIVERY_NOTE_VIEW_PERMISSION).toBe('delivery_note.view');
+  });
+
+  it('导出面恰为 11 个运行时导出（2 常量 + 9 helper，防改名 / 误删）', () => {
+    // 类型（RoleMapLike / PrintableNoteLike）编译期擦除，不在下面的键集里。
+    expect(Object.keys(permissionModule).sort()).toEqual(
+      [
+        'DELIVERY_NOTE_PRINT_PERMISSION',
+        'DELIVERY_NOTE_VIEW_PERMISSION',
+        'hasManageNoteRole',
+        'canAddRemoveParts',
+        'canSubmit',
+        'canRecall',
+        'canSoftDelete',
+        'canPrint',
+        'canDeliver',
+        'canView',
+        'defaultStatusesForRole',
+      ].sort(),
+    );
+  });
 });
 
 describe('hasManageNoteRole（仍按角色判，2026-10-14 未迁）', () => {
