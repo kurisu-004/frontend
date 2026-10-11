@@ -8,7 +8,7 @@
 // usePartFilesListQuery 范本）：
 //   - 单调用 listPartBatches(partId) 拉 owner 全量，computed 内直接消费。
 //   - staleTime 20min / gcTime 30min（与 usePartFilesListQuery 同值 —— part-batches
-//     与 part-files 都是可高频变更的派生视图域；用 20min 折中体验与性能，而非
+//     与文件对象列表都是可高频变更的派生视图域；用 20min 折中体验与性能，而非
 //     Infinity 让用户长时间看不到拆分 / 取消的批次变更）。写操作（拆分 / 取消）
 //     由 caller 调 invalidatePartBatchesListQuery 立即失效本 owner 的缓存，跳
 //     staleTime 等待。**消费方可以把 staleTime 降到自己那一档**（见 `staleTimeMs`
@@ -96,7 +96,7 @@ export function usePartBatchesQuery(
     },
     enabled: computed(() => !!toValue(ownerPartId)),
     // 2026-09-30：与 usePartFilesListQuery 同值（20min / 30min）—— part-batches 与
-    // part-files 同属「可高频变更的派生视图域」，不挂 Infinity。
+    // 文件对象列表同属「可高频变更的派生视图域」，不挂 Infinity。
     // 2026-10-10：允许调用方按消费侧形态覆盖（见 `staleTimeMs` 形参注释）。
     staleTime: staleTimeMs ?? 20 * 60 * 1000,
     gcTime: 30 * 60 * 1000,

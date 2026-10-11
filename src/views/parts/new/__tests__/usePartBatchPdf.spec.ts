@@ -63,13 +63,15 @@ vi.mock('pdf-lib', () => {
   return { PDFDocument: { load: async () => doc(), create: async () => doc() } };
 });
 
-// Tab 2 走「建工单 + 逐 part 后置上传」，composable 从 @/api/parts 导入
-// batchCreateParts / uploadPartDrawing / uploadPart3DModel 三个导出 —— mock 必须
-// 覆盖全部被 import 的导出，否则模块解析失败。
+// Tab 2 走「建工单 + 逐 owner 后置上传」，composable 从 @/api/parts 导入
+// batchCreateParts、从 @/api/files/objects 导入 uploadFileObject —— mock 必须覆盖
+// 全部被 import 的导出，否则模块解析失败。
 vi.mock('@/api/parts', () => ({
   batchCreateParts: vi.fn(),
-  uploadPartDrawing: vi.fn(),
-  uploadPart3DModel: vi.fn(),
+}));
+
+vi.mock('@/api/files/objects', () => ({
+  uploadFileObject: vi.fn(),
 }));
 
 vi.mock('@/views/parts/new/composables/usePartsNewDraft', () => ({

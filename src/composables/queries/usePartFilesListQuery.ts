@@ -7,17 +7,24 @@
 // 设计要点（沿 2026-09-26 TanStack Query 共享基础数据层约定 #5/#6/#7）：
 //   - 单调用 listPartFilesByOwner(partId) 拉 owner 全量，computed 按 kind 桶。
 //   - staleTime 20min（图纸/3D 几乎不变业务特性），gcTime 30min（切回不重复拉）。
-//     比 2026-09-26 的 Infinity 短 —— part-files 域可能频繁新增/删除文件，
+//     比 2026-09-26 的 Infinity 短 —— 文件对象域可能频繁新增/删除文件，
 //     旧值长期不失效会导致用户上传新文件后 20min 内看不到；20min 是体验与性能
 //     的折中。写操作（上传 / 删除）由 caller 调 invalidatePartFilesListQuery
 //     立即失效本 owner 的缓存，跳过 staleTime 等待。
 //   - reactive params：ownerPartId 是 MaybeRefOrGetter<string | null | undefined>。
 //     null/空 → enabled=false + queryFn 二次守卫返回空结果，避免发 ?owner_id= 请求。
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
+//
+// 2026-10-13 图纸预览切 CI 转图直链后，本 hook 的边界没有变，但要记两条容易踩的：
+//   - **两条预览端点都吃 `items[].id`（文件对象 id），不吃 `owner_id`**。`/preview`
+//     （CI 转图直链，首选）与 `/content`（原始 PDF 兜底）都只认文件对象 id，owner 语义
+//     由后端按文件行解析 —— 本 hook 的 queryKey 里是 owner id，传错一个层级就 404。
+//   - **转图轮询刻意不进本 hook**：`usePreviewPolling` 是单文件、单次的编排（带自己的
+//     退避预算），不是一个可按 owner 缓存的读。它走 `/preview` 单独发，承载点各自持有。
 
 import { useQuery, type QueryClient } from '@tanstack/vue-query';
 import { computed, toValue, type MaybeRefOrGetter } from 'vue';
-import { listPartFilesByOwner } from '@/api/assembly';
+import { listPartFilesByOwner } from '@/api/files/objects';
 import { partFileListResultSchema, type PartFileListResultSchema } from './schemas';
 import { qk } from './keys';
 
@@ -73,7 +80,7 @@ export function usePartFilesListQuery(
   });
 }
 
-/** 2026-09-29 新增：失效指定 owner 的 part-files 列表。
+/** 2026-09-29 新增：失效指定 owner 的文件列表（queryKey 前缀 `part-files` 是缓存键不是 URL）。
  *  调用方：PartDetail.vue onFileTabRefresh / 上传 / 删除成功后。
  *  返回 Promise<void> 让 caller 可以 await 失效完成再走后续逻辑。 */
 export function invalidatePartFilesListQuery(
@@ -83,7 +90,7 @@ export function invalidatePartFilesListQuery(
   return qc.invalidateQueries({ queryKey: qk.partFilesList(ownerId) }).then(() => undefined);
 }
 
-/** 2026-09-29 新增：失效整个 part-files 域（任意 ownerId 形态）。
+/** 2026-09-29 新增：失效整个文件对象域（任意 ownerId 形态）。
  *  留作未来多 owner / 跨页面失效场景的兜底；当前调用点都按 owner 维度失效。 */
 export function invalidatePartFilesListAll(qc: QueryClient): Promise<void> {
   return qc.invalidateQueries({ queryKey: qk.partFilesPrefix }).then(() => undefined);

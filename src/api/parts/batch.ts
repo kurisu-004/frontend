@@ -77,7 +77,7 @@ export interface PartBatchFilePayload {
  *  `drawing_file` / `model3d_file` 是后端契约字段：填了就由后端在建单事务内
  *  head + copy tmp → 正式 CAS key（入参形状见 `types/part_file.ts` 的 `FileBinding`）；
  *  不填则这一步跳过，文件改在建单之后由
- *  `POST /parts/{id}/upload-drawing` / `upload-3d-model` 补传。 */
+ *  `POST /files/objects` 补传。 */
 interface PartBatchCreateItemFE {
   name: string;
   drawing_no: string;
@@ -127,7 +127,7 @@ interface PartBatchCreateOutFE {
  *
  *  `drawing_file` / `model3d_file` 是后端契约字段：填了就由后端在建单事务内
  *  head + copy tmp → 正式 CAS key；不填则建单不挂文件，文件走建单后的
- *  `POST /parts/{id}/upload-drawing` / `upload-3d-model` 补传。 */
+ *  `POST /files/objects` 补传。 */
 export interface PartBatchCreatePayload extends PartCreatePayload {
   /** 选填：图纸文件绑定。 */
   drawing_file?: FileBinding;
@@ -137,8 +137,8 @@ export interface PartBatchCreatePayload extends PartCreatePayload {
 
 /**
  * 批量新建零件（JSON）。`POST /parts/batch` 只发 JSON items，**不带文件** ——
- * 图纸 / 3D 走建单之后的 `POST /parts/{id}/upload-drawing` / `upload-3d-model`
- * 后置补传（见 `./file.ts`）；本函数的 `created[].sourceIndex` 就是 caller 把
+ * 图纸 / 3D 走建单之后的 `POST /files/objects` 后置补传（见 `@/api/files/objects`
+ * 的 `uploadFileObject`）；本函数的 `created[].sourceIndex` 就是 caller 把
  * 「建出来的 part」对回「本地哪一行」的锚。
  *
  * 2026-10-04：item 侧两个文件绑定字段的当前分工 —— `drawing_file` 只有 Tab 1

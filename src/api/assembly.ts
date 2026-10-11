@@ -1,18 +1,20 @@
 // 装配体 REST API（走 @/api/http 统一 axios 客户端）。
-// multipart 的文件字段名**按端点不同**：创建端点 `POST /assemblies` 认 `files`
-// （复数），详情页补传端点 `POST /assemblies/{id}/files` 认 `file`（单数）。
+// 本文件只实现 `/assemblies/*` 与 `/prod/assemblies/*`；文件对象域的 6 条
+// `/files/objects/*` 端点实现在 `@/api/files/objects`，这里仅有两个装配件语义上的
+// 薄封装（`uploadAssemblyPdf` 转 `uploadFileObject`、`getDownloadUrl` 的 deprecation
+// alias）。
 
 import { api, cleanParams } from '@/api/http';
 import {
   assemblyCreateResultSchema,
   assemblyDetailFlatSchema,
-  assemblyFileRefSchemaArray,
   assemblyOutSchema,
   type AssemblyChildOutSchema,
   type AssemblyDetailFlatSchema,
   type AssemblyFileRefSchema,
   type AssemblyOutSchema,
 } from '@/composables/queries/schemas';
+import { uploadFileObject } from '@/api/files/objects';
 import type { Customer } from '@/api/customer';
 import type {
   AssemblyCreatePayload,
@@ -24,7 +26,7 @@ import type {
   AssemblyItem,
   AssemblyUpdatePayload,
 } from '@/types/assembly';
-import type { PartFileListResult, DrawingFileItem } from '@/types/part_file';
+import type { DrawingFileItem, PartFileItem } from '@/types/part_file';
 import type { PartListItem } from '@/types/parts';
 
 /**
@@ -237,7 +239,7 @@ export async function getAssemblyForPart(partId: string): Promise<AssemblyDetail
  * 消费方（`usePartBatchPdf` 的建单记账）把 `created_children[i]` 按下标对回本地子件行，
  * 响应形状不对时若无守门，会在**零报错**的情况下把子件图纸挂到错误的行上。
  *
- * 不传文件字段：总装图走 `POST /assemblies/{id}/files`（`uploadAssemblyPdf`）单独上传。
+ * 不传文件字段：总装图走 `POST /api/v2/files/objects`（`uploadAssemblyPdf`）单独上传。
  * 2026-10-05 起该端点无条件派装配件序列号、无条件建子件，不传 PDF 也能建出完整装配件。
  */
 export async function createAssembly(
@@ -249,44 +251,38 @@ export async function createAssembly(
   return assemblyCreateResultSchema.parse(resp.data);
 }
 
-/** 一次性创建：上传总装 PDF + 子件一并生成。
- *
- *  2026-10-05：multipart 的文件字段名由 `file` 改为 `files`。后端 `POST /assemblies`
- *  的 multipart 解析只认 `files`；传 `file` **不报错**，文件被静默丢弃（建出一个没有
- *  总装图的装配件），所以这个字段名必须与后端一致。
- *
- *  2026-10-05：**本函数零调用点** —— 零件批量建单走 `createAssembly`（不传 PDF）+
- *  `uploadAssemblyPdf` 补总装图这条两段式。保留它是因为它是「建单时一并带总装图」的
- *  现成封装，将来若要走那条路，字段名与「`files` 只处理首份做页数校验」的行为差异
- *  必须先对齐。
- */
-export async function createAssemblyWithFile(
-  payload: AssemblyCreatePayload,
-  pdfFile: File,
-): Promise<AssemblyCreateResult> {
-  const form = new FormData();
-  form.append('data', JSON.stringify(payload));
-  form.append('files', pdfFile);
-  const resp = await api.post<unknown>('/assemblies', form);
-  return assemblyCreateResultSchema.parse(resp.data);
-}
+// 2026-10-13：删除 `createAssemblyWithFile`。
+// 理由：2026-10-05 起即标注「零调用点」，零件批量建单走 `createAssembly`（不传 PDF）
+// + `uploadAssemblyPdf` 补总装图这条两段式；2026-10-13 rg 复核**仍为零调用方**
+// （唯一的名字提及只在 `types/assembly.ts` 的一句注释里，本轮一并清掉）。且它与
+// `createAssembly` 打同一个 `POST /assemblies`，差别只在 multipart 字段名（`files`
+// vs 不传）—— 留着等于给「静默丢弃文件」那条 2026-10-05 陷阱留一个后门。
+//
+// 2026-10-13：删除 `listPartFiles` 与 `deleteFile` alias。
+// 理由：两者 rg 核实均为**零调用方**。`listPartFiles` 早在 2026-09-16 T3.5 就被
+// `listPartFilesByOwner` 取代并标注 `@deprecated`（其自述「M3-C 完成时统一移除」
+// 至今未执行，本 PR 一并结清）；`deleteFile` alias 自 2026-09-16 T3.5 起就只是
+// 「兼容未迁移 import」而留，rg 核实全仓已无任何 import 方，兼容期早已结束。
+// `getDownloadUrl` alias 反之**仍有活调用方**，见下方。
 
-/** 装配件总装图上传（`POST /assemblies/{id}/files`，multipart field=`file`，只收 PDF）。
+/** 装配件总装图上传（`POST /api/v2/files/objects`，multipart field=`file`，只收 PDF）。
  *
- * 2026-10-05 订正：端点是**纯文件入库** —— COS PUT + `INSERT t_part_file`
- * （`owner_kind='ASSEMBLY'`、`kind='ASSEMBLY_MASTER'`），**不拆页、不建子件**。
- * 装配件的子件由 `POST /assemblies` 建单时按 `children` 入参一并建出。
+ * 端点是**纯文件入库** —— COS PUT + `INSERT t_part_file`（`owner_kind='ASSEMBLY'`、
+ * `kind='ASSEMBLY_MASTER'`），**不拆页、不建子件**。装配件的子件由 `POST /assemblies`
+ * 建单时按 `children` 入参一并建出。
  *
- * 2026-09-25 修正：v2 后端把 upload-pdf 合并到 `/files` 端点，不再走 `/upload-pdf`。
- * 2026-09-29 review 第 1 轮 C2 修复：后端实际响应是 `R<Vec<AssemblyFileRef>>`，
- * 不是 `R<AssemblyDetail>`。旧实现走 parseAssemblyDetail 把数组塞进 z.object → ZodError，
- * 上传功能全废。新实现返 AssemblyFileRef[]，call 方（useAssemblyDetail.uploadPdfFn）
- * 调 fetchData() 重拉详情用，files 列表是中间信号。 */
-export async function uploadAssemblyPdf(id: string, file: File): Promise<AssemblyFileRefSchema[]> {
-  const form = new FormData();
-  form.append('file', file);
-  const resp = await api.post<unknown>(`/assemblies/${id}/files`, form);
-  return assemblyFileRefSchemaArray.parse(resp.data);
+ * 2026-10-13：随文件对象域端点合并，本函数改为包 `uploadFileObject`（零件图纸 /
+ * 3D 模型 / 装配件总装图同端点，差别只在 owner + kind 两个字段）。响应随之由
+ * `AssemblyFileRef[]`（`{id, original_filename, page_count}`）变为**单个
+ * `PartFileItem`**：`page_count` 键消失，但上传路径本就恒为 `null`，无信息损失。
+ * ⚠️ 返回类型是**前端的 `PartFileItem`**（12 字段），不是后端出参全貌：后端
+ * `PartFileOut` 有 15 字段，多出的 `owner_kind` / `object_key` / `created_by`
+ * 前端未建模。
+ *
+ * 保持 `uploadAssemblyPdf` 这个名字：调用方（装配件详情页补传总装图、零件批量建单
+ * 的总装图补传）都是「上传一份总装图」这一个动作，端点合并不改变它们的意图。 */
+export async function uploadAssemblyPdf(id: string, file: File): Promise<PartFileItem> {
+  return uploadFileObject('ASSEMBLY', id, 'ASSEMBLY_MASTER', file);
 }
 
 /** 详情页添加单个子件（无 PDF；如需 PDF 走 uploadPartFile）。
@@ -349,71 +345,24 @@ export async function updateAssembly(
 }
 
 // ---- 文件相关 ----
-// 2026-07-10 起：装配体文件由 create_assembly / upload_total_pdf 流创建，
-// uploadPdf 在 2026-09-25 合入 GET /assemblies/{id}/files 端点（POST multipart）。
-// list 仍可调用。
 
-// 2026-09-16 Phase 5 切 v2 后：列表端点返回分页包装 { items, total }（PartFileListResult），
-// v2 默认 limit=50 会静默截断，clamp 上限 500，统一按上限取全量。
-// 2026-09-25 修正：与 backend-rust 新加的 `GET /api/v2/assemblies/{id}/files` 端点对齐。
-export async function listAssemblyFiles(id: string): Promise<PartFileListResult> {
-  const resp = await api.get<PartFileListResult>(`/assemblies/${id}/files`, {
-    params: { limit: 500 },
-  });
-  return resp.data;
-}
+// 2026-10-13：删除 `listAssemblyFiles`。
+// 理由：它打的 `GET /api/v2/assemblies/{id}/files` 已随 files 域端点收编下线（后端
+// assembly router 整段移除该路由、无 alias），留着就是一个「以为还能用、实际必 404」
+// 且 export 在公共聚合口上的陷阱；rg 核实零调用方（`useAssemblyDetail` 的 `files[]`
+// 来自 `GET /assemblies/{id}` 详情响应，不打这个端点）。
 
 /**
- * 列出某 part 关联的所有文件。
+ * `getPartFileDownloadUrl` 的 deprecation alias。
  *
- * @deprecated 2026-09-16 T3.5：v2 后端无 `/parts/{id}/files` 端点；保留此函数作为
- * `listPartFilesByOwner` 的 deprecation alias，转发到 `/part-files?owner_id=...`。
- * 下游调用点已在 T3.5 一次切换到 listPartFilesByOwner；M3-C 完成时统一移除。
- * 2026-09-25 显式补 `@deprecated` JSDoc tag。
- */
-export async function listPartFiles(
-  partId: string,
-  kind?: 'DRAWING' | '3D_MODEL' | 'G_CODE' | 'SETUP_SHEET' | 'ASSEMBLY_MASTER' | 'CAD_2D',
-): Promise<PartFileListResult> {
-  return listPartFilesByOwner(partId, kind);
-}
-
-/**
- * 2026-09-16 M3 新增：owner 维度列出文件（`GET /api/v2/part-files?owner_id=...&kind=...`）。
- *
- * 替代 `listPartFiles` 的 `/parts/{part_id}/files` 旧路径——v2 rust 后端已经
- *  把列表端点统一到 `/part-files`（按 owner_id 多态查询）。kind 缺省 = 不过滤。
- *
- *  与 `listPartFiles` 区别：
- *  - 路径：`/part-files?owner_id=...&kind=...`（owner 多态）
- *  - 参数：limit 上限 500（v2 默认 50 会静默截断）
- *
- *  旧函数保留为 deprecation alias，下游调用点改在 M3-C 一次到位。
- */
-export async function listPartFilesByOwner(
-  partId: string,
-  kind?: 'DRAWING' | '3D_MODEL' | 'G_CODE' | 'SETUP_SHEET' | 'ASSEMBLY_MASTER' | 'CAD_2D',
-): Promise<PartFileListResult> {
-  const resp = await api.get<PartFileListResult>('/part-files', {
-    params: kind ? { owner_id: partId, kind, limit: 500 } : { owner_id: partId, limit: 500 },
-  });
-  return resp.data;
-}
-
-// 2026-09-25 清理：uploadPartDrawing / uploadPart3DModel / uploadPartCadFile
-// 已迁回 `@/api/parts/file.ts`（更符合子域归属）；本文件不再 re-export。
-
-/**
- * @deprecated 2026-09-16 T3.5：合并到 `deletePartFile(fileId, version)`。
- * 保留为 alias 以兼容未迁移 import；新代码请用具名导出。
- */
-export { deletePartFile as deleteFile } from '@/api/parts/file';
-
-/**
  * @deprecated 2026-09-16 T3.5：合并到 `getPartFileDownloadUrl(fileId)`。
  * 保留为 alias 以兼容未迁移 import；新代码请用具名导出。
+ *
+ * ⚠️ **仍有一个活调用方**：`views/production/scan/components/PartDrawingPreviewDialog.vue`
+ * （报工台图纸预览的下载按钮）。2026-10-13 清理时 rg 核实过，**不可删** ——
+ * 相比之下同批的 `deleteFile` alias（0 调用方）已随之删除。
  */
-export { getPartFileDownloadUrl as getDownloadUrl } from '@/api/parts/file';
+export { getPartFileDownloadUrl as getDownloadUrl } from '@/api/files/objects';
 
 /** 类型守卫 */
 export function isAssemblyItem(v: unknown): v is AssemblyItem {

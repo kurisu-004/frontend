@@ -104,18 +104,21 @@ a {
   background-color: #cce0f4 !important;
 }
 
-/* PdfViewer 承载弹窗的高度契约（2026-10-03 修缺陷：预览画面全白）。
-   PdfViewer 内部是 .pdf-viewer{height:100%} → .canvas-wrap{flex:1} → .pdf-viewport{flex:1;overflow:hidden}
-   的 flex 高度链，要求宿主有确定高度。而 EP 的 .el-dialog__body 是 display:block + height:auto，
-   直接子元素的 height:100% 会退化成 auto，链塌成 0，position:absolute 的 canvas 被 overflow:hidden 裁掉 ——
-   表现是「工具栏在、下面纯白」。故凡用 el-dialog 承载 PdfViewer 处必须挂 .pdf-preview-dialog。
+/* PdfViewer / ImagePager 承载弹窗的高度契约（2026-10-03 修缺陷：预览画面全白）。
+   两个预览组件内部是同款 flex 高度链（.pdf-viewer / .image-pager{height:100%}
+   → .canvas-wrap{flex:1} → .pdf-viewport / .img-viewport{flex:1;overflow:hidden}），
+   要求宿主有确定高度。而 EP 的 .el-dialog__body 是 display:block + height:auto，
+   直接子元素的 height:100% 会退化成 auto，链塌成 0，被 overflow:hidden 的 viewport
+   裁掉 —— 表现是「工具栏在、下面纯白」。故凡用 el-dialog 承载它们处必须挂
+   .pdf-preview-dialog（PdfViewer）或 .img-preview-dialog（ImagePager）。
    注意 el-dialog 与 el-drawer 不对称：EP 的 .el-drawer__body 自带 flex:1，故 el-drawer 无需这条。
 
    纵向溢出取 auto 而非 hidden（2026-10-03）：滚动兜底必须留着。本规则同时管着
    PDF / 图片 / 非 PDF / 加载中四个分支，只有 PDF 分支自带滚动容器（.pdf-viewport），
    其余三个分支的内容高度是自定的（.non-pdf-preview 的文件名 + 提示可能折多行、
    .image-preview-wrap 的图片按自身比例放大），hidden 会把它们裁掉且无从滚动。 */
-.pdf-preview-dialog.el-dialog.is-fullscreen {
+.pdf-preview-dialog.el-dialog.is-fullscreen,
+.img-preview-dialog.el-dialog.is-fullscreen {
   display: flex;
   flex-direction: column;
   /* is-fullscreen 已把 dialog 高度钉到视口，而 header 是 0 0 auto、body 是 1 1 auto +
@@ -123,10 +126,12 @@ a {
      「内容确实装不下」留出路（hidden 下只剩裁切）。 */
   overflow-y: auto;
 }
-.pdf-preview-dialog.el-dialog.is-fullscreen > .el-dialog__header {
+.pdf-preview-dialog.el-dialog.is-fullscreen > .el-dialog__header,
+.img-preview-dialog.el-dialog.is-fullscreen > .el-dialog__header {
   flex: 0 0 auto;
 }
-.pdf-preview-dialog.el-dialog.is-fullscreen > .el-dialog__body {
+.pdf-preview-dialog.el-dialog.is-fullscreen > .el-dialog__body,
+.img-preview-dialog.el-dialog.is-fullscreen > .el-dialog__body {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
@@ -140,25 +145,27 @@ a {
    与 `.is-fullscreen` 那条的区别只有一处、也是关键的一处：fullscreen 时 is-fullscreen
    已把 dialog 高度钉到视口，body 靠 `flex: 1` 分到确定高度；窗口形态下 dialog 自身是
    **auto 高度**（由内容撑出来），body 拿不到任何 flex 余量 ⇒ `flex: 1 1 auto` 会解析成
-   「内容高度」，PdfViewer 的 height:100% 链又塌成 0（同一个 2026-10-03 缺陷）。
+   「内容高度」，预览组件的 height:100% 链又塌成 0（同一个 2026-10-03 缺陷）。
    所以这一支由 **body 自己**声明确定高度（72vh），并转 column + min-height:0 +
-   overflow:hidden auto，让 PdfViewer / 图片 / 非 PDF / 加载中四个分支作为 flex item
-   填满它。
+   overflow:hidden auto，让预览 / 图片 / 非 PDF / 加载中四个分支作为 flex item 填满它。
    横向 hidden / 纵向 auto 与上面 `.is-fullscreen` 那一支逐字同款：横向显式 hidden 是因为
    按规范只写 overflow-y 时 overflow-x 会从 visible 计算成 auto、宽于容器的画布会多出一条
    用不上的横向滚动条；纵向 auto 是上面那条 2026-10-03 的结论（滚动兜底必须留着），
-   本支同样要 —— 四个分支里只有 PDF 分支自带滚动容器。
+   本支同样要 —— 四个分支里只有预览分支自带滚动容器。
    两侧规则只差 `.is-fullscreen` 与 `:not(.is-fullscreen)`，是同一个不变量的两种形态；
    删掉任何一支，那一侧的调用点会退回「工具栏在、下面纯白」。守卫见
    `src/components/__tests__/PdfPreviewDialogContract.spec.ts`。 */
-.pdf-preview-dialog.el-dialog:not(.is-fullscreen) {
+.pdf-preview-dialog.el-dialog:not(.is-fullscreen),
+.img-preview-dialog.el-dialog:not(.is-fullscreen) {
   display: flex;
   flex-direction: column;
 }
-.pdf-preview-dialog.el-dialog:not(.is-fullscreen) > .el-dialog__header {
+.pdf-preview-dialog.el-dialog:not(.is-fullscreen) > .el-dialog__header,
+.img-preview-dialog.el-dialog:not(.is-fullscreen) > .el-dialog__header {
   flex: 0 0 auto;
 }
-.pdf-preview-dialog.el-dialog:not(.is-fullscreen) > .el-dialog__body {
+.pdf-preview-dialog.el-dialog:not(.is-fullscreen) > .el-dialog__body,
+.img-preview-dialog.el-dialog:not(.is-fullscreen) > .el-dialog__body {
   flex: 0 0 auto;
   height: 72vh;
   min-height: 0;

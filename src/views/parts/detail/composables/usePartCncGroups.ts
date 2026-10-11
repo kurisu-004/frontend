@@ -12,14 +12,21 @@
 // 2026-09-29 修复：cncPrograms / setupSheets 改为从 usePartFilesListQuery 派生
 //（owner 全量按 kind 桶），砍 1 个冗余 RTT（原本 listPartCncPrograms +
 // listPartSetupSheets 两个独立 alias 端点）。download / delete / upload 改走
-// part_file native 端点 / cnc-programs canonical pairs 端点。api/cnc.ts 仅
+// 文件对象 native 端点（`GET /files/objects/{id}/url`、`POST /files/objects/{id}/delete`）
+// / files 域配对端点（`POST /files/cnc/pairs`）。`api/files/cnc.ts` 仅
 // 保留 uploadCncPair 一条函数。
+//
+// 2026-10-13 files 域重组：上述 3 条端点硬切
+// `/part-files/*` + `/cnc-programs/pairs` → `/files/objects/*` + `/files/cnc/pairs`
+// （旧路径 404、无 alias），api 模块同步由 `api/parts/file` + `api/cnc` 迁到
+// `api/files/objects` + `api/files/cnc`。下方注释里提到的 4 条 cnc alias 端点
+// （download-url / delete 等）已被后端删除。
 
 import { computed, type ComputedRef, type Ref } from 'vue';
 import { ElMessage, type UploadFile } from 'element-plus';
 import { useQueryClient } from '@tanstack/vue-query';
-import { uploadCncPair } from '@/api/cnc';
-import { deletePartFile, getPartFileDownloadUrl } from '@/api/parts/file';
+import { uploadCncPair } from '@/api/files/cnc';
+import { deletePartFile, getPartFileDownloadUrl } from '@/api/files/objects';
 import type { PartFileItem } from '@/types/part_file';
 import { usePermissions } from '@/composables/usePermissions';
 import {
@@ -125,8 +132,9 @@ export function usePartCncGroups(partId: Ref<string>): UsePartCncGroupsReturn {
     return `${(n / 1024 / 1024).toFixed(2)} MB`;
   }
 
-  // 2026-09-29 修复：下载走 part_file native 端点（替代原 getCncDownloadUrl 走的
-  // /cnc-programs/{id}/download-url alias）。
+  // 2026-09-29 修复：下载走文件对象 native 端点 `GET /files/objects/{id}/url`
+  // （替代原 getCncDownloadUrl 走的 /cnc-programs/{id}/download-url alias，
+  // 该 alias 端点 2026-10-13 已被后端删除、旧路径 404）。
   async function onDownloadCnc(p: PartFileItem): Promise<void> {
     try {
       const url = await getPartFileDownloadUrl(p.id);
@@ -136,10 +144,12 @@ export function usePartCncGroups(partId: Ref<string>): UsePartCncGroupsReturn {
     }
   }
 
-  // 2026-09-29 修复：删除走 part_file native 端点（替代原 deleteCncProgram 走的
-  // /cnc-programs/{id}/delete alias）。成功后 invalidate 整个 owner part-files
-  // 列表，下游 computed (cncPrograms / setupSheets / drawings / models3d /
-  // cadFiles) 自动 re-fetch + re-filter。
+  // 2026-09-29 修复：删除走文件对象 native 端点 `POST /files/objects/{id}/delete`
+  // （替代原 deleteCncProgram 走的 /cnc-programs/{id}/delete alias，该 alias 端点
+  // 2026-10-13 已被后端删除、旧路径 404）。成功后 invalidate 整个 owner 文件列表
+  // query（queryKey 前缀 `part-files` 保持不变 —— 它是 TanStack 缓存键不是 URL，
+  // 改名会让所有已缓存列表失效并触发全量重取），下游 computed (cncPrograms /
+  // setupSheets / drawings / models3d / cadFiles) 自动 re-fetch + re-filter。
   async function onDeleteCnc(id: string, version: number): Promise<void> {
     try {
       await deletePartFile(id, version);
@@ -173,10 +183,11 @@ export function usePartCncGroups(partId: Ref<string>): UsePartCncGroupsReturn {
    * 配对上传业务：逐个上传 G 代码 + 一次设定单（setup 走 SHA-256 dedup）。
    * 由 PartCncCard 调起，参数为 dialog 内收集的 raw File 列表。
    *
-   * 2026-09-29 修复：uploadCncPair 已迁到 canonical `POST /api/v2/cnc-programs/pairs`
+   * 2026-09-29 修复：uploadCncPair 已迁到 canonical 配对端点
    * （field 重映射：gcode_file → g_code、setup_file → setup_sheet；新增 data
-   * JSON 文本字段含 part_id）。成功后 invalidate owner part-files 列表让 UI
-   * 自动 refresh pair 列表。
+   * JSON 文本字段含 part_id）。2026-10-13 随 files 域重组硬切为
+   * `POST /api/v2/files/cnc/pairs`（原 `/api/v2/cnc-programs/pairs`，旧路径 404、无 alias）。
+   * 成功后 invalidate owner 文件列表让 UI 自动 refresh pair 列表。
    */
   async function onPairUpload(rawGcodes: File[], setupFile: File): Promise<boolean> {
     if (rawGcodes.length === 0 || !setupFile) return false;

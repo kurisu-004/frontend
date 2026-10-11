@@ -42,10 +42,21 @@
 //      塞进第 7 处，或引发搬这 6 个文件的巨量 diff。
 //   ② 现有 3 个子目录 `com/` / `files/` / `parts/` 则**全部镜像独占 URL 命名
 //      空间**（`com/unionList.ts` → `/com/union-list`、`files/sts.ts` →
-//      `/files/sts-tmp-keys`、`parts/*` → `/parts/*`）。注意 `files/` 只有 1 个文件、
-//      1 条端点路径，它成目录**不是因为端点多**；只有 `parts/`（`/parts/*` 端点数
-//      确实多到拆出 4 个实现文件 batch / bid / crud / file）才适用「端点多到需拆
-//      文件」。**没有** `prod/` 目录。
+//      `/files/sts-tmp-keys`、`parts/*` → `/parts/*`）。**没有** `prod/` 目录。
+//
+//      ⚠️ 2026-10-13 订正（files 域重组后本段的两处细节已过期）：
+//      - `files/` **不再是 1 个文件**。后端把 `part_file` + `cnc_program` 收编进
+//        files 域、URL 硬切到 `/api/v2/files/objects/*` 与 `/api/v2/files/cnc/*`
+//        （旧路径 `/api/v2/part-files/*`、`/api/v2/cnc-programs/*` **404、无 alias**），
+//        于是 `api/files/` 现有 3 个实现文件：`sts.ts` → `/files/sts-tmp-keys`、
+//        `objects.ts` → `/files/objects/*`、`cnc.ts` → `/files/cnc/pairs`，
+//        三者**逐个镜像 `/files` 下的一个子命名空间**，比原先更贴合「目录镜像命名空间」。
+//      - `parts/` 下的 4 个实现文件（crud / batch / bid / print）**逐个只打
+//        `/parts/*`**；文件对象域的 6 条 `/files/objects/*` 全在 `files/objects.ts`
+//        （含 `listPartFilesByOwner` —— 它虽被装配件报价页等按 owner 查询消费，
+//        但端点是 files 域的，跟实现文件走）。`parts/index.ts` 为兼容 `@/api/parts`
+//        聚合导入，仍 re-export 整个 `files/objects`。
+//        ⇒ **`files/objects.ts` 现为纯 files 域端点，无任何例外条目。**
 //
 //   ⚠️ 旧路径现在的行为（改动理由，也是「不能留兼容层」的依据）：
 //     - `GET /shelves/processes` → **400，且响应体不是 `R` 信封**。它现在落到

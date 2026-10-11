@@ -242,13 +242,24 @@ export type PartListResultSchema = z.infer<typeof partListResultSchema>;
  *  另起类型别名便于 useQuery 类型签名清晰表达「查询的是 com 域端点」。 */
 export type UnionListResultSchema = PartListResultSchema;
 
-/** 2026-09-29 新增：part-file 列表项 schema（与 backend-rust PartFileItem 对齐）。
- *  12 字段显式声明（Zod 默认 strip 模式缺字段会静默丢）：
+/** 2026-09-29 新增：part-file 列表项 schema（与 backend-rust PartFileOut 对齐）。
+ *  前端建模 12 字段显式声明（Zod 默认 strip 模式缺字段会静默丢）：
  *  id / version / owner_id / kind / file_type / original_filename / file_size /
  *  content_type / upload_status / content_sha256 / created_at / paired_file_id。
  *  kind 锁 z.enum 与 backend-rust PartFileKind 字符串值对齐（DRAWING / 3D_MODEL /
  *  G_CODE / SETUP_SHEET / ASSEMBLY_MASTER / CAD_2D）；content_sha256 / paired_file_id
- *  nullable（NULL = 未计算 / 未配对）。 */
+ *  nullable（NULL = 未计算 / 未配对）。
+ *
+ *  后端 `PartFileOut` 共 15 字段，本 schema **有意只建 12 个**：`owner_kind`
+ *  （PART / ASSEMBLY）、`object_key`（CAS key，消费侧一律走
+ *  `GET /files/objects/{id}/url` 拿临时 URL）、`created_by` 三个未建模。
+ *  ⚠️ 2026-10-13 订正：**`owner_kind` 的缺口是有登记的**：它是多态 owner 的判别键，
+ *  而本 schema 会把它 strip 掉 ⇒ 列表项无法区分「零件的图纸」与「装配件的总装图」。
+ *  本 schema 只服务 owner 维度列表端点（唯一解析处是 `usePartFilesListQuery` 的
+ *  queryFn），而该 query 的消费方查的全是零件（零件详情 / 制定工序页图纸预览 /
+ *  大屏零件预览）；装配件的文件列表走 `GET /assemblies/{id}` 详情响应的 `files[]`，
+ *  不经列表端点 ⇒ 当前不存在「拿一批混合 owner 的列表项再按 owner 分流」的消费方，
+ *  维持不建模；一旦出现这样的消费方，必须同步加 `owner_kind` 字段。 */
 export const partFileSchema = z.object({
   id: z.string(),
   version: z.number(),
@@ -268,12 +279,10 @@ export type PartFileSchema = z.infer<typeof partFileSchema>;
 
 /** part-file 列表分页结果。
  *
- * limit / offset 声明成 optional 的原因（后端契约对齐）：backend-rust
- * `src/modules/part_file/vo/part_file.rs:58-62` 的 `PartFileListOut` 真契约只返回
- * `items` + `total` 2 字段，没有 limit/offset。
- *  原 schema 强校验 limit/offset → 运行时 100% ZodError 崩溃。
- *  现改为 optional —— 即使后端后续扩展 limit/offset 字段也不会破前端（向后兼容），
- *  Zod 默认 strip 模式会静默丢弃多余字段，前端不消费也无所谓。 */
+ * `limit` / `offset` 声明成 optional：后端 `PartFileListOut` 真契约只返回 `items` +
+ * `total` 2 字段（backend-rust `src/modules/files/part_file/vo/part_file.rs`），没有
+ * limit/offset —— 声明成 optional 是为了后端将来扩展这两个键时不破前端（Zod 默认
+ * strip 模式会静默丢弃多余字段，前端不消费也无所谓）。 */
 export const partFileListResultSchema = z.object({
   items: z.array(partFileSchema),
   total: z.number(),
@@ -504,20 +513,21 @@ export const assemblyDetailFlatSchema = z
 
 export type AssemblyDetailFlatSchema = z.infer<typeof assemblyDetailFlatSchema>;
 
-/** 装配件文件出参数组。
+/** 装配件详情 `files[]` 的元素形状（`AssemblyFileRef`，3 字段）。
  *
- * 后端 uploadAssemblyPdf（POST /api/v2/assemblies/{id}/files）实际响应是
- * `R<Vec<AssemblyFileRef>>`（数组），不是 `R<AssemblyDetail>`。前端旧 bug
- * 走 parseAssemblyDetail 把数组塞进 z.object → ZodError。本 schema 锁死数组形态，
- * 让 mapper（api/assembly.ts::uploadAssemblyPdf）在 api 边界守门。 */
-export const assemblyFileRefSchemaArray = z.array(assemblyFileRefSchema);
+ * 唯一消费方是 `assemblyDetailFlatSchema` 的 files 段（`GET /assemblies/{id}` 的
+ * 详情响应）。⚠️ 它**不是**文件对象域的形状：上传端点 `POST /files/objects` 的响应是
+ * **单个 `PartFileItem`**（前端 12 字段，后端 `PartFileOut` 15 字段，见
+ * `@/types/part_file.ts::PartFileItem`，由 `api/assembly.ts::uploadAssemblyPdf` 包
+ * `uploadFileObject` 发出），两者字段集不通用。
+ * `PartFileItem` 走列文件路径的 `partFileSchema` 守门（见上）。 */
 
 /** 装配件创建响应（`POST /api/v2/assemblies` 的 201 body）：顶层实体 + 刚建出的子件。
  *
  * 2026-10-05 补：此前 `createAssembly` 只做类型断言、无守门，而建单结果直接决定
  * 「哪些本地行算已建出」（`usePartBatchPdf` 的 createdTargets 记账）⇒ 响应形状不对时
- * 会在**没有任何报错**的情况下把子件挂错行 / 记不上账。守门与 `uploadAssemblyPdf` /
- * `getAssembly` 同款（api 边界 parse）。
+ * 会在**没有任何报错**的情况下把子件挂错行 / 记不上账。守门与 `getAssembly` 同款
+ * （api 边界 parse）。
  *
  * 外层 `.strict()`：本域已经吃过一次键名回归的亏（`AssemblyCreateResult` 的子件键是
  * `created_children`，而 `AssemblyDetail` 那边叫 `children`）。两个键名同时存在或被

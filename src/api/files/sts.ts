@@ -46,7 +46,7 @@ import type {
  * 调用方传入 purpose / filename / content_sha256 / ext，rust 后端按 (purpose,
  * filename, content_sha256, ext) 派生唯一 tmp_key，返回 STS 凭证四元组 + COS 桶
  * / region。前端拿到响应后用 `cos-js-sdk-v5` 直传 COS tmp 区，后续业务端点
- *（`confirmPartFile` / `batchCreateParts`）再携带 `tmp_key` 让后端 head + copy
+ *（`confirmFileObject` / `batchCreateParts`）再携带 `tmp_key` 让后端 head + copy
  * tmp → 正式 CAS key + 落业务表。
  *
  * 走 `api`（baseURL `/api/v2`，经 rust 鉴权转发），与业务其它端点共享拦截器

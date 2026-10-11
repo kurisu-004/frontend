@@ -46,14 +46,14 @@ export function canPrintPartDrawing(role: PartRoleMapLike): boolean {
 }
 
 /**
- * 图纸文件下载入口是否可见（`GET /part-files/{id}/url` 的前端闸门）。
+ * 图纸文件下载入口是否可见（`GET /files/objects/{id}/url` 的前端闸门）。
  *
  * 与 `canPrintPartDrawing` **共用同一个权限点**（逐字相同）：后端
  * `PartFileService::get_file_with_url` 与零件图纸打印端点共用同一个
  * `require_permission("part.drawing.print")` 闸门（默认授权矩阵与打印矩阵逐格相同，
  * 由管理员在 RBAC 面板维护）。
  * ⚠️ 这个权限点的**默认矩阵不含**报工台 HMI（SHELF_ACCOUNT）：后端 part_file 的列表 /
- * content 对它放开了（工控机预览图纸打的就是这两条），而 `/part-files/{id}/url`
+ * content 对它放开了（工控机预览图纸打的就是这两条），而 `/files/objects/{id}/url`
  * 没跟着放开 —— 它回的是 COS 预签直链（1 小时有效），拿到即可脱离本后端直接访问、
  * 直链可外发；工控机看图纸走 content（后端代理、逐次过 RBAC）就够了。所以前端三页图纸
  * 预览弹窗的「下载文件」按钮必须对未授予该权限点的账号隐藏，否则就是「可见但必 403」。

@@ -14,17 +14,24 @@
      - 新建表单校验从 el-form `FormRules` 换成 Zod（`OutsourceQuoteFormSchema.ts`）。
 
      仍留在本页壳里的：页级 lookup（OUTSOURCE 工序列表 / 可报价零件 picker）、图纸预览
-     业务（ensureDrawing + previewDrawing + blob 缓存）、3 个 dialog 的挂载。
+     业务（ensureDrawing + previewDrawing + 转图轮询 + blob 缓存）、3 个 dialog 的挂载。
+
+     2026-10-13 图纸预览切 CI 转图直链：
+     - PDF 的**首选**渲染路径是 `GET /files/objects/{id}/preview` → 逐页图片直链 →
+       `OutsourceQuotePdfPreview` 里的 `<ImagePager>`；`/content` blob 降级为
+       「查看原始 PDF」逃生口 + 转图不可用时的自动兜底。
+     - 图片类文件不参与转图，仍是 blob → el-image。
+     - 降级原因以 `degradeHint` 传进弹窗渲染成一行提示，不静默换渲染路径。
 -->
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { RefreshLeft } from '@element-plus/icons-vue';
 import { listProcesses } from '@/api/process';
 import { listQuotableParts } from '@/api/outsource';
-import { listPartFilesByOwner } from '@/api/assembly';
-import { api } from '@/api/http';
+import { fetchPartFileContent, listPartFilesByOwner } from '@/api/files/objects';
+import { usePreviewPolling } from '@/composables/usePreviewPolling';
 import { canCreate } from '@/utils/outsourceQuotePermissions';
 import { useOutsourceQuoteListStore } from './composables/useOutsourceQuoteListStore';
 import { useOutsourceQuoteForm } from './composables/useOutsourceQuoteForm';
@@ -67,13 +74,15 @@ async function loadLookups(): Promise<void> {
 }
 
 // ============================================================
-// 图纸行内预览：行点击 / 图号链接 → 该零件的 DRAWING → blob URL → 全屏预览
+// 图纸行内预览：行点击 / 图号链接 → 该零件的 DRAWING → CI 转图直链（或原始 PDF blob）
 // ============================================================
 const drawingPreviewVisible = ref(false);
 const drawingPreviewUrl = ref<string | null>(null);
 const drawingPreviewTitle = ref('图纸预览');
 const drawingPreviewIsPdf = ref(false);
 const drawingPreviewLoading = ref(false);
+// 2026-10-13：用户在图片模式下点「查看原始 PDF」。
+const drawingShowOriginal = ref(false);
 // 缓存：同一 part_id 重复点不重复拉取
 const drawingCache = new Map<string, PartFileItem | null>();
 
@@ -81,9 +90,22 @@ function isPdfType(t: string): boolean {
   return t.toUpperCase() === 'PDF';
 }
 
+/**
+ * CI 转图轮询（2026-10-13）。只有 PDF 才有转图可言；弹窗关着时不轮询。
+ * `drawingPreviewFile` 存的是**文件对象 id 所在的 PartFileItem**，预览端点只认它。
+ */
+const drawingPreviewFile = ref<PartFileItem | null>(null);
+const preview = usePreviewPolling({
+  fileId: () =>
+    drawingPreviewFile.value && isPdfType(drawingPreviewFile.value.file_type)
+      ? drawingPreviewFile.value.id
+      : '',
+  enabled: () => drawingPreviewVisible.value,
+});
+
 async function ensureDrawing(partId: string): Promise<PartFileItem | null> {
   if (drawingCache.has(partId)) return drawingCache.get(partId) ?? null;
-  // v2 /part-files?owner_id=…&kind=…（owner 多态）
+  // v2 /files/objects?owner_id=…&kind=…（owner 多态）
   const files = (await listPartFilesByOwner(partId, 'DRAWING')).items;
   const f = files[0] ?? null;
   drawingCache.set(partId, f);
@@ -98,14 +120,13 @@ async function previewDrawing(row: OutsourceQuoteSchema): Promise<void> {
       ElMessage.warning('该零件暂无图纸');
       return;
     }
-    // v2 无 /files/* 路由，文件内容走 /part-files/{id}/content
-    const resp = await api.get<Blob>(`/part-files/${encodeURIComponent(f.id)}/content`, {
-      responseType: 'blob',
-    });
-    if (drawingPreviewUrl.value) URL.revokeObjectURL(drawingPreviewUrl.value);
-    drawingPreviewUrl.value = URL.createObjectURL(resp.data);
+    drawingPreviewFile.value = f;
+    drawingShowOriginal.value = false;
     drawingPreviewTitle.value = `图纸预览 — ${row.part_drawing_no ?? ''} / ${row.part_name ?? ''}`;
     drawingPreviewIsPdf.value = isPdfType(f.file_type);
+    // PDF 不预拉 blob：先走转图，用户点「查看原始 PDF」或转图降级时再拉。
+    // 提前拉会让「图片模式省带宽」当场作废。图片类文件仍是 blob → el-image。
+    if (!drawingPreviewIsPdf.value) await loadDrawingBlob(f);
     drawingPreviewVisible.value = true;
   } catch (e) {
     ElMessage.error((e as Error).message ?? '图纸加载失败');
@@ -114,12 +135,69 @@ async function previewDrawing(row: OutsourceQuoteSchema): Promise<void> {
   }
 }
 
+/** 拉原始 PDF 的 blob URL（原始 PDF 模式共用；caller 负责 revoke）。 */
+async function loadDrawingBlob(f: PartFileItem): Promise<void> {
+  const blob = await fetchPartFileContent(f.id);
+  if (drawingPreviewFile.value?.id !== f.id) return; // 期间换了行 ⇒ 丢弃
+  if (drawingPreviewUrl.value) URL.revokeObjectURL(drawingPreviewUrl.value);
+  drawingPreviewUrl.value = URL.createObjectURL(blob);
+}
+
+/**
+ * PDF 的原始 PDF 路径有两条触发：用户点「查看原始 PDF」，或转图轮询降级。
+ * 二者合并成一条 watch —— 降级那一刻的表现与用户主动切换完全一致。
+ *
+ * ⚠️ 模板上的 `:pages` 传的是 `drawingShowOriginal ? [] : preview.pages.value` 而不是
+ * 直接传 `preview.pages.value`：那个子组件用「pages 非空」判图片模式，而转图 ready
+ * 之后 pages 就一直非空，直接传会让「查看原始 PDF」变成**空操作** —— 点击确实触发了
+ * 本 watch 的 blob 拉取，但子组件仍停在图片模式分支上，用户看不到任何变化。
+ */
+watch(
+  [drawingPreviewFile, drawingShowOriginal, preview.degraded],
+  async ([f, wantOriginal, degraded]) => {
+    if (!f || !isPdfType(f.file_type)) return;
+    if (!wantOriginal && !degraded) return;
+    try {
+      await loadDrawingBlob(f);
+    } catch (e) {
+      ElMessage.error((e as Error).message ?? '加载原始 PDF 失败');
+    }
+  },
+  { immediate: true },
+);
+
+/**
+ * 「有东西在路上」的文案，传给弹窗的 `busyHint`。
+ *
+ * 判据与弹窗那三条分支一一对应：**两条路都还没有可渲染的东西**时给提示，null 才表示
+ * 真的没有可预览内容。分两档是因为它们在说不同的事：转图在等 CI，「查看原始 PDF」
+ * 已点、blob 在路上 —— 混成一句会让工人以为点按钮没用。
+ *
+ * ⚠️ 「已决定看原始 PDF」这一档的判据必须**同时**看 `drawingShowOriginal` 与
+ * `preview.degraded`：降级那一刻 loading 已经落回 false，只认它的话会一路返回 null，
+ * 于是 `pages=[]` + `url=null` + `busyHint=null` 正好落进子组件的「无可预览内容」，
+ * 而它正上方的 `.degrade-hint` 写的是「已改用原始 PDF 预览」—— 两句话自相矛盾，
+ * 且 `/content` 失败时会永久停在这里。其余五处承载点靠
+ * `wantsOriginalPdf = showOriginalPdf || preview.degraded` 天然覆盖这一档，
+ * 只有这条受控 props 形态要在 caller 侧手写判据，手写就容易漏。
+ */
+const drawingBusyHint = computed<string | null>(() => {
+  if (!drawingPreviewIsPdf.value) return null;
+  if (drawingShowOriginal.value || preview.degraded.value) {
+    return drawingPreviewUrl.value ? null : '加载原始 PDF…';
+  }
+  return preview.loading.value ? '图纸转图中…' : null;
+});
+
 function closeDrawingPreview(): void {
   drawingPreviewVisible.value = false;
   if (drawingPreviewUrl.value) {
     URL.revokeObjectURL(drawingPreviewUrl.value);
     drawingPreviewUrl.value = null;
   }
+  drawingPreviewFile.value = null;
+  drawingShowOriginal.value = false;
+  preview.stop();
 }
 
 // ============================================================
@@ -150,6 +228,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   if (drawingPreviewUrl.value) URL.revokeObjectURL(drawingPreviewUrl.value);
+  preview.stop();
   store.$dispose();
 });
 </script>
@@ -218,8 +297,12 @@ onBeforeUnmount(() => {
       :url="drawingPreviewUrl"
       :title="drawingPreviewTitle"
       :is-pdf="drawingPreviewIsPdf"
+      :pages="drawingShowOriginal ? [] : preview.pages.value"
+      :degrade-hint="preview.degradedReason.value"
+      :busy-hint="drawingBusyHint"
       @update:model-value="(v: boolean) => (drawingPreviewVisible = v)"
       @close="closeDrawingPreview"
+      @viewOriginal="drawingShowOriginal = true"
     />
   </div>
 </template>

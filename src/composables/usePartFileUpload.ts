@@ -9,10 +9,14 @@
 //      （rust 转发薄壳 POST /api/v2/files/sts-tmp-keys，2026-09-29 起
 //       content_sha256 必传完整 64 hex + 新增 ext 必填）
 //   3. 拼装 UploadIntentsOut（part-file 专用形状）喂给 useCosUpload 直传
-//   4. confirmPartFile(ownerPartId, { kind, tmp_key, sha, ..., ext }) → PartFileItem
+//   4. confirmFileObject({ owner_kind, owner_id, kind, tmp_key, sha, ..., ext }) → PartFileItem
 //
 // 为什么独立 composable：PartBatchPdfTab 是批量场景 A，确认端点不同
-//（batchCreateParts 而非 confirmPartFile），不适合套同一条 onSubmit 路径。
+//（batchCreateParts 而非 confirmFileObject），不适合套同一条 onSubmit 路径。
+//
+// ⚠️ 本文件的 `vi.mock` 目标（usePartFileUpload.spec.ts）必须**同步**改到
+// `@/api/files/objects` 且 mock 的导出名是 `confirmFileObject`，否则 mock 挂不上、
+// 测试会在真实 HTTP 上跑。
 //
 // 雪花 ID 全程 string（owner_partId = string；PartFileItem.id = string）。
 //
@@ -28,7 +32,7 @@
 import { ref, unref, type Ref } from 'vue';
 import { computeSha256 } from '@/utils/fileHash';
 import { parseFileExt } from '@/utils/fileExt';
-import { confirmPartFile } from '@/api/parts/file';
+import { confirmFileObject } from '@/api/files/objects';
 import { grantStsTmpKey } from '@/api/files/sts';
 import { useCosUpload, type CosUploadItem } from '@/composables/useCosUpload';
 import { PartFileKindToStsPurpose, type StsTmpKeysResponse } from '@/types/sts';
@@ -220,9 +224,13 @@ export function usePartFileUpload(opts: UsePartFileUploadOptions): UsePartFileUp
         throw new Error(uploaded?.error ?? 'COS 上传失败');
       }
 
-      // 步骤 4：confirmPartFile（场景 B 专用端点，让后端 head + copy + 插表）
+      // 步骤 4：confirmFileObject（场景 B 专用端点 `POST /files/objects/confirm`，
+      // 让后端 head + copy + 插表）。owner 从 path 段搬进 body：端点对零件与装配件
+      // 一视同仁，本 composable 恒为 owner_kind='PART'。
       // 2026-09-29 新增 ext 必传字段，与 rust ConfirmFileIn 对齐。
-      const confirmed = await confirmPartFile(curOwnerId, {
+      const confirmed = await confirmFileObject({
+        owner_kind: 'PART',
+        owner_id: curOwnerId,
         kind: curKind as PartFileKind,
         tmp_key: item.tmp_key,
         content_sha256: sha,

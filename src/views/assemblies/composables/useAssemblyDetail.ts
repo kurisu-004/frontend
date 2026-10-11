@@ -7,7 +7,7 @@
 // - 权限矩阵（cancel / delete / edit-content / add-child / upload-pdf）
 // - 编辑元数据（updateAssembly）+ 取消 / 删除
 // - 添加子件 + 上传总装 PDF
-// - 子件图号点击 → 全屏 PDF 预览（Blob URL）
+// - 子件图号点击 → 图纸预览（2026-10-13：首选 CI 转图直链，/content blob 为兜底）
 // - 客户列表加载（编辑对话框用）+ 申请人搜索
 // - 状态标签 helpers
 //
@@ -138,7 +138,7 @@ export interface UseAssemblyDetailReturn {
   deleteAssembly: (serialInput: string) => Promise<boolean>;
   addChild: () => Promise<boolean>;
   uploadPdf: (file: UploadFile) => Promise<boolean>;
-  /** 子件图号点击 → 拉 PDF Blob，返回 blob URL（或抛错）。 */
+  /** 子件图号点击 → 拉原始 PDF Blob（**兜底路径**，首选是 `/preview` 转图直链）。 */
   fetchDrawingBlob: (drawing: PartFileItem) => Promise<string>;
   // helpers
   statusLabel: (s: AssemblyStatus | string) => string;
@@ -426,13 +426,10 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
     }
   }
 
-  /** 2026-09-29 review 第 1 轮 C2 修复：后端 uploadAssemblyPdf 响应是
-   *  `R<Vec<AssemblyFileRef>>`（数组），不是 `R<AssemblyDetail>`。响应只携带
-   *  新建的 AssemblyFileRef 列表，detail / children 走 fetchData() 重拉。
-   *
-   *  2026-10-05：`created.length` 是**上传成功的总装 PDF 份数**（该端点只做 SHA-256
-   *  CAS + COS PUT + INSERT `t_part_file(kind='ASSEMBLY_MASTER')`，核实过它不建任何
-   *  子件），所以文案不能说成「自动创建 N 个子件」。 */
+  /** 上传一份总装 PDF（`uploadAssemblyPdf` → `POST /files/objects`，owner_kind=ASSEMBLY
+   *  + kind=ASSEMBLY_MASTER）。该端点是纯文件入库：只做 SHA-256 CAS + COS PUT +
+   *  INSERT `t_part_file`，**不建任何子件** ⇒ 成功文案只说总装图已保存，子件请另行
+   *  添加。响应是单个 `PartFileItem`（detail / children 走 fetchData() 重拉）。 */
   async function uploadPdfFn(file: UploadFile): Promise<boolean> {
     if (!file.raw) return false;
     if (!file.name.toLowerCase().endsWith('.pdf')) {
@@ -441,9 +438,9 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
     }
     if (!assemblyId.value) return false;
     try {
-      const created = await uploadAssemblyPdf(assemblyId.value, file.raw);
+      await uploadAssemblyPdf(assemblyId.value, file.raw);
       await fetchData();
-      ElMessage.success(`上传成功：已上传 ${created.length} 份总装 PDF（子件请单独添加）`);
+      ElMessage.success('上传成功：总装 PDF 已保存（子件请单独添加）');
       return true;
     } catch (e) {
       ElMessage.error((e as Error).message ?? '上传总装 PDF 失败');
@@ -452,12 +449,24 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
   }
 
   /**
-   * 拉取 PDF Blob（子件图号点击 → 全屏预览用）。
+   * 拉 PDF Blob（子件图号点击 → 预览用）。
+   *
+   * ⚠️ **2026-10-13 起这是「原始 PDF」兜底路径，不是预览首选**：预览首选是
+   * `GET /files/objects/{id}/preview` 的 CI 转图直链（轮询编排见
+   * `composables/usePreviewPolling.ts`，在 `AssemblyChildrenTable.vue` 里接）。
+   * 本函数仍被两处调用：用户点「查看原始 PDF」，或转图降级（端点不支持 / CI 失败 /
+   * 超时）自动兜底。
+   *
+   * ⚠️ **入参是文件对象，不是装配件**：这里的 `files[]` 来自 `GET /assemblies/{id}`
+   * 详情响应，owner 是 PART（子件）或 ASSEMBLY（总装图），但预览端点与 `/content`
+   * 都只认**文件对象 id**，owner 语义由后端按文件行自己解析 —— 前端只管传 `drawing.id`，
+   * 装配件侧不需要另开一条预览链路。
+   *
    * 调用方负责 URL.revokeObjectURL 释放（onDrawingPreviewClosed）。
    */
   async function fetchDrawingBlob(drawing: PartFileItem): Promise<string> {
-    // 2026-09-16：v2 无 /files/* 路由，文件内容走 /part-files/{id}/content
-    const resp = await api.get<Blob>(`/part-files/${drawing.id}/content`, {
+    // 文件内容走 v2 /files/objects/{id}/content（2026-10-13 files 域重组后）
+    const resp = await api.get<Blob>(`/files/objects/${drawing.id}/content`, {
       responseType: 'blob',
     });
     return URL.createObjectURL(resp.data);

@@ -110,7 +110,7 @@ describe('canDownloadPartFile —— 与打印同判据（2026-10-14）', () => 
   });
 
   it('纯 SHELF_ACCOUNT（工控机）没有该权限点 ⇒ 不可见下载入口', () => {
-    // 这正是工控机账号的形状（报工台路由守卫角色）。后端对 `/part-files/{id}/url`
+    // 这正是工控机账号的形状（报工台路由守卫角色）。后端对 `/files/objects/{id}/url`
     // 刻意没放开（预签直链可外传），前端若在这里放行就是「可见但必 403」。
     seedUser({ roles: ['SHELF_ACCOUNT'], permissions: [] });
     expect(canDownloadPartFile({})).toBe(false);

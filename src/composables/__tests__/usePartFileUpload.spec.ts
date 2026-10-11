@@ -3,7 +3,7 @@
 // usePartFileUpload 单元测试（2026-09-17 frontend-cos-sts-python）。
 //
 // 2026-09-17 STS 端口迁移验证：
-// - upload() 全链路：hash → grantStsTmpKey (python STS) → COS 直传 → confirmPartFile；
+// - upload() 全链路：hash → grantStsTmpKey (python STS) → COS 直传 → confirmFileObject；
 // - request body 走 python StsTmpKeysRequest 形态（purpose / filename /
 //   content_sha256 / content_type），不再含 owner_part_id / kind / file_size；
 // - caller 用 crypto.randomUUID() 生成 client_ref，grantStsTmpKey 单端口 1-key
@@ -14,7 +14,7 @@
 // - ownerPartId / kind 接受 Ref<string> / getter 两种形态；
 // - uploading / lastError 状态在生命周期内同步。
 //
-// 不发起真实 HTTP：mock @/api/files/sts、@/api/parts/file、@/utils/fileHash、
+// 不发起真实 HTTP：mock @/api/files/sts、@/api/files/objects、@/utils/fileHash、
 // cos-js-sdk-v5。fileHash 用 fake 实现（SHA-256 取文件名 hex），避免依赖
 // hash-wasm 在 vitest 的 wasm 加载。
 //
@@ -29,15 +29,15 @@ import { ref } from 'vue';
 // ============ mocks ============
 
 const grantStsTmpKeyMock = vi.fn();
-const confirmPartFileMock = vi.fn();
+const confirmFileObjectMock = vi.fn();
 const computeSha256Mock = vi.fn();
 
 vi.mock('@/api/files/sts', () => ({
   grantStsTmpKey: (...args: unknown[]) => grantStsTmpKeyMock(...args),
 }));
 
-vi.mock('@/api/parts/file', () => ({
-  confirmPartFile: (...args: unknown[]) => confirmPartFileMock(...args),
+vi.mock('@/api/files/objects', () => ({
+  confirmFileObject: (...args: unknown[]) => confirmFileObjectMock(...args),
 }));
 
 vi.mock('@/utils/fileHash', () => ({
@@ -112,7 +112,7 @@ function makeExistingFile() {
 
 beforeEach(() => {
   grantStsTmpKeyMock.mockReset();
-  confirmPartFileMock.mockReset();
+  confirmFileObjectMock.mockReset();
   computeSha256Mock.mockReset();
   uploadFileSpy.mockReset();
   // 默认 SHA = 64-char a's
@@ -127,7 +127,7 @@ afterEach(() => {
 // ============ tests ============
 
 describe('usePartFileUpload.upload', () => {
-  it('happy path：hash → grantStsTmpKey → COS → confirmPartFile 全链路', async () => {
+  it('happy path：hash → grantStsTmpKey → COS → confirmFileObject 全链路', async () => {
     grantStsTmpKeyMock.mockResolvedValueOnce(makeStsResponse());
     const confirmed = {
       id: '190000000000999',
@@ -143,7 +143,7 @@ describe('usePartFileUpload.upload', () => {
       created_at: '2026-09-16T10:00:00Z',
       paired_file_id: null,
     };
-    confirmPartFileMock.mockResolvedValueOnce(confirmed);
+    confirmFileObjectMock.mockResolvedValueOnce(confirmed);
 
     const { upload } = usePartFileUpload({
       ownerPartId: ref<string>('190000000000001'),
@@ -179,18 +179,19 @@ describe('usePartFileUpload.upload', () => {
     expect(cosParams.Bucket).toBe('bucket-1250000000');
     expect(cosParams.Region).toBe('ap-shanghai');
 
-    // confirmPartFile：tmp_key 来自 STS 响应（不含 owner 信息，后端按 path 派生 CAS key）
-    expect(confirmPartFileMock).toHaveBeenCalledTimes(1);
-    const [confirmPartId, confirmBody] = confirmPartFileMock.mock.calls[0]!;
-    expect(confirmPartId).toBe('190000000000001');
+    // confirmFileObject：tmp_key 来自 STS 响应（不含 owner 信息，后端按 path 派生
+    // CAS key）；owner 在 body 里（owner_kind 恒 PART，本 composable 只处理零件）
+    expect(confirmFileObjectMock).toHaveBeenCalledTimes(1);
+    const [confirmBody] = confirmFileObjectMock.mock.calls[0]!;
     expect(confirmBody).toEqual({
+      owner_kind: 'PART',
+      owner_id: '190000000000001',
       kind: 'DRAWING',
       tmp_key: 'tmp/spike/seq_a.pdf',
       content_sha256: 'a'.repeat(64),
       original_filename: 'a.pdf',
       file_size: '5',
       content_type: 'application/pdf',
-      // 2026-09-29 新增 ext 字段（rust ConfirmFileIn 对齐）
       ext: 'pdf',
     });
 
@@ -200,7 +201,7 @@ describe('usePartFileUpload.upload', () => {
 
   it('PartFileKind → StsPurpose 映射（3D_MODEL / CAD_2D 全覆盖）', async () => {
     grantStsTmpKeyMock.mockResolvedValueOnce(makeStsResponse());
-    confirmPartFileMock.mockResolvedValueOnce(makeExistingFile());
+    confirmFileObjectMock.mockResolvedValueOnce(makeExistingFile());
 
     const { upload } = usePartFileUpload({
       ownerPartId: ref<string>('190000000000001'),
@@ -210,13 +211,13 @@ describe('usePartFileUpload.upload', () => {
 
     const [reqArg] = grantStsTmpKeyMock.mock.calls[0]!;
     expect((reqArg as { purpose: string }).purpose).toBe('cad_2d');
-    const [, confirmBody] = confirmPartFileMock.mock.calls[0]!;
+    const [confirmBody] = confirmFileObjectMock.mock.calls[0]!;
     expect((confirmBody as { kind: string }).kind).toBe('CAD_2D');
   });
 
   it('ownerPartId 不传 grantStsTmpKey（python 端端口本身就不感知 owner，CAS key 由 confirm 按 path 派生）', async () => {
     grantStsTmpKeyMock.mockResolvedValueOnce(makeStsResponse());
-    confirmPartFileMock.mockResolvedValueOnce(makeExistingFile());
+    confirmFileObjectMock.mockResolvedValueOnce(makeExistingFile());
 
     const { upload } = usePartFileUpload({
       ownerPartId: ref<string>('190000000000001'),
@@ -227,14 +228,14 @@ describe('usePartFileUpload.upload', () => {
     const [reqArg] = grantStsTmpKeyMock.mock.calls[0]!;
     // ownerPartId 永远不进 grantStsTmpKey body（与 backend-rust upload-intents 不同）
     expect((reqArg as Record<string, unknown>).owner_part_id).toBeUndefined();
-    // confirmPartFile 才用 ownerPartId
-    const [confirmPartId] = confirmPartFileMock.mock.calls[0]!;
-    expect(confirmPartId).toBe('190000000000001');
+    // confirmFileObject 的 owner_id 才用 ownerPartId
+    const [confirmBody] = confirmFileObjectMock.mock.calls[0]!;
+    expect((confirmBody as { owner_id: string }).owner_id).toBe('190000000000001');
   });
 
   it('kind = 3D_MODEL → purpose = 3d_model（与 python Literal 对齐）', async () => {
     grantStsTmpKeyMock.mockResolvedValueOnce(makeStsResponse());
-    confirmPartFileMock.mockResolvedValueOnce(makeExistingFile());
+    confirmFileObjectMock.mockResolvedValueOnce(makeExistingFile());
 
     const { upload } = usePartFileUpload({
       ownerPartId: ref<string>('190000000000001'),
@@ -248,7 +249,7 @@ describe('usePartFileUpload.upload', () => {
 
   it('content_sha256 必传完整 64 hex（2026-09-29 升级，不再 .slice(0, 16)）', async () => {
     grantStsTmpKeyMock.mockResolvedValueOnce(makeStsResponse());
-    confirmPartFileMock.mockResolvedValueOnce(makeExistingFile());
+    confirmFileObjectMock.mockResolvedValueOnce(makeExistingFile());
 
     // SHA = 64 个不同字符（'0123456789abcdef' 循环 4 次），验证完整 64 位直传
     const sha64 = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
@@ -269,7 +270,7 @@ describe('usePartFileUpload.upload', () => {
 
   it('ext 由 utils/fileExt.parseFileExt 解析：文件名大写 / 多 dot 仍取最后一段', async () => {
     grantStsTmpKeyMock.mockResolvedValueOnce(makeStsResponse());
-    confirmPartFileMock.mockResolvedValueOnce(makeExistingFile());
+    confirmFileObjectMock.mockResolvedValueOnce(makeExistingFile());
 
     const { upload } = usePartFileUpload({
       ownerPartId: ref<string>('190000000000001'),
@@ -304,10 +305,10 @@ describe('usePartFileUpload.upload', () => {
     await expect(upload(makeFile('a.pdf'))).rejects.toThrow('COS network 500');
     expect(lastError.value).toBe('COS network 500');
     expect(uploading.value).toBe(false);
-    expect(confirmPartFileMock).not.toHaveBeenCalled();
+    expect(confirmFileObjectMock).not.toHaveBeenCalled();
   });
 
-  it('grantStsTmpKey 抛错 → upload 抛错，confirmPartFile 不被调用', async () => {
+  it('grantStsTmpKey 抛错 → upload 抛错，confirmFileObject 不被调用', async () => {
     grantStsTmpKeyMock.mockRejectedValueOnce(new Error('STS service 502'));
 
     const { upload, lastError } = usePartFileUpload({
@@ -318,7 +319,7 @@ describe('usePartFileUpload.upload', () => {
     await expect(upload(makeFile('a.pdf'))).rejects.toThrow('STS service 502');
     expect(lastError.value).toBe('STS service 502');
     expect(uploadFileSpy).not.toHaveBeenCalled();
-    expect(confirmPartFileMock).not.toHaveBeenCalled();
+    expect(confirmFileObjectMock).not.toHaveBeenCalled();
   });
 
   it('ownerPartId 为空时抛错（场景：路由未带 id）', async () => {
@@ -332,7 +333,7 @@ describe('usePartFileUpload.upload', () => {
 
   it('ownerPartId 支持 getter 形态（响应非 ref 的派生 ID）', async () => {
     grantStsTmpKeyMock.mockResolvedValueOnce(makeStsResponse());
-    confirmPartFileMock.mockResolvedValueOnce(makeExistingFile());
+    confirmFileObjectMock.mockResolvedValueOnce(makeExistingFile());
 
     let captured = 'INIT';
     const { upload } = usePartFileUpload({
@@ -346,14 +347,14 @@ describe('usePartFileUpload.upload', () => {
     await upload(f);
 
     expect(captured).toBe('CALLED');
-    const [confirmPartId] = confirmPartFileMock.mock.calls[0]!;
-    expect(confirmPartId).toBe('190000000000002');
-    expect(confirmPartFileMock.mock.calls[0]![1]).toMatchObject({ kind: '3D_MODEL' });
+    const [confirmBody] = confirmFileObjectMock.mock.calls[0]!;
+    expect(confirmBody).toMatchObject({ owner_kind: 'PART', owner_id: '190000000000002' });
+    expect(confirmBody).toMatchObject({ kind: '3D_MODEL' });
   });
 
   it('file_size 按 CLAUDE.md §3 走 string 序列化（v2 i64 雪花序列化器对齐）', async () => {
     grantStsTmpKeyMock.mockResolvedValueOnce(makeStsResponse());
-    confirmPartFileMock.mockResolvedValueOnce(makeExistingFile());
+    confirmFileObjectMock.mockResolvedValueOnce(makeExistingFile());
 
     const { upload } = usePartFileUpload({
       ownerPartId: ref<string>('190000000000001'),
@@ -362,14 +363,14 @@ describe('usePartFileUpload.upload', () => {
     // makeFile 默认 'hello' (5 bytes)
     await upload(makeFile('a.pdf', 'hello'));
 
-    const [, confirmBody] = confirmPartFileMock.mock.calls[0]!;
+    const [confirmBody] = confirmFileObjectMock.mock.calls[0]!;
     expect((confirmBody as { file_size: unknown }).file_size).toBe('5');
     expect(typeof (confirmBody as { file_size: unknown }).file_size).toBe('string');
   });
 
   it('uploading 状态在 upload 期间为 true，完成后 false', async () => {
     grantStsTmpKeyMock.mockResolvedValueOnce(makeStsResponse());
-    confirmPartFileMock.mockResolvedValueOnce(makeExistingFile());
+    confirmFileObjectMock.mockResolvedValueOnce(makeExistingFile());
 
     const { upload, uploading } = usePartFileUpload({
       ownerPartId: ref<string>('190000000000001'),
@@ -386,7 +387,7 @@ describe('usePartFileUpload.upload', () => {
   it('成功后 lastError 清空', async () => {
     grantStsTmpKeyMock.mockRejectedValueOnce(new Error('first attempt'));
     grantStsTmpKeyMock.mockResolvedValueOnce(makeStsResponse());
-    confirmPartFileMock.mockResolvedValueOnce(makeExistingFile());
+    confirmFileObjectMock.mockResolvedValueOnce(makeExistingFile());
 
     const { upload, lastError } = usePartFileUpload({
       ownerPartId: ref<string>('190000000000001'),

@@ -8,7 +8,20 @@
 
   弹窗形态是**窗口**（不是全屏）：HMI 上工人要点着看图，窗口形态看得见页面其余部分，
   关掉也不用重新走一遍选件。窗口形态下的高度契约见 `src/styles/index.scss` 的
-  `.pdf-preview-dialog.el-dialog:not(.is-fullscreen)` 规则与 `PdfViewer.vue` 文件头。
+  `.pdf-preview-dialog.el-dialog:not(.is-fullscreen)` 规则与 `PdfViewer.vue` 文件头
+  （ImagePager 那侧是 `.img-preview-dialog`，两条规则同款）。
+
+  ── 预览的两条路径（2026-10-13）──────────────────────────────────────
+  PDF 图纸走**两条**，不是一条：
+    1. **图片模式（默认）**：`usePreviewPolling` 打 `GET /files/objects/{id}/preview`，
+       等后端 CI 转出逐页图片直链，交给 `<ImagePager>`。浏览器不下载整份 PDF。
+    2. **原始 PDF 模式**：两条触发路径 ——
+       a) 用户点「查看原始 PDF」（图片模式**少矢量缩放与文字选中**，看细节要能退回）；
+       b) 轮询降级（端点不支持 / CI 失败 / 等超时）时的自动兜底。
+  ⚠️ 降级是**有告知的**：`preview.degradedReason` 渲染成弹窗内的一行提示，
+     不是静默换渲染路径 —— 否则 CI 挂了现场只会看到「预览变慢了」而查不出原因。
+  ⚠️ 本弹窗是 SHELF_ACCOUNT（工控机）的入口，`/content` 与 `/preview` 两条端点
+  后端都对它放开（角色五元组含 SHELF_ACCOUNT），**前端不按角色分流预览路径**。
 
   四个分支（加载中 / PDF / 图片 / 非 PDF）+ `canDownload` 闸门 + `nonPdfHint` 文案 +
   `downloadPreview` 全在本组件内：它们是「预览一张图纸」这一件事的完整口径，拆开就会
@@ -18,14 +31,15 @@
   弹窗不脱离它就会被页面自己的堆叠上下文裁住。
 
   数据流全部是**单次拉取**（不开 query）：一次预览只请求一次文件列表 + 至多一次
-  内容 blob，不参与列表的失效链；`previewToken` 是这条链上唯一的并发控制 —— 连续快速
-  点两张卡时，前一次的响应回来必须被丢弃，否则会把 A 的文件挂到 B 的弹窗里。
+  内容 blob，不参与列表的失效链；`previewToken` 是文件列表 + blob 这条链上唯一的
+  并发控制 —— 连续快速点两张卡时，前一次的响应回来必须被丢弃，否则会把 A 的文件挂到
+  B 的弹窗里。转图轮询那条链的并发控制在 `usePreviewPolling` 内部（自带 token + AbortSignal）。
 -->
 
 <template>
   <el-dialog
     v-model="visible"
-    class="pdf-preview-dialog"
+    class="pdf-preview-dialog img-preview-dialog"
     :title="title"
     :width="dialogSize.width"
     :top="DIALOG_TOP"
@@ -39,7 +53,34 @@
       <span>加载图纸中…</span>
     </div>
 
-    <PdfViewer v-else-if="previewFile && isPdf(previewFile.file_type)" :url="previewBlobUrl" />
+    <!-- 转图等待中：文件列表已到、CI 还在转。这一档必须有自己的文案，
+         否则工人看到的是「无预览内容 + 下载按钮」，会以为图纸坏了。 -->
+    <div v-else-if="isPdfFile && !showImageMode && !wantsOriginalPdf" class="preview-loading">
+      <el-icon :size="32" class="is-loading"><Loading /></el-icon>
+      <span>图纸转图中…</span>
+    </div>
+
+    <!-- 图片模式：CI 转好的逐页直链。图片模式少矢量缩放与文字选中 ⇒ 必须给逃生口。 -->
+    <div v-else-if="showImageMode" class="pdf-image-mode">
+      <ImagePager :key="previewFile?.id" :pages="preview.pages.value" />
+      <el-button class="original-btn" plain @click="showOriginalPdf = true">
+        <el-icon><Document /></el-icon>
+        <span>查看原始 PDF</span>
+      </el-button>
+    </div>
+
+    <!-- 原始 PDF：用户点「查看原始 PDF」，或轮询降级（端点不支持 / CI 失败 / 超时）后的兜底。
+         降级原因渲染成一行提示 —— 静默换渲染路径会让 CI 故障无人察觉。 -->
+    <div v-else-if="isPdfFile" class="pdf-original-mode">
+      <div v-if="preview.degradedReason.value" class="degrade-hint">
+        {{ preview.degradedReason.value }}
+      </div>
+      <div v-if="!previewBlobUrl" class="preview-loading">
+        <el-icon :size="32" class="is-loading"><Loading /></el-icon>
+        <span>加载原始 PDF…</span>
+      </div>
+      <PdfViewer v-else :key="`original-${previewFile?.id}`" :url="previewBlobUrl" />
+    </div>
 
     <div v-else-if="previewFile && isImage(previewFile.file_type)" class="image-preview-wrap">
       <el-image
@@ -65,12 +106,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
-import { Download, Files, Loading } from '@element-plus/icons-vue';
-import { api } from '@/api/http';
+import { Document, Download, Files, Loading } from '@element-plus/icons-vue';
 import PdfViewer from '@/components/PdfViewer.vue';
-import { getDownloadUrl, listPartFilesByOwner } from '@/api/assembly';
+import ImagePager from '@/components/ImagePager.vue';
+import { usePreviewPolling } from '@/composables/usePreviewPolling';
+import { getDownloadUrl } from '@/api/assembly';
+import { fetchPartFileContent, listPartFilesByOwner } from '@/api/files/objects';
 // 2026-10-11：「下载文件」按钮的权限闸门。后端把 part_file 的列表 / content 对
-// SHELF_ACCOUNT 放开了（工控机预览图纸打的就是这两条），但 `/part-files/{id}/url`
+// SHELF_ACCOUNT 放开了（工控机预览图纸打的就是这两条），但 `/files/objects/{id}/url`
 // **刻意没放开**（COS 预签直链可外传）⇒ 不挂闸门就是「可见但必 403」。判据在
 // utils/partsPermissions，与后端 `/url` 的 `require_permission("part.drawing.print")`
 // 同点（默认授权矩阵不含 SHELF_ACCOUNT）。
@@ -109,12 +152,46 @@ const DIALOG_TOP = '6vh';
 const previewLoading = ref(false);
 const previewFile = ref<PartFileItem | null>(null);
 const previewBlobUrl = ref<string>('');
+// 2026-10-13：用户在图片模式下点「查看原始 PDF」。置 true 即切到 PdfViewer 分支，
+// 并触发 blob 拉取（此前 blob 只在图片类文件 / 原始 PDF 模式下才拉）。
+const showOriginalPdf = ref(false);
 // 防竞态：每次开预览自增，老请求响应直接丢弃
 let previewToken = 0;
 
+/**
+ * 转图轮询（2026-10-13）。入参两个：
+ *   - fileId：只有 PDF 图纸才有转图可言；非 PDF 分支（图片 / STEP / DWG）传空串
+ *     ⇒ 不发任何请求。`previewFile` 变化时自动重置预算。
+ *   - enabled：弹窗关着时不轮询（否则关掉弹窗后还在后台转图）。
+ */
+const preview = usePreviewPolling({
+  fileId: () =>
+    previewFile.value && isPdf(previewFile.value.file_type) ? previewFile.value.id : '',
+  enabled: () => visible.value,
+});
+
+/** 当前选中的是不是一份 PDF 图纸（决定走「转图 / 原始 PDF」两条路还是图片分支）。 */
+const isPdfFile = computed<boolean>(
+  () => previewFile.value !== null && isPdf(previewFile.value.file_type),
+);
+
+/**
+ * 当前该显示哪条路（2026-10-13）。
+ *
+ * ⚠️ `showImageMode` 必须同时看 `!wantsOriginalPdf`，不能只看 `preview.ready`：
+ * 转图 ready 之后 `ready` 就一直是 true，只用它做分支条件的话，「查看原始 PDF」按钮
+ * 会变成**空操作** —— 点击确实触发了 blob 拉取，但模板仍停在图片模式分支上，工人
+ * 看不到任何变化，逃生口形同虚设。
+ */
+const wantsOriginalPdf = computed<boolean>(() => showOriginalPdf.value || preview.degraded.value);
+const showImageMode = computed<boolean>(
+  () => isPdfFile.value && preview.ready.value && !wantsOriginalPdf.value,
+);
+
 // 卡片上的预览按钮要转圈就得知道「本行正在加载」，而 loading 归本组件管 ⇒ 暴露出去，
 // 由调用方与它自己记下的 `part` 一起算出「哪一行在转圈」。
-defineExpose({ loading: computed(() => previewLoading.value) });
+// 2026-10-13：转图轮询期间也算「加载中」—— 否则工人点开图纸看到空白，以为坏了。
+defineExpose({ loading: computed(() => previewLoading.value || preview.loading.value) });
 
 // --- 类型判定（图片集合与 `FileListCard.vue` 的 `IMAGE_TYPES` 同步） ---
 function isPdf(t: string): boolean {
@@ -141,9 +218,10 @@ async function loadPreview(): Promise<void> {
     return;
   }
   previewLoading.value = true;
+  showOriginalPdf.value = false;
   const myToken = ++previewToken;
   try {
-    // 1. 取该零件的 DRAWING 文件列表（v2 /part-files?owner_id=...&kind=...，owner 多态）
+    // 1. 取该零件的 DRAWING 文件列表（v2 /files/objects?owner_id=...&kind=...，owner 多态）
     const files = (await listPartFilesByOwner(String(p.id), 'DRAWING')).items;
     if (myToken !== previewToken) return;
     if (!files.length) {
@@ -153,13 +231,10 @@ async function loadPreview(): Promise<void> {
     }
     const f = files[0];
     previewFile.value = f;
-    // 2. PDF / 图片需要 blob URL；HEIC / STEP / DWG 等直接走下载按钮
-    if (isPdf(f.file_type) || isImage(f.file_type)) {
-      // v2 无 /files/* 路由，文件内容走 /part-files/{id}/content
-      const resp = await api.get(`/part-files/${f.id}/content`, { responseType: 'blob' });
-      if (myToken !== previewToken) return;
-      if (previewBlobUrl.value) URL.revokeObjectURL(previewBlobUrl.value);
-      previewBlobUrl.value = URL.createObjectURL(resp.data);
+    // 2. PDF 先交给轮询（转图直链，或降级后由下面的 computed 兜到 blob 路径）；
+    //    图片类文件不参与转图，直接拉 blob。
+    if (isImage(f.file_type)) {
+      await loadBlob(f, myToken);
     }
   } catch (e) {
     if (myToken !== previewToken) return;
@@ -170,9 +245,42 @@ async function loadPreview(): Promise<void> {
   }
 }
 
+/** 拉原始 PDF 的 blob URL（原始 PDF 模式 / 降级兜底 / 图片类文件共用）。 */
+async function loadBlob(f: PartFileItem, myToken: number): Promise<void> {
+  const blob = await fetchPartFileContent(f.id);
+  if (myToken !== previewToken) return;
+  if (previewBlobUrl.value) URL.revokeObjectURL(previewBlobUrl.value);
+  previewBlobUrl.value = URL.createObjectURL(blob);
+}
+
+// PDF 的原始 PDF 模式有两条触发路径：用户点「查看原始 PDF」，或轮询降级。
+// 前者是用户动作、后者是自动兜底，合并成一个 computed：任一为真就拉 blob。
+watch(
+  [() => previewFile.value, wantsOriginalPdf],
+  async ([f, wantOriginal]) => {
+    if (!f || !isPdf(f.file_type)) return;
+    if (!wantOriginal) return;
+    const myToken = previewToken;
+    try {
+      await loadBlob(f, myToken);
+    } catch (e) {
+      if (myToken !== previewToken) return;
+      ElMessage.error((e as Error).message ?? '加载原始 PDF 失败');
+    }
+  },
+  { immediate: true },
+);
+
 function onClosed(): void {
+  // ⚠️ 自增 token：关窗时 `previewFile` 已被置 null，但**在途的 blob 请求**是另一个
+  // promise，它回来时比对的是自己出发那一刻的 token —— 不在这里自增的话，迟到响应仍会
+  // 通过比对并写进 `previewBlobUrl`，而 `releaseBlobUrl` 已经 revoke 过手上那一个 ⇒
+  // 没人再 revoke 它，一次泄漏。
+  previewToken += 1;
   releaseBlobUrl();
   previewFile.value = null;
+  showOriginalPdf.value = false;
+  preview.stop();
 }
 
 /** blob URL 不 revoke 就是一次泄漏：内容在内存里直到页面卸载，而预览是可反复开的。 */
@@ -292,5 +400,29 @@ async function downloadPreview(): Promise<void> {
   margin: 0;
   color: #606266;
   font-size: 14px;
+}
+
+/* 2026-10-13：PDF 预览拆成「图片模式 / 原始 PDF 模式」两个容器。两者都是 body 的
+   直接子元素（flex item），故各自 `flex: 1 + min-height: 0` 才能填满 72vh 的 body。
+   「查看原始 PDF」按钮挂在容器内而不是 dialog header：它只在图片模式下出现，
+   放 header 会让按钮在原始 PDF 模式下也占一个位置（EP 的 header 不会因内容少而收高）。 */
+.pdf-image-mode,
+.pdf-original-mode {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.original-btn {
+  align-self: center;
+  flex-shrink: 0;
+}
+/* 降级提示：有告知的兜底，不是静默换渲染路径。占位小、不抢画面。 */
+.degrade-hint {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: #e6a23c;
+  text-align: center;
 }
 </style>

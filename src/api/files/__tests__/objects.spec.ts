@@ -1,13 +1,16 @@
-// src/api/parts/file.spec.ts（2026-09-16 frontend-overall-cos-direct-upload，
-// 2026-09-17 STS 端口迁移：删除原 createUploadIntents 测试，移到 usePartFileUpload.spec.ts）
+// src/api/files/__tests__/objects.spec.ts —— 文件对象域（`/api/v2/files/objects/*`）
+// 的实现文件契约。
 //
 // 验证：
-// - confirmPartFile POST /api/v2/parts/{id}/files/confirm；
-// - getPartFileDownloadUrl GET /api/v2/part-files/{id}/url，返回 download_url 字段；
-// - deletePartFile POST /api/v2/part-files/{id}/delete，body 强制 { version }（OCC）；
-// - getPartFileContentUrl 返回相对 URL `/part-files/{id}/content`（不含鉴权头，让
-//   调用方 axios 走拦截器注入 Bearer token）；
-// - printPartDrawing / printPartDrawingBatch 也走 api（路径与 rust v2 转发端点同名）。
+// - confirmFileObject POST /api/v2/files/objects/confirm（owner 在 body，不在 URL）；
+// - listPartFilesByOwner GET /api/v2/files/objects，owner_id 多态 + limit 上限 500；
+// - getPartFileDownloadUrl GET /api/v2/files/objects/{id}/url，返回 download_url 字段；
+// - deletePartFile POST /api/v2/files/objects/{id}/delete，body 强制 { version }（OCC）；
+// - getPartFileContentUrl 返回相对 URL `/files/objects/{id}/content`（不含鉴权头，让
+//   调用方 axios 走拦截器注入 Bearer token）。
+//
+// multipart 直传（uploadFileObject）另见同目录 fileUploadEndpoints.spec.ts；
+// 零件打印 BFF（/parts/*）另见 src/api/parts/__tests__/print.spec.ts。
 //
 // 用 vi.mock 拦截 @/api/http 的 api，断言 method / url / body 形态，
 // 不发起真实 HTTP。
@@ -27,14 +30,13 @@ vi.mock('@/api/http', () => ({
 }));
 
 import {
-  confirmPartFile,
+  confirmFileObject,
   deletePartFile,
   fetchPartFileContent,
   getPartFileContentUrl,
   getPartFileDownloadUrl,
-  printPartDrawing,
-  printPartDrawingBatch,
-} from './file';
+  listPartFilesByOwner,
+} from '../objects';
 import type { ConfirmFileIn } from '@/types/part_file';
 
 beforeEach(() => {
@@ -46,8 +48,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('confirmPartFile', () => {
-  it('POST /api/v2/parts/{id}/files/confirm，body 字段名与 rust ConfirmFileIn 对齐', async () => {
+describe('confirmFileObject', () => {
+  it('POST /api/v2/files/objects/confirm：owner 在 body，body 字段名与 rust ConfirmFileIn 对齐', async () => {
     postCalls.mockResolvedValueOnce({
       data: {
         id: '190000000000777',
@@ -66,20 +68,21 @@ describe('confirmPartFile', () => {
     });
 
     const payload: ConfirmFileIn = {
+      owner_kind: 'PART',
+      owner_id: '190000000000001',
       kind: 'DRAWING',
       tmp_key: 'tmp/spike/seq_a.pdf',
       content_sha256: 'a'.repeat(64),
       original_filename: 'a.pdf',
       file_size: '12345',
       content_type: 'application/pdf',
-      // 2026-09-29 新增 ext 必填字段（rust ConfirmFileIn 对齐）
       ext: 'pdf',
     };
-    const resp = await confirmPartFile('190000000000001', payload);
+    const resp = await confirmFileObject(payload);
 
     expect(postCalls).toHaveBeenCalledTimes(1);
     const [url, body] = postCalls.mock.calls[0]!;
-    expect(url).toBe('/parts/190000000000001/files/confirm');
+    expect(url).toBe('/files/objects/confirm');
     expect(body).toEqual(payload);
 
     // 响应：返回 PartFileItem
@@ -89,49 +92,35 @@ describe('confirmPartFile', () => {
   });
 });
 
-describe('printPartDrawing', () => {
-  it('GET /api/v2/parts/{id}/print-drawing（rust 转发 python），responseType: blob', async () => {
-    const fakeBlob = new Blob(['pdf-bytes'], { type: 'application/pdf' });
-    getCalls.mockResolvedValueOnce({ data: fakeBlob });
-
-    const blob = await printPartDrawing('190000000000001');
-
-    expect(getCalls).toHaveBeenCalledTimes(1);
+describe('listPartFilesByOwner', () => {
+  it('GET /api/v2/files/objects：owner_id + limit=500（后端默认 50 会静默截断）', async () => {
+    getCalls.mockResolvedValueOnce({ data: { items: [], total: 0 } });
+    await listPartFilesByOwner('190000000000001');
     const [url, config] = getCalls.mock.calls[0]!;
-    expect(url).toBe('/parts/190000000000001/print-drawing');
-    expect((config as Record<string, unknown>).responseType).toBe('blob');
-    expect(blob).toBe(fakeBlob);
-  });
-});
-
-describe('printPartDrawingBatch', () => {
-  it('POST /api/v2/parts/print-drawing-batch（rust 转发 python），timeout 12min（须大于 rust 660s）', async () => {
-    const fakeBlob = new Blob(['merged'], { type: 'application/pdf' });
-    postCalls.mockResolvedValueOnce({ data: fakeBlob });
-
-    const blob = await printPartDrawingBatch(['190000000000001'], ['190000000000002']);
-
-    expect(postCalls).toHaveBeenCalledTimes(1);
-    const [url, body, config] = postCalls.mock.calls[0]!;
-    expect(url).toBe('/parts/print-drawing-batch');
-    expect(body).toEqual({
-      part_ids: ['190000000000001'],
-      assembly_ids: ['190000000000002'],
+    expect(url).toBe('/files/objects');
+    expect((config as { params: unknown }).params).toEqual({
+      owner_id: '190000000000001',
+      limit: 500,
     });
-    expect((config as Record<string, unknown>).responseType).toBe('blob');
-    // 2026-10-03：提到 12min —— 必须大于 rust 打印档的 660s，否则浏览器先超时会吃掉
-    // 服务端的真实原因（python 502 / rust 自己的 408）。
-    expect((config as Record<string, unknown>).timeout).toBe(12 * 60 * 1000);
-    expect((config as Record<string, unknown>).timeout as number).toBeGreaterThan(660 * 1000);
-    expect(blob).toBe(fakeBlob);
+  });
+
+  it('带 kind 时按 kind 过滤（owner 多态：零件 id 与装配件 id 同参数位）', async () => {
+    getCalls.mockResolvedValueOnce({ data: { items: [], total: 0 } });
+    await listPartFilesByOwner('190000000000002', 'DRAWING');
+    const [, config] = getCalls.mock.calls[0]!;
+    expect((config as { params: unknown }).params).toEqual({
+      owner_id: '190000000000002',
+      kind: 'DRAWING',
+      limit: 500,
+    });
   });
 });
 
 // ============================================================
-// 2026-09-16 T3.5：part-file 域辅助端点（删除 / 下载 / 内容预览）
+// 辅助端点（删除 / 下载 / 内容预览）
 // ============================================================
 describe('getPartFileDownloadUrl', () => {
-  it('GET /api/v2/part-files/{id}/url，返回 download_url 字段（注意非 url）', async () => {
+  it('GET /api/v2/files/objects/{id}/url，返回 download_url 字段（注意非 url）', async () => {
     getCalls.mockResolvedValueOnce({
       data: {
         id: '190000000000777',
@@ -151,7 +140,7 @@ describe('getPartFileDownloadUrl', () => {
 
     expect(getCalls).toHaveBeenCalledTimes(1);
     const [calledUrl] = getCalls.mock.calls[0]!;
-    expect(calledUrl).toBe('/part-files/190000000000777/url');
+    expect(calledUrl).toBe('/files/objects/190000000000777/url');
     expect(url).toBe('https://bucket.cos.ap-shanghai.myqcloud.com/a.pdf?sign=xxx');
   });
 
@@ -174,19 +163,19 @@ describe('getPartFileDownloadUrl', () => {
     await getPartFileDownloadUrl('id/with/slash');
 
     const [calledUrl] = getCalls.mock.calls[0]!;
-    expect(calledUrl).toBe('/part-files/id%2Fwith%2Fslash/url');
+    expect(calledUrl).toBe('/files/objects/id%2Fwith%2Fslash/url');
   });
 });
 
 describe('deletePartFile', () => {
-  it('POST /api/v2/part-files/{id}/delete，body 强制 { version }（OCC）', async () => {
+  it('POST /api/v2/files/objects/{id}/delete，body 强制 { version }（OCC）', async () => {
     postCalls.mockResolvedValueOnce({ data: null });
 
     await deletePartFile('190000000000777', 7);
 
     expect(postCalls).toHaveBeenCalledTimes(1);
     const [calledUrl, body] = postCalls.mock.calls[0]!;
-    expect(calledUrl).toBe('/part-files/190000000000777/delete');
+    expect(calledUrl).toBe('/files/objects/190000000000777/delete');
     expect(body).toEqual({ version: 7 });
   });
 
@@ -201,20 +190,20 @@ describe('deletePartFile', () => {
 });
 
 describe('getPartFileContentUrl', () => {
-  it('返回相对路径 `/part-files/{id}/content`（不含 baseURL，由调用方 axios 拼接）', () => {
+  it('返回相对路径 `/files/objects/{id}/content`（不含 baseURL，由调用方 axios 拼接）', () => {
     const url = getPartFileContentUrl('190000000000777');
-    expect(url).toBe('/part-files/190000000000777/content');
+    expect(url).toBe('/files/objects/190000000000777/content');
     // 不能是绝对 URL —— 否则 `<img src>` / `<iframe src>` 会绕开 axios 拦截器丢 Bearer
     expect(url.startsWith('http')).toBe(false);
   });
 
   it('雪花 ID 走 encodeURIComponent', () => {
-    expect(getPartFileContentUrl('id/with/slash')).toBe('/part-files/id%2Fwith%2Fslash/content');
+    expect(getPartFileContentUrl('id/with/slash')).toBe('/files/objects/id%2Fwith%2Fslash/content');
   });
 });
 
 describe('fetchPartFileContent', () => {
-  it('GET /api/v2/part-files/{id}/content，responseType=blob', async () => {
+  it('GET /api/v2/files/objects/{id}/content，responseType=blob', async () => {
     const fakeBlob = new Blob(['pdf-bytes'], { type: 'application/pdf' });
     getCalls.mockResolvedValueOnce({ data: fakeBlob });
 
@@ -222,7 +211,7 @@ describe('fetchPartFileContent', () => {
 
     expect(getCalls).toHaveBeenCalledTimes(1);
     const [calledUrl, config] = getCalls.mock.calls[0]!;
-    expect(calledUrl).toBe('/part-files/190000000000777/content');
+    expect(calledUrl).toBe('/files/objects/190000000000777/content');
     expect((config as Record<string, unknown>).responseType).toBe('blob');
     expect(blob).toBe(fakeBlob);
   });

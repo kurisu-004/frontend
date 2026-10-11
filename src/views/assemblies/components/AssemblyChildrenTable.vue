@@ -5,7 +5,21 @@
   - 上传总装 PDF 卡（仅当 canUploadTotalPdf 时显示）
   - 子件表格卡（el-table；手机卡片视图 2026-08-25 mobile 清理已移除）
   - 「添加子件」对话框（含 form 状态 + form ref + 校验）
-  - 「子件图号点击」全屏 PDF 预览对话框（含 Blob URL 生命周期）
+  - 「子件图号点击」全屏图纸预览对话框（含 Blob URL 生命周期）
+
+  2026-10-13 子件图号预览切 CI 转图直链：
+  - 首选 `GET /files/objects/{id}/preview` → 逐页图片直链 → `<ImagePager>`；
+    `fetchDrawingBlob`（/content blob + PdfViewer）降级为「查看原始 PDF」逃生口 +
+    转图不可用时的自动兜底。
+  - ⚠️ 入参是**文件对象 id**：`childDrawingMap` 的值来自 `GET /assemblies/{id}`
+    详情响应的 `files[]`，owner 是 PART（子件），但预览端点只认文件对象 id，
+    owner 语义由后端解析 —— 装配件侧不需要另开预览链路。
+  - 降级原因渲染成弹窗内一行提示（`.degrade-hint`），不静默换渲染路径。
+  - 预览弹窗的 el-dialog 挂 `pdf-preview-dialog` + `img-preview-dialog` 两个 class
+    （两个预览组件的 flex 高度链同款，规则在 styles/index.scss 里逐条并列）。
+  - ⚠️ blob URL 的释放**只有一个入口** `setBlobUrl()`：本组件有两个写入点
+    （点行的非 PDF 图纸、PDF 原始 PDF 的 blob watch），任何一处绕过它直接赋值都会把
+    上一个 object URL 悬空 —— 详情页是「反复点子件图号」的用法，点一次泄漏一整份 PDF。
 
   本组件持有以下 UI 状态：
   - addChildVisible / addChildSubmitting / addChildFormRef
@@ -21,8 +35,9 @@
   禁止 props.addChildForm.x = v。本地 reactive 副本 + watch 同步 +
   emit('update:form')；父级 @update:form 合并即可。
 
-  2026-10-05：上传总装 PDF 的文案改为如实描述 —— 后端 `POST /assemblies/{id}/files`
-  只入库总装图文件（SHA-256 CAS + COS PUT + INSERT t_part_file(kind='ASSEMBLY_MASTER')），
+  上传总装 PDF 的文案如实描述端点行为 —— `POST /files/objects`
+  （owner_kind=ASSEMBLY）只入库总装图文件（SHA-256 CAS + COS PUT + INSERT
+  t_part_file(kind='ASSEMBLY_MASTER')），
   **不拆页、不建子件**，所以卡片文案如实写「上传不会按页拆分」，子件在下方单独添加。
 -->
 <template>
@@ -127,7 +142,7 @@
   <!-- 子件图号直接预览 PDF（全屏） -->
   <el-dialog
     :model-value="drawingPreviewVisible"
-    class="pdf-preview-dialog"
+    class="pdf-preview-dialog img-preview-dialog"
     :title="drawingPreviewFile?.original_filename ?? '图纸预览'"
     fullscreen
     :close-on-click-modal="false"
@@ -135,11 +150,27 @@
     @update:model-value="(v: boolean) => (drawingPreviewVisible = v)"
     @closed="onDrawingPreviewClosed"
   >
-    <PdfViewer
-      v-if="drawingPreviewFile && drawingPreviewBlobUrl"
-      :url="drawingPreviewBlobUrl"
-      :page="1"
-    />
+    <!-- 图片模式：CI 转好的逐页直链（默认路径，不下载整份 PDF）。图片模式少矢量缩放
+         与文字选中 ⇒ 必须给逃生口。 -->
+    <div v-if="showImageMode" class="pdf-image-mode">
+      <ImagePager :key="`img-${drawingPreviewFile?.id}`" :pages="preview.pages.value" />
+      <el-button class="original-btn" plain @click="drawingShowOriginal = true">
+        <el-icon><Document /></el-icon>
+        <span>查看原始 PDF</span>
+      </el-button>
+    </div>
+    <!-- 原始 PDF：用户点「查看原始 PDF」，或转图降级（端点不支持 / CI 失败 / 超时）。 -->
+    <div v-else-if="isPdfDrawing" class="pdf-original-mode">
+      <div v-if="preview.degradedReason.value" class="degrade-hint">
+        {{ preview.degradedReason.value }}
+      </div>
+      <div v-if="!drawingPreviewBlobUrl" class="loading-tip">
+        <el-icon class="is-loading"><Loading /></el-icon>
+        <!-- 转图还在等 vs 已决定看原始 PDF、正在拉 blob，两种情形不能共用一句话。 -->
+        <span>{{ wantsOriginalPdf ? '加载原始 PDF…' : '图纸转图中…' }}</span>
+      </div>
+      <PdfViewer v-else :key="`pdf-${drawingPreviewFile?.id}`" :url="drawingPreviewBlobUrl" :page="1" />
+    </div>
     <div v-else class="loading-tip">
       <el-icon class="is-loading"><Loading /></el-icon>
       <span>加载中…</span>
@@ -192,13 +223,16 @@
 </template>
 
 <script setup lang="ts">
-import { h, reactive, ref, toRaw, watch } from 'vue';
+import { h, computed, reactive, ref, toRaw, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import type { UploadFile, FormInstance } from 'element-plus';
 import { ElLink, ElMessage, ElTag } from 'element-plus';
-import { Loading, Plus, Upload } from '@element-plus/icons-vue';
+import { Loading, Document, Plus, Upload } from '@element-plus/icons-vue';
 
 import PdfViewer from '@/components/PdfViewer.vue';
+import ImagePager from '@/components/ImagePager.vue';
+// 2026-10-13：子件图纸预览的 CI 转图轮询（首选路径），/content blob 为兜底。
+import { usePreviewPolling } from '@/composables/usePreviewPolling';
 import { useDialogSize } from '@/composables/useDialogSize';
 import type { PartFileItem } from '@/types/part_file';
 import type { PartListItem } from '@/types/parts';
@@ -395,31 +429,106 @@ async function onUploadTotalPdf(uploadFile: UploadFile): Promise<void> {
   }
 }
 
-// ============ 子件图号 → 全屏 PDF 预览 ============
+// ============ 子件图号 → 图纸预览（2026-10-13：CI 转图直链优先，原始 PDF 兜底）============
 const drawingPreviewVisible = ref(false);
 const drawingPreviewFile = ref<PartFileItem | null>(null);
 const drawingPreviewBlobUrl = ref('');
+// 用户在图片模式下点「查看原始 PDF」。
+const drawingShowOriginal = ref(false);
+
+/** 当前选中的是不是一份 PDF（决定走「转图 / 原始 PDF」两条路还是其它分支）。 */
+const isPdfDrawing = computed<boolean>(
+  () => drawingPreviewFile.value !== null && isPdfType(drawingPreviewFile.value.file_type),
+);
+
+function isPdfType(t: string): boolean {
+  return t.toUpperCase() === 'PDF';
+}
+
+/** 转图轮询：只有 PDF 才有转图；弹窗关着时不轮询。 */
+const preview = usePreviewPolling({
+  fileId: () =>
+    isPdfDrawing.value && drawingPreviewFile.value ? drawingPreviewFile.value.id : '',
+  enabled: () => drawingPreviewVisible.value,
+});
+
+/**
+ * 当前该显示哪条路（2026-10-13）。
+ *
+ * ⚠️ `showImageMode` 必须同时看 `!wantsOriginalPdf`，不能只看 `preview.ready`：
+ * 转图 ready 之后 `ready` 就一直是 true，只用它做分支条件的话，「查看原始 PDF」按钮
+ * 会变成**空操作** —— 点击确实触发了 blob 拉取，但模板仍停在图片模式分支上，用户
+ * 看不到任何变化，逃生口形同虚设。
+ */
+const wantsOriginalPdf = computed<boolean>(
+  () => drawingShowOriginal.value || preview.degraded.value,
+);
+const showImageMode = computed<boolean>(
+  () => isPdfDrawing.value && preview.ready.value && !wantsOriginalPdf.value,
+);
+
+/**
+ * 挂上新的 blob URL，并**先 revoke 前一个**。
+ *
+ * 为什么必须走这个函数而不是直接 `drawingPreviewBlobUrl.value = url`：本组件有**两个**
+ * 写入点（点行时的非 PDF 图纸、PDF 原始 PDF 的 blob watch），任何一处直接赋值都会把
+ * 上一个 object URL 悬空 —— 那份 PDF 的字节留在内存里直到页面卸载，而详情页是「反复
+ * 点子件图号」的用法 ⇒ 点一次泄漏一整份 PDF。revoke 只挂在 `onDrawingPreviewClosed`
+ * 上，它只能救「当前那一个」，救不了被覆盖掉的。
+ *
+ * 传空串等价于「释放当前那一个」（关弹窗走它）。
+ */
+function setBlobUrl(next: string): void {
+  if (drawingPreviewBlobUrl.value) {
+    URL.revokeObjectURL(drawingPreviewBlobUrl.value);
+  }
+  drawingPreviewBlobUrl.value = next;
+}
 
 async function onChildDrawingClick(_row: unknown, drawing: PartFileItem): Promise<void> {
   drawingPreviewFile.value = drawing;
   drawingPreviewVisible.value = true;
+  drawingShowOriginal.value = false;
+  setBlobUrl('');
+  // PDF 不在这里拉 blob —— 先走转图；用户点「查看原始 PDF」或转图降级时再拉
+  // （见下方 watch）。提前拉会让「图片模式省带宽」当场作废。
+  if (isPdfType(drawing.file_type)) return;
   try {
-    if (drawingPreviewBlobUrl.value) {
-      URL.revokeObjectURL(drawingPreviewBlobUrl.value);
-    }
-    drawingPreviewBlobUrl.value = await props.fetchDrawingBlob(drawing);
+    setBlobUrl(await props.fetchDrawingBlob(drawing));
   } catch (e) {
     ElMessage.error((e as Error).message ?? '加载图纸失败');
     drawingPreviewVisible.value = false;
   }
 }
 
+/**
+ * PDF 的原始 PDF 路径有两条触发：用户点「查看原始 PDF」，或转图轮询降级。
+ * 二者合并成一条 watch —— 降级那一刻的表现与用户主动切换完全一致。
+ */
+watch(
+  [drawingPreviewFile, wantsOriginalPdf],
+  async ([drawing, wantOriginal]) => {
+    if (!drawing || !isPdfType(drawing.file_type)) return;
+    if (!wantOriginal) return;
+    try {
+      const url = await props.fetchDrawingBlob(drawing);
+      // 迟到守卫：期间用户可能已关掉弹窗（`onDrawingPreviewClosed` 会把
+      // `drawingPreviewFile` 置 null）或点了别的子件 ⇒ 迟到的 blob 直接丢弃。
+      // 只比 id 就够：换文件与关窗这两条路径都会让 `drawingPreviewFile` 变掉。
+      if (drawingPreviewFile.value?.id !== drawing.id) return;
+      setBlobUrl(url);
+    } catch (e) {
+      ElMessage.error((e as Error).message ?? '加载原始 PDF 失败');
+    }
+  },
+  { immediate: true },
+);
+
 function onDrawingPreviewClosed(): void {
-  if (drawingPreviewBlobUrl.value) {
-    URL.revokeObjectURL(drawingPreviewBlobUrl.value);
-  }
-  drawingPreviewBlobUrl.value = '';
+  setBlobUrl('');
   drawingPreviewFile.value = null;
+  drawingShowOriginal.value = false;
+  preview.stop();
 }
 
 function goPartDetail(id: string): void {
@@ -478,6 +587,33 @@ function goPartDetail(id: string): void {
   gap: 8px;
   padding: 80px 0;
   color: var(--text-regular);
+}
+
+/* 2026-10-13：PDF 预览拆成「图片模式 / 原始 PDF 模式」两个容器。两者都是弹窗 body 的
+   直接子元素（flex item），故各自 `flex: 1 + min-height: 0` 才能填满 body 的高度。 */
+.pdf-image-mode,
+.pdf-original-mode {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pdf-original-mode .loading-tip {
+  padding: 0;
+  flex: 1;
+  min-height: 0;
+}
+.original-btn {
+  align-self: center;
+  flex-shrink: 0;
+}
+/* 降级提示：有告知的兜底，不是静默换渲染路径。占位小、不抢画面。 */
+.degrade-hint {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: #e6a23c;
+  text-align: center;
 }
 :deep(.el-table__row.row-urgent) > td.el-table__cell {
   background-color: #fde2e2 !important;
