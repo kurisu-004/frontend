@@ -171,10 +171,7 @@
       </el-form>
       <template #footer>
         <el-button @click="store.dialogs.visible = false">取消</el-button>
-        <el-button
-          type="primary"
-          :loading="store.dialogs.saving"
-          @click="store.dialogs.onSave"
+        <el-button type="primary" :loading="store.dialogs.saving" @click="store.dialogs.onSave"
           >保存</el-button
         >
       </template>

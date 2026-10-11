@@ -197,7 +197,9 @@ function renderStatusCell(vnode: VNode): { type: string | undefined; text: strin
   return out;
 }
 
-async function mountReceive(options: { canRepair?: boolean } = {}): Promise<ReturnType<typeof mount>> {
+async function mountReceive(
+  options: { canRepair?: boolean } = {},
+): Promise<ReturnType<typeof mount>> {
   const { canRepair = true } = options;
   const pinia = createPinia();
   setActivePinia(pinia);
@@ -268,11 +270,15 @@ describe('RepairReceive — 「返修中」判据必须读 is_repairing（2026-1
     const cellRender = statusCellRender(wrapper);
 
     expect(
-      renderStatusCell(cellRender({ row: makeBatch({ is_repairing: false, status: 'DELIVERED' }) })),
+      renderStatusCell(
+        cellRender({ row: makeBatch({ is_repairing: false, status: 'DELIVERED' }) }),
+      ),
     ).toEqual({ type: 'success', text: '已送货' });
     // 非返修、非已送货的普通在制行仍是 info，且标签回落到 ORDER_STATUS_LABEL。
     expect(
-      renderStatusCell(cellRender({ row: makeBatch({ is_repairing: false, status: 'IN_PROCESS' }) })),
+      renderStatusCell(
+        cellRender({ row: makeBatch({ is_repairing: false, status: 'IN_PROCESS' }) }),
+      ),
     ).toEqual({ type: 'info', text: '生产中' });
     wrapper.unmount();
   });

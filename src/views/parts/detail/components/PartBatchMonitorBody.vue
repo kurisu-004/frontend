@@ -66,7 +66,9 @@
     >
       <template #default="{ row }">
         <el-button
-          v-if="canSplitBatch && !isTerminalBatch(row as PartBatch) && (row as PartBatch).quantity > 1"
+          v-if="
+            canSplitBatch && !isTerminalBatch(row as PartBatch) && (row as PartBatch).quantity > 1
+          "
           link
           type="primary"
           size="small"

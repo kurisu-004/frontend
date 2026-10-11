@@ -51,7 +51,11 @@ import type { PartBatch, PartEvent, PartUpdatePayload } from '@/api/parts';
 import type { AssemblyDetail } from '@/types/assembly';
 import { usePermissions } from '@/composables/usePermissions';
 import { useAuthStore } from '@/stores/auth';
-import { BATCH_CANCEL_PERMISSION, BATCH_SPLIT_PERMISSION, BATCH_TRANSITION_PERMISSION } from '@/utils/productionPermissions';
+import {
+  BATCH_CANCEL_PERMISSION,
+  BATCH_SPLIT_PERMISSION,
+  BATCH_TRANSITION_PERMISSION,
+} from '@/utils/productionPermissions';
 import { usePartBatchesQuery } from '@/composables/queries/usePartBatchesQuery';
 // fetchAssembly 走客户 enrich（PartAssemblyLinkCard 客户列展示所需），数据源是
 // useCustomersQuery 共享缓存（唯一 queryKey + 30s staleTime 去重窗口，多 subscriber

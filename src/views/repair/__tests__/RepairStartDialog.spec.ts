@@ -136,10 +136,7 @@ function makeTarget(over: Partial<RepairBatchListItem> = {}): RepairBatchListIte
   };
 }
 
-async function mountDialog(
-  target: RepairBatchListItem,
-  options: { canRepair?: boolean } = {},
-) {
+async function mountDialog(target: RepairBatchListItem, options: { canRepair?: boolean } = {}) {
   const { canRepair = true } = options;
   mocks.repairDispatch.mockReset();
   mocks.repairDispatch.mockResolvedValue({});

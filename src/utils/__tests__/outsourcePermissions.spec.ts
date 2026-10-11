@@ -10,9 +10,7 @@ describe('outsourcePermissions 常量表', () => {
   it('5 个权限点 code 与后端 seeds 逐字一致', () => {
     expect(permissionConstants.OUTSOURCE_VIEW_PERMISSION).toBe('outsource.view');
     expect(permissionConstants.OUTSOURCE_QUOTE_EDIT_PERMISSION).toBe('outsource.quote.edit');
-    expect(permissionConstants.OUTSOURCE_QUOTE_APPROVE_PERMISSION).toBe(
-      'outsource.quote.approve',
-    );
+    expect(permissionConstants.OUTSOURCE_QUOTE_APPROVE_PERMISSION).toBe('outsource.quote.approve');
     expect(permissionConstants.OUTSOURCE_MOVE_PERMISSION).toBe('outsource.move');
     expect(permissionConstants.OUTSOURCE_COMPANY_MANAGE_PERMISSION).toBe(
       'outsource.company.manage',

@@ -411,7 +411,10 @@ describe('useOutsourceQueueMove — 外协收发写操作', () => {
     permissions.list = [];
     const q = testApp.runWithContext(() => useOutsourceQueueMove());
 
-    const sent = await q.sendToCompany({ candidate: approvalCandidate, companyId: '9000000000001' });
+    const sent = await q.sendToCompany({
+      candidate: approvalCandidate,
+      companyId: '9000000000001',
+    });
     const received = await q.receiveToProduction({
       companyId: '9000000000001',
       batch: heldBatch,

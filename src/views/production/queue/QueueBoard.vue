@@ -412,10 +412,7 @@ provide<BatchMenuOpener>('openBatchContextMenu', (evt, batch, area) => {
     // 漏算 canDispatch / canAllocate 的症状是：只被授了对应权限的账号被告知「没有可执行
     // 的操作」，而实际上他有。
     const byPermission =
-      !recall.canRecall.value &&
-      !canSplit.value &&
-      !canDispatch.value &&
-      !canAllocate.value;
+      !recall.canRecall.value && !canSplit.value && !canDispatch.value && !canAllocate.value;
     ElMessage.warning(
       byPermission ? '当前角色对该批次没有可执行的操作' : '该批次当前没有可执行的操作',
     );

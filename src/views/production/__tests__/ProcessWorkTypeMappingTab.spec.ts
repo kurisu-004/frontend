@@ -190,10 +190,7 @@ async function mountTab(options: { canConfig?: boolean } = {}) {
   const wrapper = mount(ProcessWorkTypeMappingTab, {
     global: {
       ...globalConfig,
-      plugins: [
-        pinia,
-        [VueQueryPlugin, { queryClient: testQueryClient }],
-      ],
+      plugins: [pinia, [VueQueryPlugin, { queryClient: testQueryClient }]],
     },
   });
   await flushPromises();
