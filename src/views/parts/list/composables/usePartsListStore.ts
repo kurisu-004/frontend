@@ -21,6 +21,7 @@ import { defineStore } from 'pinia';
 // 函数式 getter 保留调用形态 auth.hasRole('X')，store proxy 自动解包嵌套 ref。
 import { useAuthStore } from '@/stores/auth';
 import { useColumnVisibility, type ColumnDef } from '@/composables/useColumnVisibility';
+import { PART_DRAWING_PRINT_PERMISSION } from '@/utils/partsPermissions';
 import { usePartsListQuery } from './usePartsListQuery';
 import { usePartsColumnFilters } from './usePartsColumnFilters';
 import { usePartBatchSelection } from './usePartBatchSelection';
@@ -55,7 +56,7 @@ export const usePartsListStore = defineStore('parts-list', () => {
   // 授权了却看不见）。默认矩阵下 MANAGER / CLERK 行为不变；INSPECTOR / CNC_PROGRAMMER
   // 持有该点，现在也能看到入口 —— 这是与后端对齐的预期变化。
   // 导入按钮与行内编辑仍走 canEdit，不受这里影响。
-  const canBatchPrint = computed(() => auth.hasPermission('part.drawing.print'));
+  const canBatchPrint = computed(() => auth.hasPermission(PART_DRAWING_PRINT_PERMISSION));
 
   // ============ el-table getter：壳在 setup 里注册（PartsTable 组件 ref 在壳模板上）============
   let tableGetter: PartsListTableGetter = () => null;

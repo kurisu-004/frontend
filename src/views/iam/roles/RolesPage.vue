@@ -42,6 +42,7 @@
           </el-table-column>
           <!--
             操作列逐行判：ADMIN（元角色）无任何写按钮（后端 grants / deactivate 都拒）；
+            MANAGER 只保留改名（后端对 ADMIN / MANAGER 的停用双拒，防管理员把面板锁死）；
             其它内置角色可改名 / 停用（不可删除）；自定义角色三项全开。口径与后端
             update_role / deactivate_role 的实际限制一致（见 useRolesStore 文件头）。
           -->
@@ -57,7 +58,7 @@
                   改名
                 </el-button>
                 <el-button
-                  v-if="row.is_active"
+                  v-if="row.is_active && !PROTECTED_ROLE_CODES.includes(row.code)"
                   link
                   type="warning"
                   size="small"
@@ -160,6 +161,11 @@ import { onBeforeUnmount, onMounted } from 'vue';
 import RoleGrantsPanel from './components/RoleGrantsPanel.vue';
 import { useRolesStore, ADMIN_ROLE_CODE } from './composables/useRolesStore';
 import type { RoleDefData } from './composables/rbacSchema';
+
+/** 不可停用的保护角色 code：ADMIN 是元角色、MANAGER 是本面板的守卫角色，后端对两者的
+ *  deactivate 一律 400（停用后都没有入口能恢复，等于把面板锁死）。ADMIN 行连改名也没有
+ *  （操作列整体不渲染）；MANAGER 行保留改名。 */
+const PROTECTED_ROLE_CODES = [ADMIN_ROLE_CODE, 'MANAGER'];
 
 // 不变量 #1：首调。
 const store = useRolesStore();

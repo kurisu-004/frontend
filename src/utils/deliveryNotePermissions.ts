@@ -82,10 +82,11 @@ export function canSoftDelete(status: string, role: RoleMapLike): boolean {
  *  「导出」按钮上（送货单页脚「送货人：{{driver_name}}」必须有值，`POST /{id}/pickup`
  *  也要从单据上读 `driver_worker_id`），那里能看到用户在选什么。
  *
- *  ⚠️ 形参 `role` **保留但不再参与判定**（2026-10-14，签名不改 ⇒ 三个消费方
+ *  ⚠️ 形参 `role` **保留但不再参与判定**（2026-10-14）：三个消费方
  *  `DeliveryNoteLineItemsTable.vue` / `DeliveryNoteScan.vue` /
- *  `DeliveryNoteDispatchControls.vue` 的 git diff 为空）。权限点取代角色成为判据，
- * 理由见文件头。 */
+ *  `DeliveryNoteDispatchControls.vue` 的 `canPrint` 调用形态未变；
+ *  `DeliveryNoteScan.vue` 的 `roleMap` 另有 ADMIN 通配适配（经 `auth.hasRole`
+ *  构造而不是直读 `roles` 枚举）。权限点取代角色成为判据，理由见文件头。 */
 export function canPrint(note: PrintableNoteLike, role: RoleMapLike): boolean {
   void role;
   if (!useAuthStore().hasPermission(DELIVERY_NOTE_PRINT_PERMISSION)) return false;

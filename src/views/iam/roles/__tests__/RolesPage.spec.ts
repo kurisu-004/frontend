@@ -113,11 +113,23 @@ const ADMIN: RoleDefData = {
   user_count: 2,
 };
 
-/** 内置的**非 ADMIN** 角色（后端允许改名 / 停用，不允许删除）。 */
+/** 内置的守卫角色（后端只允许改名：ADMIN / MANAGER 的停用一律 400，删除因 is_system 被拒）。 */
 const SYSTEM_MANAGER: RoleDefData = {
   id: '1900000000000000002',
   code: 'MANAGER',
   name: '生产经理',
+  description: null,
+  is_system: true,
+  is_active: true,
+  version: 1,
+  user_count: 1,
+};
+
+/** 另一个内置角色（不受停用保护 ⇒ 可改名 / 停用，不可删除）。 */
+const SYSTEM_CLERK: RoleDefData = {
+  id: '1900000000000000003',
+  code: 'CLERK',
+  name: '业务员',
   description: null,
   is_system: true,
   is_active: true,
@@ -785,16 +797,18 @@ describe('停用 / 删除链路（页面接线）', () => {
     expect(findButton(wrapper, '保存授权')!.attributes('disabled')).toBeUndefined();
   });
 
-  it('P5：操作列逐行口径（ADMIN 无按钮；内置非 ADMIN 可改名/停用无删除；自定义全开）', async () => {
-    listRolesMock.mockResolvedValue([ADMIN, SYSTEM_MANAGER, QC_LEAD, EMPTY_CUSTOM]);
+  it('P5：操作列逐行口径（ADMIN 无按钮；MANAGER 仅改名；其它内置可改名/停用无删除；自定义全开）', async () => {
+    listRolesMock.mockResolvedValue([ADMIN, SYSTEM_MANAGER, SYSTEM_CLERK, QC_LEAD, EMPTY_CUSTOM]);
     const wrapper = mountRolesPage();
     await flushPromises();
 
     // ADMIN 行整行只读。
     expect(opCell(wrapper, 'ADMIN').findAll('button')).toHaveLength(0);
     expect(opCell(wrapper, 'ADMIN').text()).toContain('—');
-    // 内置非 ADMIN：改名 + 停用，无删除（后端删除仅限自定义）。
-    expect(opButtonTexts(wrapper, 'MANAGER')).toEqual(['改名', '停用']);
+    // MANAGER：后端对 ADMIN / MANAGER 的停用双拒（防面板锁死）⇒ 只留改名。
+    expect(opButtonTexts(wrapper, 'MANAGER')).toEqual(['改名']);
+    // 其它内置角色：改名 + 停用，无删除（后端删除仅限自定义）。
+    expect(opButtonTexts(wrapper, 'CLERK')).toEqual(['改名', '停用']);
     // 自定义：三项全开。
     expect(opButtonTexts(wrapper, 'QC_LEAD')).toEqual(['改名', '停用', '删除']);
     expect(opButtonTexts(wrapper, 'QC_LEAD_NEW')).toEqual(['改名', '停用', '删除']);
@@ -852,7 +866,7 @@ describe('停用 / 删除链路（页面接线）', () => {
   // review 第 2 轮：停用 / 删除的在途 loading 原先是全表共享一个标志，任一行操作时
   // 所有行的按钮一起转圈。改为「在途标志 + 目标行 id」逐行判。
   it('P8：停用 / 删除的在途 loading 只落在被点的那一行', async () => {
-    listRolesMock.mockResolvedValue([ADMIN, SYSTEM_MANAGER, QC_LEAD]);
+    listRolesMock.mockResolvedValue([ADMIN, SYSTEM_CLERK, QC_LEAD]);
     let resolveDeactivate: ((v: unknown) => void) | undefined;
     deactivateRoleMock.mockImplementation(
       () =>
@@ -873,7 +887,7 @@ describe('停用 / 删除链路（页面接线）', () => {
         .find((b) => b.text().includes('停用'))
         ?.attributes('data-loading');
     expect(loadingOf('QC_LEAD')).toBe('1');
-    expect(loadingOf('MANAGER')).toBe('0');
+    expect(loadingOf('CLERK')).toBe('0');
 
     resolveDeactivate!({ affected_user_count: 2 });
     await flushPromises();

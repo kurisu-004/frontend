@@ -15,8 +15,11 @@
 // 左列表操作列与后端写能力的口径（不是「内置角色一律只读」）：
 //   - `code === 'ADMIN'`（元角色）：改名 / 停用 / 删除全部隐藏，选中时右区整体 readonly
 //     （**提交按钮不渲染**）。后端对 ADMIN 的 grants 与 deactivate 一律拒写；
+//   - `code === 'MANAGER'`（本面板的守卫角色）：只保留**改名**，停用 / 删除隐藏 —— 后端
+//     对 ADMIN / MANAGER 的 deactivate 双拒（两者停用后都没有入口能恢复，等于把面板
+//     锁死）；右区授权仍可编辑（后端 grants 只拒 ADMIN）；
 //   - 其它 `is_system=true`：允许**改名**（弹窗里 code 输入框禁用，名称 / 备注可改）与
-//     **停用**，隐藏**删除**。后端只拒系统角色改 code，停用只拒 ADMIN，删除仅限自定义；
+//     **停用**，隐藏**删除**。后端只拒系统角色改 code，删除仅限自定义；
 //   - `is_system=false`：三项全允许，code 仅在无人持有时可编辑。
 
 import { computed, reactive, ref, watch } from 'vue';
