@@ -42,8 +42,13 @@
   关闭权：本弹窗**不是**提交闸门（关掉只丢一次诊断，工人可重扫），故保留右上角 ×；
   但它内部启用的「手填工序」弹窗**是**提交闸门（那条链上它是唯一的提交入口），按
   CLAUDE.md「弹窗关闭权」以 `:show-close="false"` 收在 footer 两键上。
-  本弹窗的成功路径**不依赖 WS**：动作成功后主动 `emit('done')` 让页面 refetch 页面自己的
-  列表；弹窗自身的诊断数据由写路径的失效链负责（`qk.scanLocatePrefix`，见 `useScanWrite.ts`）。
+
+  成功路径**不依赖 WS，也不再通知页面去 `refresh()`**：三条写动作的 `onSuccess` /
+  `onError` 都走 `invalidateScanReadSide`（见 `useScanWrite.ts`），它失效的前缀同时盖住
+  ① 页面那两条列表（`qk.scanPickablePrefix` / `qk.scanHeldPrefix`）与 ② 本弹窗自己的诊断
+  （`qk.scanLocatePrefix`）。页面上的列表 query 是 active 的，TanStack 失效即后台重取，
+  且 mutation 的 `onSuccess` 返回的是那条失效链的 promise、`mutateAsync` 会 await 它 ⇒
+  动作成功返回时列表已是重取后的状态。
 
   三种「没有行可渲染」的状态**必须分开**：`20101` 未命中（条码不对 / 是装配件序列号）、
   工单查到了但**一个未软删批次都没有**（条码对、批次全没了）、契约漂移 / 网络失败。
@@ -63,7 +68,9 @@
       <p>正在查询该条码的位置…</p>
     </div>
 
-    <!-- 诊断失败（含 Zod 契约漂移）：文案走同目录既有的 scanListErrorText 收口。
+    <!-- 诊断失败（含 Zod 契约漂移）：机制走同目录既有的 scanListErrorText 收口，
+         漂移文案用「诊断」口吻（`SCAN_LOCATE_CONTRACT_DRIFT_TEXT`）而不是列表那一句 ——
+         本弹窗不是列表，工人扫的条码没进列表，说「列表格式异常」会把他指去看错界面。
          ⚠️ 后端「未命中」（20101）不算失败 —— 它落下面的空态，不落这里。 -->
     <div v-else-if="errorText" class="state-block error-state">
       <el-icon :size="32" color="#f56c6c"><CircleCloseFilled /></el-icon>
@@ -246,7 +253,10 @@ import {
   useScanPickUpMutation,
   useScanTakeOverMutation,
 } from '@/views/production/scan/composables/useScanWrite';
-import { scanListErrorText } from '@/views/production/scan/composables/scanListErrorMessage';
+import {
+  scanListErrorText,
+  SCAN_LOCATE_CONTRACT_DRIFT_TEXT,
+} from '@/views/production/scan/composables/scanListErrorMessage';
 import {
   locateDisabledReasonText,
   locateWriteErrorText,
@@ -266,8 +276,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:modelValue': [v: boolean];
-  /** 任一动作成功后触发：让页面 refetch 自己的列表（弹窗刷新不依赖 WS）。 */
-  done: [];
 }>();
 
 /** `location` 是**真实值**（与同域两条 list 行那个恒 null 的占位方向相反），故逐值给中文名。 */
@@ -313,7 +321,7 @@ const notFound = computed(
 );
 const errorText = computed(() =>
   !notFound.value && locate.error.value
-    ? scanListErrorText(locate.error.value, '查询零件位置失败')
+    ? scanListErrorText(locate.error.value, '查询零件位置失败', SCAN_LOCATE_CONTRACT_DRIFT_TEXT)
     : '',
 );
 const submitting = computed(
@@ -487,7 +495,6 @@ async function onQtyConfirm(qty: number): Promise<void> {
     });
     ElMessage.success(`已领取: ${part.value?.serial_no || props.code} × ${qty}`);
     close();
-    emit('done');
   } catch (e) {
     ElMessage.error(locateWriteErrorText(e, 'PICK_UP'));
     reDiagnose();
@@ -518,7 +525,6 @@ async function submitTakeOver(
     });
     ElMessage.success('已接管，该批次已转到你的名下');
     close();
-    emit('done');
   } catch (e) {
     ElMessage.error(locateWriteErrorText(e, 'TAKE_OVER'));
     // 读侧判不出「写侧要求显式工序」的那一类形态（见 needManualProcess 的说明）：
@@ -528,6 +534,11 @@ async function submitTakeOver(
     // 重查的读侧结论不变（同一份数据算同一个 `chain_state`），工人点一次错一次、弹窗
     // 变成死循环；让他补一次工序才有出口。
     // 只在「本次本来就没填工序」时降级 —— 已经手填过还吃 `40001` 是别的问题，重查即可。
+    // ⚠️ 这个 `e.code === 40001` 判据成立的前提是 **`40001` 带信封**（后端
+    // `AppError::Validation` 的 422 失败由 `into_response` 手工拼 `{code,message,data}`），
+    // 所以 `e` 是 `ApiError` 且 `code` 取到了业务码。无信封的 422（雪花 id 发成 number /
+    // `version` 缺省）`code` 是 HTTP 状态码，落不进这个分支 —— 那两类是本弹窗自己拼
+    // 请求时就不该犯的形态错误，不该在这里降级弹框。详见 `locateActionErrorText.ts` 文件头。
     if (e instanceof ApiError && e.code === 40001 && nextProcessId == null) {
       manualRow.value = { row, kind: 'takeover' };
       showManualDialog.value = true;
@@ -547,7 +558,6 @@ async function submitReceive(row: LocateBatchRowData, nextProcessId: string | nu
     });
     ElMessage.success('已从外协收回，并交到你手上');
     close();
-    emit('done');
   } catch (e) {
     ElMessage.error(locateWriteErrorText(e, 'RECEIVE_FROM_OUTSOURCE'));
     reDiagnose();

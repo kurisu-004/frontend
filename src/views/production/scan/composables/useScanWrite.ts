@@ -141,9 +141,10 @@ export function useScanWorkerScanMutation() {
  * held 两个列表的行集同时变了；**诊断查询也变了**（那一行的 `action` 由 `TAKE_OVER` 变
  * `MINE`），不失效的话工人 30s 内重扫同一工单会看到写之前的旧行与旧 `version`。
  * 而 40901 恰恰意味着别人已把这批处置了，本端副本已过期。
- * ⚠️ 诊断弹窗**自己**的刷新不靠 WS：mutation settle 后由 `LocateDialog` 主动
- * `emit('done')` 让页面 refetch 自己的列表（与报工台现状一致）；弹窗自身的诊断数据由上面
- * 那条前缀失效负责（页面 refetch 的是 list，不是诊断）。
+ * ⚠️ 诊断弹窗**自己**的刷新与三页列表的刷新都由上面这条失效链兜住，弹窗不发任何
+ * 「请刷新页面」的信号：诊断查询（`qk.scanLocatePrefix`）与页面那两条列表 query 在同一个
+ * QueryClient 上、都是 active 的，失效即后台重取，而 `mutateAsync` 会 await `onSuccess`
+ * 返回的这条 promise ⇒ 调用方拿到成功时两个列表已是重取后的状态。
  */
 export function useScanTakeOverMutation() {
   const qc = useQueryClient();

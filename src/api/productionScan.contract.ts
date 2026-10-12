@@ -357,7 +357,12 @@ export interface ScanLocateResultDto {
  *  场景：批次仍挂在**别的**工人名下，但图纸 / 实物已流转到这位工人手里 ⇒ holder 换成
  *  我、顺手推进到我工种下的下一道工序，同一事务原子完成。**整批接管，不做部分数量。** */
 export interface ScanTakeOverRequest {
-  /** 批次锚，**必须发字符串**（后端 `deserialize_i64` 只吃 `str`，发 number → 422 纯文本）。 */
+  /** 批次锚，**必须发字符串**（后端 `deserialize_i64` 只吃 `str`，发 number → 422 纯文本）。
+   *
+   *  ⚠️ **调用方不必自己填它、填了也不作数**：`takeOverBatch(batchId, payload)` 组装
+   *  请求体时一律写形参 `batchId`，本字段在 payload 里传的值会被**整个丢弃**（不是合并，
+   * 两者不一致时发出去的是形参那个）。本字段仍声明在这里，是因为它属于 wire 契约（后端
+   *  body 的必填键）—— 路径参数与 body 字段承载的是同一个批次锚。 */
   batch_id: string;
   /** **接管人**（扫码人）工牌码。旧持有人由批次行的 `current_holder_id` 决定，
    *  客户端不需要、也不应该指定。 */
@@ -400,7 +405,10 @@ export interface ScanTakeOverResultDto {
  *  名下 ⇒ 一步「收回落自动选架 + 立刻交到扫码工人手上」，同一事务原子完成。
  *  **整批动作，没有 `quantity`，也没有 `note`。** */
 export interface ScanOutsourceReceiveRequest {
-  /** 批次锚，**必须发字符串**（与 take-over 同款）。 */
+  /** 批次锚，**必须发字符串**（与 take-over 同款）。
+   *
+   *  ⚠️ 与 `ScanTakeOverRequest.batch_id` 同一条纪律：请求体里这个键一律取
+   *  `receiveFromOutsource` 的形参 `batchId`，调用方在 payload 里传的值会被**整个丢弃**。 */
   batch_id: string;
   /** 收回人（扫码人）工牌码；收回后立刻交到这位工人手上。 */
   badge_code: string;

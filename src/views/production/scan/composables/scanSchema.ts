@@ -181,7 +181,8 @@ export type ScanPartListResultSchema = z.infer<typeof scanPartListResultSchema>;
 //   - **除链四件套外全部必填**，可空的一律 `.nullable()`；Zod 默认 strip 会静默丢弃
 //     未声明的键，所以必填字段必须显式声明，否则「后端漏发」一路流到视图层；
 //   - 后端多发未声明的键 ⇒ **被 strip 且不抛错**（灰度期新旧后端并存时这是想要的
-//     行为，反向断言见 `src/api/__tests__/productionScan.contract.spec.ts`）；
+//     行为；诊断 schema 自己那条断言见 `src/api/__tests__/productionScan.contract.spec.ts`
+//     的 L10 —— 上半段 list 行的 E8 守的是 `scanPartRowSchema`，管不到本段这两个 schema）；
 //   - **雪花 id 一律 `z.string()`**（后端 `serialize_i64` / `serialize_i64_opt` → JSON
 //     string），禁止 `z.number()`（19 位在 JS `Number` 下会丢精度）；
 //   - `batch_no` / `quantity` / `version` 是裸 i32 ⇒ `z.number()`。

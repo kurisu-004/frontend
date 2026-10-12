@@ -11,7 +11,7 @@
 // 现在兜底改接报工台自有的 `locate`（放行 `SHELF_ACCOUNT`）。三条页面的接线守卫在
 // 同目录 `ScanZeroMatchLocate.spec.ts`，本文件守组件自身的取数与写动作。
 //
-// 这批用例守五件「写错了也**不会报错**、只会让工人读一句无关文案或做一次注定失败的
+// 这批用例守六件「写错了也**不会报错**、只会让工人读一句无关文案或做一次注定失败的
 // 操作」的事：
 //   1. **走的是 locate 而不是 by-serial**（L1）；
 //   2. **工序参数的形态随 `chain_state` 变**（L2 / L3）：接管在 `NEXT` 时**不发**
@@ -24,7 +24,9 @@
 //      少键 / 雪花 id 发成 number 的响应会一路流到视图层，页面变成一张空表 ——
 //      所以这里断言的是「固定文案出现」，不是「页面没崩」；
 //   5. **失败必须给得出下一步**（L11 / L11b）：写侧要求的工序条件比读侧多一道判据，
-//      读侧给不出的那部分只能靠「吃 40001 ⇒ 降级弹手填框」兜底，否则弹窗是个死循环。
+//      读侧给不出的那部分只能靠「吃 40001 ⇒ 降级弹手填框」兜底，否则弹窗是个死循环；
+//   6. **动作成功后页面列表自己会刷新**（L13）：弹窗不发「请刷新页面」信号，三页的列表
+//      靠写路径的前缀失效自动重取 —— 这条钉住「三页不接刷新回调也能刷新」。
 //
 // 桩法：`@/api/productionScan` 整模块桩掉（弹窗的取数与三条写路径都走它）；
 // `element-plus` 桩成 `{ ElMessage }`；`@/api/parts` 桩掉以便把「零调用」钉成断言
@@ -41,6 +43,7 @@ import { createPinia } from 'pinia';
 import { QueryClient, VueQueryPlugin } from '@tanstack/vue-query';
 
 const m = vi.hoisted(() => ({
+  fetchScanHeld: vi.fn(),
   fetchScanLocate: vi.fn(),
   pickUpBatch: vi.fn(),
   takeOverBatch: vi.fn(),
@@ -50,6 +53,7 @@ const m = vi.hoisted(() => ({
 }));
 
 vi.mock('@/api/productionScan', () => ({
+  fetchScanHeld: m.fetchScanHeld,
   fetchScanLocate: m.fetchScanLocate,
   pickUpBatch: m.pickUpBatch,
   takeOverBatch: m.takeOverBatch,
@@ -62,7 +66,8 @@ vi.mock('element-plus', () => ({ ElMessage: m.ElMessage }));
 
 import LocateDialog from '@/views/production/scan/components/LocateDialog.vue';
 import { ApiError } from '@/api/http';
-import { SCAN_LIST_CONTRACT_DRIFT_TEXT } from '@/views/production/scan/composables/scanListErrorMessage';
+import { SCAN_LOCATE_CONTRACT_DRIFT_TEXT } from '@/views/production/scan/composables/scanListErrorMessage';
+import { useScanHeldQuery } from '@/views/production/scan/composables/useScanListQuery';
 
 const WORKER = {
   id: '190000000000009',
@@ -112,6 +117,36 @@ function locateResult(rows: unknown[]): Record<string, unknown> {
       system_delivery_date: null,
     },
     batches: rows,
+  };
+}
+
+/** 一份合法的持有件列表信封（一行 `ScanListItem` 的 17 字段，键集即网络契约）。 */
+function heldEnvelope() {
+  return {
+    items: [
+      {
+        id: '190000000000101',
+        serial_no: CODE,
+        name: '法兰盘',
+        drawing_no: 'DWG-1',
+        quantity: 1,
+        is_urgent: false,
+        planned_delivery_date: '2026-10-20',
+        system_delivery_date: null,
+        process_chain_id: null,
+        has_process_chain: false,
+        chain_state: 'NONE',
+        chain_next_process_id: '0',
+        chain_next_process_name: null,
+        chain_current_process_name: null,
+        batch_id: BATCH_ID,
+        batch_version: 6,
+        location: null,
+      },
+    ],
+    total: 1,
+    limit: 200,
+    offset: 0,
   };
 }
 
@@ -236,6 +271,7 @@ function rowButton(w: VueWrapper, index: number, label: string) {
 }
 
 beforeEach(() => {
+  m.fetchScanHeld.mockReset().mockResolvedValue(heldEnvelope());
   m.fetchScanLocate.mockReset().mockResolvedValue(locateResult([batch()]));
   m.pickUpBatch.mockReset().mockResolvedValue({ batch_id: BATCH_ID });
   m.takeOverBatch.mockReset().mockResolvedValue({ batch_id: BATCH_ID, version: 7 });
@@ -431,18 +467,20 @@ describe('LocateDialog / 不可行动作与守门', () => {
 
   // 守门在 queryFn 上（约定「api 层不 parse」）。少了它，少键 / 雪花 id 发成 number 的
   // 响应会一路流到视图层，页面变成一张空表且**没有任何报错** —— 所以断言的是固定文案。
-  it('L8：坏响应被守门 schema 拦下（少键 / 雪花 id 发成 number）→ 走 scanListErrorText 固定文案', async () => {
+  // ⚠️ 漂移文案是「诊断」口吻而非列表口吻：断言的是**具体那一句**，顺带把「别退回列表
+  // 文案」钉住（工人扫的条码根本没进任何列表，弹窗说「列表数据格式异常」会指错界面）。
+  it('L8：坏响应被守门 schema 拦下（少键 / 雪花 id 发成 number）→ 走诊断漂移文案', async () => {
     // (a) 少一个键（holder_display）
     m.fetchScanLocate.mockResolvedValue(locateResult([batch({ holder_display: undefined })]));
     let w = await mountDialog();
-    expect(w.text()).toContain(SCAN_LIST_CONTRACT_DRIFT_TEXT);
+    expect(w.text()).toContain(SCAN_LOCATE_CONTRACT_DRIFT_TEXT);
     expect(w.find('.mock-table').exists(), '守门失败时不得渲染表格').toBe(false);
     w.unmount();
 
     // (b) 雪花 id 发成 number（19 位在 JS Number 下会丢精度，后端发的是 string）
     m.fetchScanLocate.mockResolvedValue(locateResult([batch({ batch_id: Number(BATCH_ID) })]));
     w = await mountDialog();
-    expect(w.text()).toContain(SCAN_LIST_CONTRACT_DRIFT_TEXT);
+    expect(w.text()).toContain(SCAN_LOCATE_CONTRACT_DRIFT_TEXT);
     expect(w.find('.mock-table').exists()).toBe(false);
     w.unmount();
   });
@@ -455,7 +493,7 @@ describe('LocateDialog / 不可行动作与守门', () => {
 
     expect(w.text()).toContain('没有找到条码');
     expect(w.text()).toContain('装配件');
-    expect(w.text()).not.toContain(SCAN_LIST_CONTRACT_DRIFT_TEXT);
+    expect(w.text()).not.toContain(SCAN_LOCATE_CONTRACT_DRIFT_TEXT);
     // ⭐ 同一件事只说一遍：query hook 的错误桥接必须对 `20101` 早退，否则弹窗渲染灰态的
     // 同时屏幕上方还弹一条红色 ElMessage.error（把「扫了个不存在的条码」说成一次失败）。
     expect(m.ElMessage.error, '20101 归空态承担，不得再弹红色错误 toast').not.toHaveBeenCalled();
@@ -572,6 +610,51 @@ describe('LocateDialog / 不可行动作与守门', () => {
     expect(msg).toContain('可能已不在别人手上');
     expect(msg).toContain('不在你的工种范围内');
     expect(msg, '不得预设工人选过工序').not.toContain('请改选其他工序');
+    w.unmount();
+  });
+
+  // ⭐ 动作成功后，**三页的列表自己就刷新了**，不靠任何「请刷新页面」的信号。
+  //
+  // 守的是「弹窗动作成功 ⇒ 页面列表拿到新数据」这条链，刻意**不**把页面当成协作方挂进来：
+  // `PageHost` 只做两件事 —— ① 在 setup 里调 `useScanHeldQuery`（放回页 / 送检页 /
+  // `HeldPartsBadge` 徽章用的都是这个 hook，这就是「页面列表」的真实形态）、
+  // ② 渲染本弹窗。它**没有任何** `@done` 之类的回调，弹窗也不发这种事件
+  // ⇒ 列表刷新这件事**只可能**由写路径的失效链造成（页面上的列表 query 是 active 的，
+  // 失效即后台重取，而 `mutateAsync` await `onSuccess` 返回的那条失效 promise）。
+  // 少了失效链里的 list 前缀，这里立刻红；反过来若有人再把「通知页面刷新」接回来，
+  // 本用例不会变绿也变红 —— 它守的是刷新**确实发生**，不是刷新**只发生一次**。
+  it('L13：动作成功后页面列表 query 被失效并自动重取（不依赖页面侧任何刷新信号）', async () => {
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: 0 }, mutations: { retry: 0 } },
+    });
+    const PageHost = defineComponent({
+      components: { LocateDialog },
+      setup() {
+        useScanHeldQuery(() => ({ workerId: WORKER.id, limit: 200 }));
+        return () =>
+          h(LocateDialog, {
+            modelValue: true,
+            code: CODE,
+            worker: WORKER,
+            'onUpdate:modelValue': () => {},
+          });
+      },
+    });
+    const w = mount(PageHost, {
+      global: { stubs, plugins: [createPinia(), [VueQueryPlugin, { queryClient: qc }]] },
+    });
+    await flushPromises();
+    // 基线：页面列表首取 1 次（`staleTime` 30s 内它自己不会再发）
+    expect(m.fetchScanHeld).toHaveBeenCalledTimes(1);
+
+    await rowButton(w, 0, '接管')!.trigger('click');
+    await flushPromises();
+    expect(m.takeOverBatch).toHaveBeenCalledTimes(1);
+
+    expect(
+      m.fetchScanHeld,
+      '接管成功后页面列表必须被失效并自动重取（active query + 前缀失效）',
+    ).toHaveBeenCalledTimes(2);
     w.unmount();
   });
 });

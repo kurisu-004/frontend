@@ -29,6 +29,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ZodError } from 'zod';
 
 import {
+  locateResultSchema,
   scanPartListResultSchema,
   scanPartRowSchema,
 } from '@/views/production/scan/composables/scanSchema';
@@ -971,5 +972,60 @@ describe('L 组：locate / take-over / outsource-receive 的 URL、query 与 bod
       part: {},
       batches: [{}],
     });
+  });
+
+  // ⚠️ 诊断侧的 strip 守卫，与 E8（list 行那份）**不是同一条**，两条都得在。
+  //
+  // `scanSchema.ts` 的诊断段声明了「后端多发未声明的键 ⇒ 被 strip 且不抛错（灰度期新旧
+  // 后端并存）」，但 list 行的 E8 断言的是 `scanPartRowSchema`、管不到 `locateResultSchema`
+  // —— 后者是把 `z.object` 的默认 strip 当契约用的那一份，必须有自己的一条：将来有人把
+  // 诊断 schema 改成 `.strict()`，或把某个键声明错，灰度期后端多发一个键就会让整个诊断
+  // 弹窗 reject。
+  it('L10：诊断 schema 对后端多发的键 strip 且不抛错（行与工单两侧都被覆盖）', () => {
+    const locateRow = {
+      batch_id: BATCH_ID,
+      batch_no: 1,
+      quantity: 3,
+      status: 'IN_PROCESS',
+      version: 6,
+      location: 'WORKER',
+      holder_display: '李四',
+      current_process_name: '车削',
+      chain_state: 'NEXT',
+      next_process_id: NEXT_PROCESS_ID,
+      next_process_name: '铣削',
+      updated_at: '2026-10-15 09:00:00',
+      company_name: null,
+      sent_at: null,
+      action: 'TAKE_OVER',
+      disabled_reason: null,
+    };
+    const parsed = locateResultSchema.parse({
+      part: {
+        id: '190000000000101',
+        serial_no: SERIAL_NO,
+        name: '法兰盘',
+        drawing_no: 'DWG-1',
+        is_urgent: false,
+        planned_delivery_date: '2026-10-20',
+        system_delivery_date: null,
+      },
+      batches: [
+        {
+          ...locateRow,
+          // 后端将来新增、当前 schema 未声明的键（灰度期新旧后端并存时的常态）
+          assembly_id: null,
+          process_id: '190000000000021',
+        },
+      ],
+    });
+
+    // 行：16 个键一个不多，一个不少，未声明的两个键都不在结果里
+    expect(Object.keys(parsed.batches[0]!).sort()).toEqual(Object.keys(locateRow).sort());
+    expect(parsed.batches[0]!).not.toHaveProperty('assembly_id');
+    expect(parsed.batches[0]!).not.toHaveProperty('process_id');
+
+    // 工单侧同理（brief 7 字段）
+    expect(Object.keys(parsed.part)).toHaveLength(7);
   });
 });

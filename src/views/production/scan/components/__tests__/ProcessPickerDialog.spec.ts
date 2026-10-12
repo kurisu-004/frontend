@@ -51,9 +51,17 @@ beforeEach(() => {
   h.ElMessage.error.mockReset();
 });
 
-function render(
-  props: { kind?: 'return' | 'inspection' | 'takeover' | 'outsource'; hint?: string } = {},
-) {
+/**
+ * `kind` 的取值**从组件 props 派生**，不手写联合 —— 手写一份等于把组件的 kind 声明复制
+ * 到测试里：将来 `ProcessPickerDialog.vue` 加第 5 个 kind 时，下面的用例循环不会红，
+ * 只有真去渲染那个 kind 时才会发现用例根本没覆盖它。
+ *
+ * 取法走 `InstanceType<...>['$props']`（本仓 Vue 版本未导出 `ComponentProps` 这个
+ * 泛型助手；它对 `defineComponent` 出来的 SFC 同样能拿到同一份 props 类型）。
+ */
+type PickerKind = InstanceType<typeof ProcessPickerDialog>['$props']['kind'];
+
+function render(props: { kind?: PickerKind; hint?: string } = {}) {
   return mount(ProcessPickerDialog, {
     props: { modelValue: true, ...props },
     global: { stubs },

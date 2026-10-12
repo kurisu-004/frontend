@@ -151,7 +151,6 @@
       v-model="showLocate"
       :code="locateCode"
       :worker="worker"
-      @done="refresh"
     />
 
     <!-- 图纸 / 图片 预览（2026-10-11 抽成 components/PartDrawingPreviewDialog.vue：
