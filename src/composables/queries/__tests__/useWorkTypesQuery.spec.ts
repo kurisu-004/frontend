@@ -86,7 +86,7 @@ vi.mock('@/api/workType', () => ({
 let testApp: ReturnType<typeof createApp>;
 let testQueryClient: QueryClient;
 
-/** 后端 WorkTypeOut 10 字段的最小完整形态（vo/work_type.rs）。 */
+/** 后端 WorkTypeOut 11 字段的最小完整形态（vo/work_type.rs；2026-10-16 增 auto_allocate_limit）。 */
 function validWorkType() {
   return {
     id: '8800000000001',
@@ -95,6 +95,7 @@ function validWorkType() {
     description: null,
     sort_order: 1,
     max_held_batches: null,
+    auto_allocate_limit: null,
     process_ids: ['190000000000001'],
     version: 1,
     created_at: '2026-10-01 10:00:00',
@@ -245,7 +246,7 @@ describe('useWorkTypesQuery — reactive params + Zod 守门（2026-10-02）', (
 
   it('T8（Zod 守门）：工种响应缺 process_ids → parse 抛错，data 为 undefined', async () => {
     // M-1 strip 陷阱 guard：Zod 默认 strip 模式下漏声明的字段被**静默丢弃**，下游
-    // 拿到 undefined 却毫无察觉。workTypeSchema 显式声明 10 字段就是为了这个 ——
+    // 拿到 undefined 却毫无察觉。workTypeSchema 显式声明 11 字段就是为了这个 ——
     // 本用例是「删掉 process_ids 声明就必须变红」的证据。
     const { process_ids: _omit, ...rest } = validWorkType();
     void _omit;

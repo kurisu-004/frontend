@@ -106,8 +106,24 @@
             v-model="form.max_held_batches"
             :min="1"
             :value-on-clear="null"
-            placeholder="留空不限"
+            placeholder="留空表示该工种不可领取"
           />
+        </el-form-item>
+        <!-- 2026-10-16 新增。留空 = 未配置 ⇒ 自动补料兜底补到「可领取上限」（与人工手动
+             领到上限同解）；所以本字段的上界由上一项决定，且上一项为空时本项无从取值 ——
+             那时禁用并说明原因，而不是让用户填一个后端必拒的值。 -->
+        <el-form-item label="自动补料上限">
+          <el-input-number
+            v-model="form.auto_allocate_limit"
+            :min="1"
+            :max="form.max_held_batches ?? undefined"
+            :value-on-clear="null"
+            :disabled="form.max_held_batches === null"
+            placeholder="留空则自动补料到可领取上限"
+          />
+          <div v-if="form.max_held_batches === null" class="field-hint">
+            需先配置「可领取上限」：自动补料没有兜底目标，配不了此项。
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -161,6 +177,14 @@ const columnDefs: ColumnDef[] = [
     minWidth: 100,
     align: 'center',
   },
+  {
+    // 2026-10-16 新增：空单元格 = 未配置（兜底补到可领取上限），不是「不限」。
+    key: 'auto_allocate_limit',
+    label: '自动补料上限',
+    prop: 'auto_allocate_limit',
+    minWidth: 120,
+    align: 'center',
+  },
 ];
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'work_type_list' });
 const drag = useColumnDrag(columnDefs, { listKey: 'work_type_list' });
@@ -176,12 +200,14 @@ const form = reactive<{
   description: string;
   sort_order: number;
   max_held_batches: number | null;
+  auto_allocate_limit: number | null;
 }>({
   code: '',
   name: '',
   description: '',
   sort_order: 0,
   max_held_batches: null,
+  auto_allocate_limit: null,
 });
 
 async function fetchList(): Promise<void> {
@@ -207,6 +233,7 @@ function onNew(): void {
   form.description = '';
   form.sort_order = 0;
   form.max_held_batches = null;
+  form.auto_allocate_limit = null;
   dialogVisible.value = true;
 }
 function onEdit(row: WorkType): void {
@@ -216,12 +243,36 @@ function onEdit(row: WorkType): void {
   form.description = row.description ?? '';
   form.sort_order = row.sort_order;
   form.max_held_batches = row.max_held_batches ?? null;
+  form.auto_allocate_limit = row.auto_allocate_limit ?? null;
   dialogVisible.value = true;
+}
+
+/** 「自动补料上限」与「可领取上限」的交叉校验。
+ *
+ *  后端有同一套校验（失败返业务码 `20104`），但把它放在请求之前是为了给工人一条能照着改的
+ *  提示 —— 后端那句是字段级的参数错误，说不清是哪两个数打架。
+ *  只在「有值」时校验：留空（未配置）是合法形态，此时自动补料兜底补到可领取上限。
+ *
+ *  逐条对应后端 `validate_held_limits`：有值须 >= 1、有值时 `max_held_batches` 必须非空、
+ *  有值时不得大于 `max_held_batches`。控件上的 `:min` / `:max` 只挡得住正常点选，挡不住
+ *  直调 onSave。 */
+function validateLimits(): string | null {
+  const auto = form.auto_allocate_limit;
+  if (auto === null) return null;
+  if (auto < 1) return '自动补料上限必须大于等于 1';
+  if (form.max_held_batches === null) return '配置自动补料上限前，请先配置可领取上限';
+  if (auto > form.max_held_batches) return '自动补料上限不能超过可领取上限';
+  return null;
 }
 
 async function onSave(): Promise<void> {
   if (!form.code.trim() || !form.name.trim()) {
     ElMessage.warning('代码与名称不能为空');
+    return;
+  }
+  const limitError = validateLimits();
+  if (limitError) {
+    ElMessage.warning(limitError);
     return;
   }
   saving.value = true;
@@ -232,6 +283,9 @@ async function onSave(): Promise<void> {
         description: form.description.trim() || null,
         sort_order: form.sort_order,
         max_held_batches: form.max_held_batches,
+        // 恒发（含 null）：本字段是真三态，缺省=不修改 / 显式 null=清空；表单恒带值，
+        // 「清空」正是靠显式 null 表达的。缺了这条键用户就没法把已配的上限撤掉。
+        auto_allocate_limit: form.auto_allocate_limit,
       });
       ElMessage.success('已保存');
     } else {
@@ -241,6 +295,7 @@ async function onSave(): Promise<void> {
         description: form.description.trim() || null,
         sort_order: form.sort_order,
         max_held_batches: form.max_held_batches,
+        auto_allocate_limit: form.auto_allocate_limit,
       });
       ElMessage.success('已新增');
     }
@@ -260,6 +315,7 @@ function onDialogClosed(): void {
   form.description = '';
   form.sort_order = 0;
   form.max_held_batches = null;
+  form.auto_allocate_limit = null;
 }
 
 async function onDelete(row: WorkType): Promise<void> {
@@ -303,5 +359,12 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   margin-bottom: 8px;
+}
+/* 2026-10-16 新增：「自动补料上限」被禁用时的原因说明（见模板内注释）。 */
+.field-hint {
+  margin-top: 4px;
+  color: #909399;
+  font-size: 12px;
+  line-height: 1.5;
 }
 </style>

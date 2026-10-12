@@ -787,6 +787,9 @@ export const workTypeSchema = z.object({
   description: z.string().nullable(),
   sort_order: z.number(),
   max_held_batches: z.number().nullable(),
+  // 2026-10-16 新增：自动补料上限。⚠️ 必须显式声明 —— Zod 默认 strip 会把这个键
+  // 静默丢掉（消费侧读到 undefined 且不报错），而它是工种页表单要编辑的值。
+  auto_allocate_limit: z.number().nullable(),
   process_ids: z.array(z.string()),
   version: z.number(),
   created_at: z.string(),

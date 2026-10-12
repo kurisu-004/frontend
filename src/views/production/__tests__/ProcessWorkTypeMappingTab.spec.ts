@@ -160,6 +160,7 @@ const WT: WorkType = {
   description: null,
   sort_order: 1,
   max_held_batches: null,
+  auto_allocate_limit: null,
   process_ids: ['190000000000001', '190000000000002'],
   created_at: '2026-10-01 10:00:00',
   updated_at: '2026-10-01 10:00:00',
