@@ -260,10 +260,11 @@ const locatePartBriefSchema = z.object({
  *
  *  ⚠️ `category` 声明成 `z.string()` 而**不是** `z.enum`（2026-10-16 review 第 1 轮
  *  订正，先前锁的是枚举，理由方向写反了）。三条依据：
- *  1. **同 VO 的四个分类字段全部是 `z.string()`**：`status` / `chain_state` / `action` /
- *     `disabled_reason` 各写了「加取值是纯后端单方面改动，退化而不是让弹窗 reject」的同一段
- *     理由（见本段开头那条「严格度口径与本文件上半段保持一致，不要各拍一次」）。同一个 VO
- *     里锁一个不锁三个，是让后人以为那个枚举是后端写死的白名单。
+ *  1. **同 VO 的四个分类字段一律不枚举化**：`status` / `chain_state` / `action` /
+ *     `disabled_reason` 与本字段方向一致 —— 都是「不因为后端加一个取值就让诊断弹窗
+ *     reject」（各自的具体理由不同：`status` 是零消费、只作展示与排查，见本段开头那条
+ *     「严格度口径与本文件上半段保持一致，不要各拍一次」）。同一个 VO 里锁一个不锁三个，
+ *     是让后人以为那个枚举是后端写死的白名单。
  *  2. **本字段零消费**：`category` 前端全仓没有任何读取点（`LocateDialog` 的
  *     `allowedProcessIds` / `startManualFlow` 只取 `process_id`；同结构的 `code` 同样零消费，
  *     `name` 在 2026-10-16 修好行内预提示后被 `manualHintText` 读去拼提示、纯展示）。

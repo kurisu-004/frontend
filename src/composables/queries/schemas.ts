@@ -797,6 +797,18 @@ export const workTypeSchema = z.object({
   max_held_batches: z.number().nullable(),
   // 2026-10-16 新增：自动补料上限。⚠️ 必须显式声明 —— Zod 默认 strip 会把这个键
   // 静默丢掉（消费侧读到 undefined 且不报错），而它是工种页表单要编辑的值。
+  //
+  // ⚠️ **部署顺序：后端必须先上**（2026-10-16 review 第 2 轮 MINOR-2 补登，与同发布窗口的
+  // `scanSchema.ts` 里 `worker_processes` 那条同款）。本键**没有** `.optional()` /
+  // `.default()`，旧后端不返 ⇒ `workTypeListResultSchema.parse` 抛 ZodError ⇒
+  // **工序映射 Tab（`ProcessWorkTypeMappingTab.vue`）的左表恒空**；该 Tab 的错误处理是
+  // `ElMessage.error(e.message ?? …)`（`ProcessWorkTypeMappingTab.vue` 的 error watch），
+  // **没走 `contractDriftErrorText` 收口** ⇒ 现场直接把 Zod 的 issues JSON 原文当 toast 弹给用户。
+  // ⚠️ 失败点在客户端守门层、抛的是 ZodError 而**不是**后端业务码 ⇒ 现场没有任何 `2xxxx`
+  // 可读，排障先怀疑部署顺序，别去查权限 / 查映射表。
+  //
+  // 缓解事实（所以只判 MINOR）：工种管理页 `WorkTypeTab.vue` 走裸 `listWorkTypes`
+  // （不过守门 schema），对旧后端天然降级安全 ⇒ 受影响的**只有**工序映射 Tab 那一处。
   auto_allocate_limit: z.number().nullable(),
   process_ids: z.array(z.string()),
   version: z.number(),
