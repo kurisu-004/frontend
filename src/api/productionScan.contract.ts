@@ -372,9 +372,11 @@ export interface LocateProcessBriefDto {
  *  **不分页、无上限**（找件场景要一次看全），顺序即 `batch_no ASC, id ASC`
  *  （件数递增 + 拆批兜底），前端不必二次排序。
  *
- *  `worker_processes` 是**恒存在的键**、值可以是空数组：未传 `worker_id`、工人未绑
- *  工种、工种未映射任何工序，三种情形都是 `[]`（不是 null、不是缺键）。手填下一道
- *  工序的选择范围由它决定。 */
+ * `worker_processes` 是**恒存在的键**、值可以是空数组：未传 `worker_id`、工人未绑
+ *  工种、工种未映射任何工序、**工种只映射了已软删工序**（2026-10-16 review 第 2 轮
+ *  MINOR-1 登记：读侧闸门用含已软删工序的**宽集合**判「这行可不可点」，出参发的是未软删的
+ *  **窄集合** ⇒「行可点 + 候选为空」是后端自己认可的形态，不是边角），四种情形都是 `[]`
+ *  （不是 null、不是缺键）。手填下一道工序的选择范围由它决定。 */
 export interface ScanLocateResultDto {
   part: LocatePartBriefDto;
   batches: LocateBatchItemDto[];

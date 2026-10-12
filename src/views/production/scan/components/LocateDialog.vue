@@ -220,9 +220,12 @@
                 {{ actionLabel((row as LocateBatchRowData).action) }}
               </el-button>
               <!-- 「点下去会发生什么」的可见事实：手填弹窗是点了按钮之后才出现的，
-                   工人需要提前看到「这次要点两下」。⚠️ 这句话只在**候选多条**时成立 ——
-                   候选恰好一条时根本不弹框、直接提交（见 `manualHintText`），继续写死
-                   「要点两下」就是在骗工人。 -->
+                   工人需要提前看到「这次要点两下」。⚠️ **候选条数决定文案**（2026-10-16
+                   review 第 3 轮 NIT-2 订正；先前的注释停在「只在候选多条时成立」的
+                   两支时代，review 第 2 轮 MINOR-1 加了 0 候选支后就过期了）：0 条说工种
+                   没配工序 / 1 条说将直接 X 到… / 多条才说需指定，逐支见 `manualHintText`；
+                   它必须与点下去实际走的 `startManualFlow` 三分支一一对应，否则又是
+                   「行内说要弹框、点下去不弹」。 -->
               <span v-if="needManualProcess(row as LocateBatchRowData)" class="manual-hint">{{
                 manualHintText(row as LocateBatchRowData)
               }}</span>
@@ -335,7 +338,10 @@ const part = computed(() => data.value?.part ?? null);
 const batches = computed<LocateBatchRowData[]>(() => data.value?.batches ?? []);
 /** 2026-10-16 新增：当前工人的工种可执行工序（locate 出参顶层 `worker_processes`）。
  *  手填下一道工序的候选集就是它 —— 与写端点的工种闸门同一份判据，前端不再自己判一遍
- *  「这个工种能不能做这道工序」。空数组 = 未绑工种 / 工种未映射任何工序。 */
+ *  「这个工种能不能做这道工序」。空数组四种成因：未传 `worker_id` / 未绑工种 / 工种未映射
+ *  任何工序 / **工种只映射了已软删工序**（第四种成因，2026-10-16 review 第 2 轮 MINOR-1
+ *  登记：后端读侧闸门用**含已软删工序的宽集合**判「行可不可点」，出参发的是**未软删的窄
+ *  集合** ⇒「行可点 + 候选为空」是后端自己认可的形态，不是边角）。 */
 const workerProcesses = computed<LocateProcessBriefData[]>(
   () => data.value?.worker_processes ?? [],
 );
