@@ -17,6 +17,8 @@
                                           kind 下渲染）
     currentProcessId?: string | null    工件 next_process_id，预填为推荐
     excludeProcessIds?: string[]        不可选的工序 id（显示为禁用卡片 + hint）
+    allowedProcessIds?: string[] | null 限定可展示的工序 id 集合（2026-10-16 新增，缺省
+                                          null = 不限定）
     hint?: string                       常驻横幅提示（缺省不渲染）
     showClose?: boolean                 是否显示右上角 ×（缺省 true；传 false 把关闭权收在
                                           footer 两键上，供「本框是某条路径唯一提交入口」
@@ -67,7 +69,7 @@
         <el-tab-pane v-for="cat in tabs" :key="cat.key" :label="cat.label" :name="cat.key">
           <div v-if="cat.processes.length === 0" class="tab-empty">
             <el-icon :size="48" color="#c0c4cc"><Box /></el-icon>
-            <p>「{{ cat.label }}」暂无工序</p>
+            <p>{{ tabEmptyText(cat.label) }}</p>
           </div>
           <div v-else class="card-grid">
             <HmiPickerCard
@@ -107,8 +109,16 @@
 /**
  * 工序大按钮 picker（2026-07-17，HMI 重设计）。
  *
- * 数据源：一次性 GET /processes?limit=200 拉所有 INHOUSE+OUTSOURCE 工序，
- * 不按工人 scope 过滤（用户决策：显示全部 + 后端 strict invariant 兜底）。
+ * 数据源：一次性 GET /processes?limit=200 拉所有 INHOUSE+OUTSOURCE 工序，可展示范围由
+ * `allowedProcessIds` 决定 —— 传了只渲染该集合（扫码接管 / 外协收回两条自助恢复路径按
+ * 工人工种收窄），不传则渲染全量（放回页与送检页的既有形态）。
+ *
+ * 收窄的产品理由：接管与收回的目标工序必须落在**当前工人的工种映射内**（写端点会拿这条
+ * 闸门拒不在集合内的工序），而这两条路径上工序已经能由工种唯一确定 —— 让工人从全量工序
+ * 里挑一个再被写端点拒，是把一条本该由后端判好的事做成了工人的负担。放回页 / 送检页不在
+ * 收窄范围内：那里的下一道工序是「活做完了下一站是谁」，工序链上有什么就选什么，与工种
+ * 授权无关。
+ *
  * 工件 next_process_id 推荐态通过 currentProcessId prop 传入，预填选中并切到对应 category tab。
  *
  * 与同目录其它 picker 一样基于 HmiPickerCard 视觉规范（kind=process），
@@ -132,13 +142,27 @@ const props = withDefaults(
      *  - `outsource`  —— 2026-10-15 新增：外协确认收回（`POST /prod/scan/outsource-receive`）
      *    手填下一道。
      *  后两个是 `LocateDialog`（扫码找件诊断弹窗）的复用方：它们的写端点在
-     *  `chain_state !== 'NEXT'` 时都要求前端手填 `next_process_id`。
+     *  `chain_state !== 'NEXT'` 时都要求前端手填 `next_process_id`。这两个 kind 也只接收
+     *  `allowedProcessIds` 收窄后的候选集（另两个 kind 的调用方不传该 prop，观感不变）。
      */
     kind?: 'return' | 'inspection' | 'takeover' | 'outsource';
     /** 工件 next_process_id：预填选中并标推荐（橙色边框） */
     currentProcessId?: string | null;
     /** 不可选的工序 id 列表（被排除的卡片显示为禁用 + hint） */
     excludeProcessIds?: string[];
+    /**
+     * 2026-10-16 新增：限定可展示的工序 id 集合。传了 ⇒ `load()` 只保留该集合内的工序；
+     * **不传（默认 `null`）⇒ 渲染全部工序**（放回页 / 送检页两个既有调用方保持原样）。
+     *
+     * 集合来自后端按工种算好的候选（locate 出参的 `worker_processes`），前端只做过滤，
+     * 不自己再判「这个工种能不能做这道工序」—— 写端点用的是同一份判据，两处各判一次
+     * 迟早漂移。
+     *
+     * ⚠️ `null` 与 `[]` 语义不同：`null` = 不限定，`[]` = 一个都不展示（空态文案会明确说
+     * 「你的工种在这个分类下没有工序」）。把两者混为一谈会让工种未映射工序的情形退回
+     * 全量展示。
+     */
+    allowedProcessIds?: string[] | null;
     /** 常驻横幅提示（el-alert）；缺省 / 空串不渲染。所有 kind 都可用，与用途无关。 */
     hint?: string;
     /**
@@ -156,6 +180,7 @@ const props = withDefaults(
     kind: 'return',
     currentProcessId: null,
     excludeProcessIds: () => [],
+    allowedProcessIds: null,
     hint: '',
     showClose: true,
   },
@@ -235,6 +260,21 @@ const tabs = computed<TabEntry[]>(() => [
   },
 ]);
 
+/** 是否处于「按工种收窄」形态（`allowedProcessIds` 传了数组，含空数组）。 */
+const restricted = computed<boolean>(() => props.allowedProcessIds != null);
+
+/**
+ * tab 空态文案：收窄形态下「这个分类下你的工种一道工序都没有」与「这个分类本来就没有
+ * 工序」是两件事，混成同一句会让人以为整个工种没配工序。
+ */
+function tabEmptyText(label: string): string {
+  return restricted.value ? `「${label}」下你的工种暂无可选工序` : `「${label}」暂无工序`;
+}
+
+// 依赖只取「开关 + 预填推荐」两项：`allowedProcessIds` 是**打开时读一次**的收窄集合，
+// 不进依赖是为了避开数组 prop 的引用抖动（父组件每次渲染给新数组会让本回调反复重跑
+// listProcesses）。调用方在一次打开期间不会换候选集 —— 换集的那条路径（写动作触发诊断
+// 失效重查）会连带换掉整行数据与动作结论，用户必须重新走一遍点击。
 watch(
   () => [props.modelValue, props.currentProcessId] as const,
   async ([visible, currentId]) => {
@@ -264,8 +304,14 @@ async function load(): Promise<void> {
   errorMessage.value = null;
   try {
     const resp = await listProcesses({ limit: 200 });
-    processes.value = resp.items;
-    // 若 currentProcessId 在新列表中找不到（已被删除），清空选中让用户重选
+    // 收窄在**拉全量之后本地过滤**，不在请求里下推：那条 list 端点没有按 id 过滤的入参，
+    // 候选集合也只有几百条，本地过滤比多造一条端点便宜。`[]`（空数组）同样是「不展示任何
+    // 工序」，与 `null`（不限定）的区别只体现在空态文案上。
+    processes.value =
+      props.allowedProcessIds == null
+        ? resp.items
+        : resp.items.filter((p) => props.allowedProcessIds!.includes(p.id));
+    // 若 currentProcessId 在新列表中找不到（已被软删、或不落在收窄集合内），清空选中让用户重选
     if (selectedId.value && !processes.value.some((p) => p.id === selectedId.value)) {
       selectedId.value = null;
     }

@@ -104,8 +104,17 @@ function batch(over: Record<string, unknown> = {}): Record<string, unknown> {
   };
 }
 
-/** 一份合法的诊断结果信封。 */
-function locateResult(rows: unknown[]): Record<string, unknown> {
+/** 一份合法的诊断结果信封。
+ *
+ *  `worker_processes` 是后端按工种算好的候选（2026-10-16 起顶层必发）。默认给**一条**：
+ *  多数用例走 `chain_state === 'NEXT'` 的免填路径、根本不弹手填框，候选内容不影响断言；
+ *  手工填候选的用例显式覆盖本键。 */
+function locateResult(
+  rows: unknown[],
+  workerProcesses: unknown[] = [
+    { process_id: '190000000000881', code: 'TURN', name: '车削', category: 'INHOUSE' },
+  ],
+): Record<string, unknown> {
   return {
     part: {
       id: '190000000000101',
@@ -117,6 +126,7 @@ function locateResult(rows: unknown[]): Record<string, unknown> {
       system_delivery_date: null,
     },
     batches: rows,
+    worker_processes: workerProcesses,
   };
 }
 
@@ -217,19 +227,38 @@ const stubs = {
   }),
   ProcessPickerDialog: defineComponent({
     name: 'ProcessPickerDialog',
-    props: ['modelValue', 'kind', 'showClose', 'currentProcessId', 'hint', 'excludeProcessIds'],
+    props: [
+      'modelValue',
+      'kind',
+      'showClose',
+      'currentProcessId',
+      'hint',
+      'excludeProcessIds',
+      'allowedProcessIds',
+    ],
     emits: ['confirm', 'cancel', 'update:modelValue'],
-    // `data-kind` / `data-showclose` 用来验「弹窗按 kind 出文案」+「关闭权收在 footer」。
+    // `data-kind` / `data-showclose` / `data-allowed` 用来验「弹窗按 kind 出文案」+
+    // 「关闭权收在 footer」+「候选收窄到工种工序」。
     template: `<div
       v-if="modelValue"
       class="mock-picker-dialog"
       :data-kind="kind"
       :data-showclose="String(showClose)"
+      :data-allowed="JSON.stringify(allowedProcessIds ?? null)"
     >
       <button class="picker-ok" @click="$emit('confirm', { id: '190000000000888', code: 'P8', name: '钻孔', category: 'INHOUSE' })">选它</button>
     </div>`,
   }),
 };
+
+/** 两条工种工序候选：弹手填框需要「多条」才成立（候选恰好一条时组件直接提交、
+ *  不弹框 —— 见 describe 里 2026-10-16 那组用例）。 */
+function twoProcesses(): unknown[] {
+  return [
+    { process_id: '190000000000881', code: 'TURN', name: '车削', category: 'INHOUSE' },
+    { process_id: '190000000000882', code: 'MILL', name: '铣削', category: 'INHOUSE' },
+  ];
+}
 
 async function mountDialog(): Promise<VueWrapper> {
   const w = mount(LocateDialog, {
@@ -356,9 +385,13 @@ describe('LocateDialog / 写动作的提交体', () => {
 
   // `chain_state !== 'NEXT'`（无链 / 链尾 / 指针漂移）⇒ 两个写端点都要求显式工序：
   // 接管缺失 → 40001、外协无链缺失 → 40001。所以这里必须先弹手填弹窗，且它按 kind 分流。
+  // 工种给了两条候选（一条时组件直接提交、不弹框 —— 那条路径由 2026-10-16 那组用例守）。
   it('L4：链推不出下一道 → 先弹手填工序弹窗（kind 分流），且关闭权不在 × 上', async () => {
     m.fetchScanLocate.mockResolvedValue(
-      locateResult([batch({ action: 'TAKE_OVER', chain_state: 'NONE', next_process_id: null })]),
+      locateResult(
+        [batch({ action: 'TAKE_OVER', chain_state: 'NONE', next_process_id: null })],
+        twoProcesses(),
+      ),
     );
     const w = await mountDialog();
 
@@ -600,7 +633,10 @@ describe('LocateDialog / 不可行动作与守门', () => {
   // 反向对照：本次**已经**手填了工序还吃 `40001`，不降级弹框（那是别的问题，靠重查）。
   it('L11b：已手填工序还吃 40001 → 不重复弹手填框，且诊断恰好重查一次', async () => {
     m.fetchScanLocate.mockResolvedValue(
-      locateResult([batch({ action: 'TAKE_OVER', chain_state: 'NONE', next_process_id: null })]),
+      locateResult(
+        [batch({ action: 'TAKE_OVER', chain_state: 'NONE', next_process_id: null })],
+        twoProcesses(),
+      ),
     );
     m.takeOverBatch.mockRejectedValue(new ApiError(40001, 'next_process_id 非法'));
     const w = await mountDialog();
@@ -719,6 +755,95 @@ describe('LocateDialog / 不可行动作与守门', () => {
       m.fetchScanLocate,
       '写失败必须重查（onError 失效链），且只重查一次 —— 3 次就是「失效链 + 手动 refetch」两条通道同时跑',
     ).toHaveBeenCalledTimes(2);
+    w.unmount();
+  });
+});
+
+// 2026-10-16：手填下一道工序的候选收窄到**当前工人的工种工序**（locate 顶层
+// `worker_processes`，与写端点的工种闸门同一份判据）。这组用例守三件事：
+//   1. 候选恰好一条时**不弹框、直接提交**（工种已经唯一确定目标工序，多一次触屏交互
+//      是纯损耗）；
+//   2. 多条时才弹框，且框内只列这 N 条；
+//   3. 空集合给出兜底提示而不是让按钮点了没反应 —— 正常情况下这种行后端已判成不可点
+//      （`disabled_reason = PROCESS_NOT_IN_WORK_TYPE`），本组守的是「万一到了也别装死」。
+describe('LocateDialog / 手填工序的候选来自工种工序', () => {
+  const NO_MANUAL_ROW = {
+    action: 'TAKE_OVER',
+    chain_state: 'NONE',
+    next_process_id: null,
+  };
+
+  it('候选恰好 1 条：不弹手填框，直接用那一条提交', async () => {
+    m.fetchScanLocate.mockResolvedValue(locateResult([batch(NO_MANUAL_ROW)]));
+    const w = await mountDialog();
+
+    await rowButton(w, 0, '接管')!.trigger('click');
+    await flushPromises();
+
+    expect(w.findAll('.mock-picker-dialog'), '单候选不该弹框').toHaveLength(0);
+    expect(m.takeOverBatch).toHaveBeenCalledTimes(1);
+    const [, body] = m.takeOverBatch.mock.calls[0] as [string, Record<string, unknown>];
+    // 提交体带的就是候选里那一条的 process_id（后端雪花 id 字符串形态，不转 number）
+    expect(body.next_process_id).toBe('190000000000881');
+    w.unmount();
+  });
+
+  it('外协收回的单候选同样直提（两个动作走同一条手填路径）', async () => {
+    m.fetchScanLocate.mockResolvedValue(
+      locateResult(
+        [
+          batch({
+            action: 'RECEIVE_FROM_OUTSOURCE',
+            chain_state: 'TAIL',
+            next_process_id: null,
+            location: 'OUTSOURCE_COMPANY',
+          }),
+        ],
+        [{ process_id: '190000000000881', code: 'TURN', name: '车削', category: 'INHOUSE' }],
+      ),
+    );
+    const w = await mountDialog();
+
+    await rowButton(w, 0, '确认收回')!.trigger('click');
+    await flushPromises();
+
+    expect(w.findAll('.mock-picker-dialog')).toHaveLength(0);
+    expect(m.receiveFromOutsource).toHaveBeenCalledTimes(1);
+    const [, body] = m.receiveFromOutsource.mock.calls[0] as [string, Record<string, unknown>];
+    expect(body.next_process_id).toBe('190000000000881');
+    w.unmount();
+  });
+
+  it('候选多条：弹框且 allowedProcessIds 只含这 N 条', async () => {
+    m.fetchScanLocate.mockResolvedValue(locateResult([batch(NO_MANUAL_ROW)], twoProcesses()));
+    const w = await mountDialog();
+
+    await rowButton(w, 0, '接管')!.trigger('click');
+    await flushPromises();
+
+    const picker = w.find('.mock-picker-dialog');
+    expect(picker.exists()).toBe(true);
+    expect(JSON.parse(picker.attributes('data-allowed') ?? 'null')).toEqual([
+      '190000000000881',
+      '190000000000882',
+    ]);
+    expect(m.takeOverBatch, '选之前不提交').not.toHaveBeenCalled();
+    w.unmount();
+  });
+
+  it('候选为空：不弹框也不提交，给出「工种未映射工序」的兜底提示', async () => {
+    m.ElMessage.warning.mockClear();
+    m.fetchScanLocate.mockResolvedValue(locateResult([batch(NO_MANUAL_ROW)], []));
+    const w = await mountDialog();
+
+    await rowButton(w, 0, '接管')!.trigger('click');
+    await flushPromises();
+
+    expect(w.findAll('.mock-picker-dialog')).toHaveLength(0);
+    expect(m.takeOverBatch).not.toHaveBeenCalled();
+    const msg = String(m.ElMessage.warning.mock.calls[0]?.[0] ?? '');
+    expect(msg).toContain('该工种未映射任何工序');
+    expect(msg).toContain('管理员');
     w.unmount();
   });
 });

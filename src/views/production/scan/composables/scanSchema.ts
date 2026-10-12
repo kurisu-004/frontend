@@ -250,10 +250,34 @@ const locatePartBriefSchema = z.object({
   system_delivery_date: z.string().nullable(),
 });
 
-/** `GET /api/v2/prod/scan/locate` 出参：`part` + **全部**批次（不分页、无上限）。 */
+/** 2026-10-16 新增：本次诊断的**工种工序候选**（顶层数组，恒存在、可为空）。
+ *
+ *  ⚠️ **必填声明**：Zod 默认 strip 会静默丢弃未声明的键 —— 不显式声明时后端已发的
+ *  `worker_processes` 会被整个丢掉，候选恒 `undefined` 且**不报任何错**，手填下一道
+ *  工序只能退回「列全部工序」（见 `src/composables/queries/schemas.ts` 文件头的同款警告）。
+ *
+ *  严格度与本段其余 schema 一致：4 字段全必填（空集合表达在数组层，不表达在字段层）。
+ *  `category` 锁 `z.enum`（取值域与 `queries/schemas.ts::processSchema` 同一份）；
+ *  后端加第三类时会在这里炸出契约漂移，而不是让手填框悄悄少渲染一个 tab —— 那条
+ *  链上工人没有别的出路，降级比报错更糟。 */
+const locateProcessBriefSchema = z.object({
+  /** 工序 id，雪花 ID **字符串**（发成 number 会被写端点拒成 400 纯文本）。 */
+  process_id: z.string(),
+  code: z.string(),
+  name: z.string(),
+  category: z.enum(['INHOUSE', 'OUTSOURCE']),
+});
+
+/** 行派生类型：元素类型沿 `*Data` 后缀约定（api 层用它标注返回类型）。 */
+export type LocateProcessBriefData = z.infer<typeof locateProcessBriefSchema>;
+
+/** `GET /api/v2/prod/scan/locate` 出参：`part` + **全部**批次（不分页、无上限）+
+ *  工种工序候选（顶层数组，恒存在、可为空）。 */
 export const locateResultSchema = z.object({
   part: locatePartBriefSchema,
   batches: z.array(locateBatchRowSchema),
+  /** 2026-10-16 新增：空集合表达「未传 worker_id / 未绑工种 / 工种未映射工序」。 */
+  worker_processes: z.array(locateProcessBriefSchema),
 });
 
 export type LocateResultData = z.infer<typeof locateResultSchema>;

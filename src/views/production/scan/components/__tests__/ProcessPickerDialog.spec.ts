@@ -43,8 +43,41 @@ const stubs = {
   'el-tab-pane': { name: 'ElTabPaneStub', template: '<div><slot /></div>' },
   'el-button': { name: 'ElButtonStub', template: '<button><slot /></button>' },
   'el-icon': { name: 'ElIconStub', template: '<i><slot /></i>' },
-  HmiPickerCard: { name: 'HmiPickerCardStub', template: '<div class="stub-card" />' },
+  // 卡片桩把工序的标识透成 data-* —— 「只渲染收窄集合内的那几条」只能这样断言。
+  HmiPickerCard: {
+    name: 'HmiPickerCardStub',
+    props: ['code', 'name', 'category', 'isSelected', 'disabled', 'hint'],
+    template:
+      '<div class="stub-card" :data-code="code" :data-name="name" :data-category="category" />',
+  },
 };
+
+type PickerAllowed = InstanceType<typeof ProcessPickerDialog>['$props']['allowedProcessIds'];
+
+/** 后端 `ProcessOut` 的完整行（`listProcesses` 的 items 元素）。 */
+function process(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: '190000000000001',
+    version: 1,
+    code: 'CUT',
+    name: '切割',
+    category: 'INHOUSE',
+    sort_order: 0,
+    description: null,
+    requires_approval: false,
+    color: null,
+    is_cnc: false,
+    created_at: '2026-10-01 10:00:00',
+    updated_at: '2026-10-01 10:00:00',
+    ...over,
+  };
+}
+
+const PROCESSES = [
+  process(),
+  process({ id: '190000000000002', code: 'WELD', name: '焊接', sort_order: 1 }),
+  process({ id: '190000000000003', code: 'SUB', name: '委外喷涂', category: 'OUTSOURCE' }),
+];
 
 beforeEach(() => {
   h.listProcesses.mockReset().mockResolvedValue({ items: [], total: 0 });
@@ -61,7 +94,9 @@ beforeEach(() => {
  */
 type PickerKind = InstanceType<typeof ProcessPickerDialog>['$props']['kind'];
 
-function render(props: { kind?: PickerKind; hint?: string } = {}) {
+function render(
+  props: { kind?: PickerKind; hint?: string; allowedProcessIds?: PickerAllowed } = {},
+) {
   return mount(ProcessPickerDialog, {
     props: { modelValue: true, ...props },
     global: { stubs },
@@ -136,5 +171,62 @@ describe('ProcessPickerDialog / 作用说明行的渲染范围', () => {
       await flushPromises();
       expect(w.find('.picker-purpose').exists(), `${kind} 不该多出作用说明行`).toBe(false);
     }
+  });
+});
+
+// 2026-10-16 新增：`allowedProcessIds` 收窄。扫码接管 / 外协收回两条自助恢复路径的目标
+// 工序必须落在工人工种映射内（写端点会拒），所以候选由后端按工种算好后传进来；放回页与
+// 送检页不传这个 prop，观感必须逐字不变。
+describe('ProcessPickerDialog / allowedProcessIds 收窄候选', () => {
+  /** 已渲染的工序代码（按工序分类 tab 顺序，与渲染顺序一致）。 */
+  async function renderedCodes(props: Parameters<typeof render>[0] = {}): Promise<string[]> {
+    h.listProcesses.mockResolvedValue({ items: PROCESSES, total: PROCESSES.length });
+    const w = render(props);
+    await flushPromises();
+    return w.findAll('.stub-card').map((c) => c.attributes('data-code') ?? '');
+  }
+
+  it('传集合：只渲染集合内的工序，集合外的卡片一张都不出现', async () => {
+    const codes = await renderedCodes({
+      kind: 'takeover',
+      allowedProcessIds: ['190000000000001', '190000000000003'],
+    });
+
+    expect(codes).toEqual(['CUT', 'SUB']);
+    // 集合外的工序确实在全量里（否则本用例会成为「列表本来就只有两条」的假绿）
+    expect(PROCESSES.map((p) => p.code)).toContain('WELD');
+  });
+
+  it('不传：渲染全部工序（放回页 / 送检页两个既有调用方的观感零变化）', async () => {
+    for (const kind of ['return', 'inspection'] as const) {
+      expect(await renderedCodes({ kind }), `${kind} 不得被收窄`).toEqual(['CUT', 'WELD', 'SUB']);
+    }
+  });
+
+  it('收窄到 0 条：空态说「你的工种没有工序」，不是「该分类暂无工序」', async () => {
+    // 空集合与「这个分类本来就没有工序」是两件事 —— 后者会让人以为整个工种没配工序。
+    h.listProcesses.mockResolvedValue({ items: PROCESSES, total: PROCESSES.length });
+    const w = render({ kind: 'takeover', allowedProcessIds: [] });
+    await flushPromises();
+
+    const empty = w.findAll('.tab-empty');
+    expect(empty, '两个分类 tab 都进空态').toHaveLength(2);
+    for (const el of empty) {
+      expect(el.text()).toContain('你的工种暂无可选工序');
+      expect(el.text()).not.toContain('暂无工序');
+    }
+    expect(w.findAll('.stub-card')).toHaveLength(0);
+    // 一条都选不出来 ⇒ 确认按钮禁用，工人提交不了空选择
+    expect(w.find('.confirm-btn').attributes('disabled')).toBeDefined();
+  });
+
+  it('未收窄且该分类真的没有工序：沿用原空态文案（区分两种空）', async () => {
+    h.listProcesses.mockResolvedValue({ items: [PROCESSES[0]!], total: 1 });
+    const w = render({ kind: 'return' });
+    await flushPromises();
+
+    const empty = w.findAll('.tab-empty');
+    expect(empty).toHaveLength(1);
+    expect(empty[0]!.text()).toBe('「外协」暂无工序');
   });
 });

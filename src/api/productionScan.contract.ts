@@ -343,13 +343,39 @@ export interface LocateBatchItemDto {
   disabled_reason: LocateDisabledReasonValue | null;
 }
 
-/** `GET /api/v2/prod/scan/locate` 出参：`part` + **全部**批次。
+/**
+ * 2026-10-16 新增：本次诊断里**当前工人的工种可执行的工序**清单。
+ *
+ * 为什么是诊断出参的一部分、而不是让前端自己去拉工序表再按工种过滤：工种↔工序
+ * 映射（`t_work_type_process`）只有后端有一份权威读口，前端过滤就等于在第二处复制
+ * 「这个工种能干什么」的判据，而它与写端点的闸门（工序必须落在工种映射内）必须同源
+ * 才不会漂。
+ *
+ * 它是**顶层数组**（不在任何一行 batch 内）：候选集对本次诊断的每一行都相同，
+ * 按行重复只会让人误以为不同行的候选不同。
+ */
+export interface LocateProcessBriefDto {
+  /** 工序 id，**雪花 ID 字符串形态** —— 后端用 `serialize_i64` 发，前端发成 number
+   *  会被写端点的 `deserialize_i64` 拒成 400 纯文本，任何地方都不得 `Number()` 转它。 */
+  process_id: string;
+  code: string;
+  name: string;
+  /** `INHOUSE` 自产 / `OUTSOURCE` 外协（前端只读，取值域由 `ProcessCategory` 锁死）。 */
+  category: 'INHOUSE' | 'OUTSOURCE';
+}
+
+/** `GET /api/v2/prod/scan/locate` 出参：`part` + **全部**批次 + 工种工序候选。
  *
  *  **不分页、无上限**（找件场景要一次看全），顺序即 `batch_no ASC, id ASC`
- *  （件数递增 + 拆批兜底），前端不必二次排序。 */
+ *  （件数递增 + 拆批兜底），前端不必二次排序。
+ *
+ *  `worker_processes` 是**恒存在的键**、值可以是空数组：未传 `worker_id`、工人未绑
+ *  工种、工种未映射任何工序，三种情形都是 `[]`（不是 null、不是缺键）。手填下一道
+ *  工序的选择范围由它决定。 */
 export interface ScanLocateResultDto {
   part: LocatePartBriefDto;
   batches: LocateBatchItemDto[];
+  worker_processes: LocateProcessBriefDto[];
 }
 
 /** `POST /api/v2/prod/scan/take-over`（扫码接管）请求。
