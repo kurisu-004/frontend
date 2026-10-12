@@ -760,14 +760,22 @@ export type RepairBatchListResultSchema = z.infer<typeof repairBatchListResultSc
 // **方向相反**，不要照抄那一个。
 // ============================================================
 
-/** 工种条目（对齐 backend-rust `WorkTypeOut` **10 字段**，**全部显式声明**）。
+/** 工种条目（对齐 backend-rust `WorkTypeOut` **11 字段**，**全部显式声明**）。
  *
  * 逐条依据 `vo/work_type.rs`：
  *   - id：i64 + `serialize_i64` ⇒ JSON string（雪花 ID 不可用 JS Number，会丢精度）；
  *   - code / name：String；
  *   - description：Option<String>，**无** skip_serializing_if ⇒ 键恒在，null 即空；
  *   - sort_order：i32（数字）；
- *   - max_held_batches：Option<i32>（null = 不限）；
+ *   - max_held_batches：Option<i32>（null = **未配置 ⇒ 该工种不可领取**，取件 / 补料路径返
+ *     `20904`，**不是「不限」**）。⚠️ 本条 2026-10-16 review 第 1 轮订正过：旧注释写
+ *     「null = 不限」与 `src/types/workType.ts` 里同字段的注释（2026-08-05 起就写的是
+ *     「未配置 ⇒ 不可领取」）自相矛盾，而后者才是后端的真实口径。**写这一行的人别再照抄旧文案。**
+ *   - auto_allocate_limit：2026-10-16 新增，Option<i32>（自动补料上限）。
+ *     ⚠️ 它的 null 与上一个键的 null **语义不同**：本键 null = 未配置 ⇒ 三条自动补料路径兜底
+ *     补到 `max_held_batches`（不是「不限」——「不限」是 `max_held_batches` 那边一度被误写
+ *     的说法，而实际含义是「不可领取」）；有值时须 `1..=max_held_batches`，`max_held_batches`
+ *     为 null 时本键不许有值（自动补料没有兜底目标）。详见 `src/types/workType.ts` 的同名字段。
  *   - process_ids：Vec<String>（该工种已映射的工序 id，**已映射**的字符串数组，
  *     空数组 = 未映射任何工序）。由 service 层用单条 SQL 批量补全（防 N+1），
  *     list / detail 两个端点都带。**显式声明是必须的**：Zod 默认 strip 模式下漏声明
@@ -787,6 +795,21 @@ export const workTypeSchema = z.object({
   description: z.string().nullable(),
   sort_order: z.number(),
   max_held_batches: z.number().nullable(),
+  // 2026-10-16 新增：自动补料上限。⚠️ 必须显式声明 —— Zod 默认 strip 会把这个键
+  // 静默丢掉（消费侧读到 undefined 且不报错），而它是工种页表单要编辑的值。
+  //
+  // ⚠️ **部署顺序：后端必须先上**（2026-10-16 review 第 2 轮 MINOR-2 补登，与同发布窗口的
+  // `scanSchema.ts` 里 `worker_processes` 那条同款）。本键**没有** `.optional()` /
+  // `.default()`，旧后端不返 ⇒ `workTypeListResultSchema.parse` 抛 ZodError ⇒
+  // **工序映射 Tab（`ProcessWorkTypeMappingTab.vue`）的左表恒空**；该 Tab 的错误处理是
+  // `ElMessage.error(e.message ?? …)`（`ProcessWorkTypeMappingTab.vue` 的 error watch），
+  // **没走 `contractDriftErrorText` 收口** ⇒ 现场直接把 Zod 的 issues JSON 原文当 toast 弹给用户。
+  // ⚠️ 失败点在客户端守门层、抛的是 ZodError 而**不是**后端业务码 ⇒ 现场没有任何 `2xxxx`
+  // 可读，排障先怀疑部署顺序，别去查权限 / 查映射表。
+  //
+  // 缓解事实（所以只判 MINOR）：工种管理页 `WorkTypeTab.vue` 走裸 `listWorkTypes`
+  // （不过守门 schema），对旧后端天然降级安全 ⇒ 受影响的**只有**工序映射 Tab 那一处。
+  auto_allocate_limit: z.number().nullable(),
   process_ids: z.array(z.string()),
   version: z.number(),
   created_at: z.string(),

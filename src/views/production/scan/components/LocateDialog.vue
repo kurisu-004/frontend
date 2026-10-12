@@ -27,17 +27,32 @@
     - `PICK_UP`            → 复用取件端点，**先弹数量弹窗**（支持部分领取），确认后提交；
     - `MINE`               → 无按钮，行内写明「该批次已在你手上」（引导去放回 / 送检流）；
     - `TAKE_OVER`          → `POST /prod/scan/take-over`。`chain_state === 'NEXT'` 时
-                             **不发** `next_process_id`（后端按链自推）；其余形态先弹
-                             `ProcessPickerDialog` 手填（缺 → `40001`，链外 → `20702`）。
+                             **不发** `next_process_id`（后端按链自推）；其余形态进入**手填
+                             路径**（弹框还是直提由候选条数决定，见下面「手填框的候选」那段：
+                             恰好一条时不弹框、直接提交那一条）；缺 → `40001`，链外 → `20702`。
                              ⚠️ 写侧的免填前置比读侧多一道「指针一致性」，而它不在 locate 出参里
                              ⇒ 这类行吃 `40001` 时降级弹手填框兜底（见 `submitTakeOver`）；
     - `RECEIVE_FROM_OUTSOURCE` → `POST /prod/scan/outsource-receive`。`chain_state ===
                              'NEXT'` 时**必须把诊断行的 `next_process_id` 原样回传**
                              （写侧缺省推导口径是 `sort_order = 当前 + 1`，与读侧
                              `sort_order > 当前 LIMIT 1` 在稀疏链上不等价，省略会吃
-                             `20706` / `40001`）；其余形态先弹手填。
+                             `20706` / `40001`）；其余形态同样进入**手填路径**（是否弹框
+                             由候选条数决定，同上）。
     - `action === null`    → 渲染 `disabled_reason` 的指引文案（9 个字面量逐条映射），
                              **该行不给按钮**；未知字面量同样不给按钮（`isWritableAction`）。
+
+  ⚠️ **手填框的候选是工种工序，不是全部工序**（2026-10-16）：出参顶层
+  `worker_processes` 是后端按该工人的工种算好的可执行工序，写端点的工种闸门用的是同一份
+  判据。候选恰好一条时**不弹框、直接提交那一条** —— 工种已经唯一确定了目标工序，让工人
+  再点一次只是多一步（触屏上最贵的一步）；多条才弹框，且框内只列这 N 条。
+  ⚠️ 因为「恰好一条」是**主用例**（工种通常只配一道工序），行内那句预提示必须跟着候选
+  条数变：单候选时说「将直接接管到…唯一的工序」，说「需…指定下一道」就是假话
+  （见 `manualHintText`）。
+  ⚠️ **空集合不是「到不了的边角」**（2026-10-16 review 第 2 轮 MINOR-1 订正，先前这里
+  与 `startManualFlow` 的注释都写着「后端已判成不可点」）：后端判「这行可不可点」用的是
+  **含已软删工序的宽集合**，出参 `worker_processes` 发的是**未软删的窄集合** ⇒ 工种只映射
+  了已软删工序时，「行可点 + 候选为空数组」是后端自己认可的形态。所以三条路径都得说人话：
+  行内提示、手填框、0 条兜底。
 
   关闭权：本弹窗**不是**提交闸门（关掉只丢一次诊断，工人可重扫），故保留右上角 ×；
   但它内部启用的「手填工序」弹窗**是**提交闸门（那条链上它是唯一的提交入口），按
@@ -204,8 +219,13 @@
               >
                 {{ actionLabel((row as LocateBatchRowData).action) }}
               </el-button>
-              <!-- 「为什么会推不出下一道」的可见事实：手填弹窗是点了按钮之后才出现的，
-                   工人需要提前看到「这次要点两下」。 -->
+              <!-- 「点下去会发生什么」的可见事实：手填弹窗是点了按钮之后才出现的，
+                   工人需要提前看到「这次要点两下」。⚠️ **候选条数决定文案**（2026-10-16
+                   review 第 3 轮 NIT-2 订正；先前的注释停在「只在候选多条时成立」的
+                   两支时代，review 第 2 轮 MINOR-1 加了 0 候选支后就过期了）：0 条说工种
+                   没配工序 / 1 条说将直接 X 到… / 多条才说需指定，逐支见 `manualHintText`；
+                   它必须与点下去实际走的 `startManualFlow` 三分支一一对应，否则又是
+                   「行内说要弹框、点下去不弹」。 -->
               <span v-if="needManualProcess(row as LocateBatchRowData)" class="manual-hint">{{
                 manualHintText(row as LocateBatchRowData)
               }}</span>
@@ -232,11 +252,14 @@
       @cancel="closeQtyDialog"
     />
 
-    <!-- 手填下一道工序：提交闸门，关闭权收在 footer（:show-close="false"） -->
+    <!-- 手填下一道工序：提交闸门，关闭权收在 footer（:show-close="false"）。
+         候选收窄到该工人的工种工序（allowedProcessIds）；恰好一条时根本不走到这里，
+         `startManualFlow` 会直接提交，见该函数注释。 -->
     <ProcessPickerDialog
       v-if="manualRow"
       v-model="showManualDialog"
       :kind="manualRow.kind"
+      :allowed-process-ids="allowedProcessIds"
       :show-close="false"
       @confirm="onManualProcessConfirm"
       @cancel="closeManualDialog"
@@ -264,7 +287,10 @@ import {
   locateDisabledReasonText,
   locateWriteErrorText,
 } from '@/views/production/scan/composables/locateActionErrorText';
-import type { LocateBatchRowData } from '@/views/production/scan/composables/scanSchema';
+import type {
+  LocateBatchRowData,
+  LocateProcessBriefData,
+} from '@/views/production/scan/composables/scanSchema';
 import ProcessPickerDialog from './ProcessPickerDialog.vue';
 import QuantityDialog from './QuantityDialog.vue';
 import type { Process } from '@/types/process';
@@ -310,6 +336,17 @@ const locate = useScanLocateQuery(() =>
 const data = computed(() => locate.data.value);
 const part = computed(() => data.value?.part ?? null);
 const batches = computed<LocateBatchRowData[]>(() => data.value?.batches ?? []);
+/** 2026-10-16 新增：当前工人的工种可执行工序（locate 出参顶层 `worker_processes`）。
+ *  手填下一道工序的候选集就是它 —— 与写端点的工种闸门同一份判据，前端不再自己判一遍
+ *  「这个工种能不能做这道工序」。空数组四种成因：未传 `worker_id` / 未绑工种 / 工种未映射
+ *  任何工序 / **工种只映射了已软删工序**（第四种成因，2026-10-16 review 第 2 轮 MINOR-1
+ *  登记：后端读侧闸门用**含已软删工序的宽集合**判「行可不可点」，出参发的是**未软删的窄
+ *  集合** ⇒「行可点 + 候选为空」是后端自己认可的形态，不是边角）。 */
+const workerProcesses = computed<LocateProcessBriefData[]>(
+  () => data.value?.worker_processes ?? [],
+);
+/** 交给 `ProcessPickerDialog` 的收窄集合（纯 id，后端已算好工序名与分类）。 */
+const allowedProcessIds = computed<string[]>(() => workerProcesses.value.map((p) => p.process_id));
 // `isPending` 而非 `isFetching`：后者在后台 refetch 期间也为 true，会让整表闪一次。
 const loading = computed(() => locate.query.isPending.value);
 // `20101`（工单未命中）走**空态**而不是失败态。
@@ -416,12 +453,47 @@ function needManualProcess(row: LocateBatchRowData): boolean {
   return row.chain_state !== 'NEXT';
 }
 
-/** 手填提示：把「点下去会弹一个工序选择框」这件事提前说清楚，并说明为什么。 */
+/** 手填提示：把「点下去会发生什么」提前说清楚，并说明为什么。
+ *
+ *  ⚠️ **必须跟着候选条数变**（2026-10-16 review 第 1 轮）。本函数原本只按 `chain_state`
+ *  分支，恒说「需在你的工种工序中指定下一道」—— 那是改动**之前**的形态才恒为真
+ *  （改动前点「接管」必然弹手填框）。候选恰好一条时 `startManualFlow` **直接提交那一条、
+ *  根本不弹框**，工人读到「需…指定」、点下去却被直接接管，没有任何「指定」发生。
+ *  而单候选恰恰是主用例（工种通常只配一道工序），所以这不是边角文案，是主路径上的假话。
+ *
+ *  动词按动作分（接管 / 收回）：两行共用这一个组件，说错动作等于让工人在外协那行读到
+ * 「直接接管」。
+ *
+ *  ⚠️ **三条分支必须穷举候选条数**（2026-10-16 review 第 2 轮 MINOR-1）。原先只有
+ *  「恰好一条」与「其余」两支，0 条落进「其余」⇒ 恒说「需…指定下一道」，而点下去
+ *  走的是 `startManualFlow` 的 0 条分支：**只弹一条 warning、永不弹框** —— 与上一轮
+ *  MAJOR-2 修掉的症状同一个，只是发生在姊妹分支上（同样是「行内承诺要弹框，点下去不弹」）。
+ *  0 候选在 wire 上**可达**（不是理论边角）：后端读侧闸门用的是**含已软删工序的宽集合**
+ *  判「这行可不可点」，出参 `worker_processes` 发的是**未软删的窄集合** ⇒ 工种只映射了
+ *  已软删工序时，「行可点 + 候选为空数组」就是后端自己认可的形态。 */
 function manualHintText(row: LocateBatchRowData): string {
-  if (row.chain_state === 'NONE') return '无工序链，需手工指定下一道';
-  if (row.chain_state === 'TAIL') return '已是链上最后一道，需手工指定下一道';
-  return '工序链推不出下一道，需手工指定';
+  const reason =
+    row.chain_state === 'NONE'
+      ? '无工序链'
+      : row.chain_state === 'TAIL'
+        ? '已是链上最后一道'
+        : '工序链推不出下一道';
+  const candidates = workerProcesses.value;
+  if (candidates.length === 0) {
+    return `${reason}，但你的工种当前没有可执行的工序，请联系管理员配置`;
+  }
+  if (candidates.length === 1) {
+    const verb = row.action === 'RECEIVE_FROM_OUTSOURCE' ? '收回' : '接管';
+    return `${reason}，将直接${verb}到你的工种里唯一的工序「${candidates[0]!.name}」`;
+  }
+  return `${reason}，需在你的工种工序中指定下一道`;
 }
+
+/** 工种一道可执行工序都没有时的兜底文案（两个动作各一句，指路不同）。 */
+const NO_WORK_TYPE_PROCESS_TEXT: Readonly<Record<'takeover' | 'outsource', string>> = {
+  takeover: '该工种未映射任何工序，无法接管，请联系管理员配置工种的工序',
+  outsource: '该工种未映射任何工序，无法收回，请联系管理员配置工种的工序',
+};
 
 function close(): void {
   emit('update:modelValue', false);
@@ -475,11 +547,7 @@ async function onActionClick(row: LocateBatchRowData): Promise<void> {
   }
   if (row.action === 'MINE' || row.action === null) return;
   if (needManualProcess(row)) {
-    manualRow.value = {
-      row,
-      kind: row.action === 'TAKE_OVER' ? 'takeover' : 'outsource',
-    };
-    showManualDialog.value = true;
+    startManualFlow(row, row.action === 'TAKE_OVER' ? 'takeover' : 'outsource');
     return;
   }
   // 链能自推：接管不带走工序（后端自推），外协收回**必须**原样回传诊断行的下一道 id。
@@ -490,6 +558,51 @@ async function onActionClick(row: LocateBatchRowData): Promise<void> {
   if (row.action === 'RECEIVE_FROM_OUTSOURCE') {
     await submitReceive(row, row.next_process_id);
   }
+}
+
+/**
+ * 手填下一道工序的三分支（接管与外协收回共用同一条路径与同一份候选）。
+ *
+ * 候选 = `worker_processes`（后端按该工人的工种算好）：
+ *   - **恰好一条 ⇒ 不弹框、直接提交那一条**。工种已经唯一确定了目标工序，让工人再点一次
+ *     只是多一步，而这一部一次交互是触屏上最贵的一步；
+ *   - **多条 ⇒ 弹框，且框内只列这 N 条**（`allowedProcessIds`）—— 写端点的工种闸门会拒掉
+ *     集合外的工序，让工人先选错再吃一次 `20104` 没有意义；
+ *   - **零条 ⇒ 不弹框，说人话**（2026-10-16 review 第 2 轮 MINOR-1：这一支**可达**，先前
+ *     注释写的「后端已判成不可点」是错的 —— 读侧闸门用含已软删工序的**宽集合**判可点，
+ *     出参发的是未软删的**窄集合**，工种只映射已软删工序时就是「可点 + 0 候选」）。
+ *     静默 return 会让工人看着按钮毫无反应，所以给一条指路到「找管理员配工序」的提示，
+ *     行内 `manualHintText` 也说同一件事 —— 两处必须一致，否则又变成「行内说要弹框、
+ *     点下去不弹」。
+ *
+ * ⚠️ 这条路径**不做「单候选直提」以外的兜底**：直接提交后吃到的失败由各写路径自己的 catch
+ * 处理（接管的 `40001` 会降级弹框让工人换一道），不在这里预判。
+ */
+function startManualFlow(row: LocateBatchRowData, kind: 'takeover' | 'outsource'): void {
+  const candidates = workerProcesses.value;
+  if (candidates.length === 0) {
+    ElMessage.warning(NO_WORK_TYPE_PROCESS_TEXT[kind]);
+    return;
+  }
+  if (candidates.length === 1) {
+    void submitManual(row, kind, candidates[0]!.process_id);
+    return;
+  }
+  manualRow.value = { row, kind };
+  showManualDialog.value = true;
+}
+
+/** 手填结果的统一提交出口（单候选直提与框内确认共用，避免两条分支各写一遍 kind 分流）。 */
+function submitManual(
+  row: LocateBatchRowData,
+  kind: 'takeover' | 'outsource',
+  nextProcessId: string,
+): void {
+  if (kind === 'takeover') {
+    void submitTakeOver(row, nextProcessId);
+    return;
+  }
+  void submitReceive(row, nextProcessId);
 }
 
 async function onQtyConfirm(qty: number): Promise<void> {
@@ -517,11 +630,7 @@ function onManualProcessConfirm(process: Process): void {
   const target = manualRow.value;
   closeManualDialog();
   if (!target) return;
-  if (target.kind === 'takeover') {
-    void submitTakeOver(target.row, process.id);
-    return;
-  }
-  void submitReceive(target.row, process.id);
+  submitManual(target.row, target.kind, process.id);
 }
 
 async function submitTakeOver(
@@ -545,6 +654,16 @@ async function submitTakeOver(
     // next_process_id」分支，必吃 `40001`。此时**降级弹手填框**而不是只报错重查：
     // 重查的读侧结论不变（同一份数据算同一个 `chain_state`），工人点一次错一次、弹窗
     // 变成死循环；让他补一次工序才有出口。
+    //
+    // ⚠️ **本分支只认「弹框」那一条降级出口，不认 `startManualFlow` 的「单候选直提」** ——
+    // 这是全文件唯一一处行为不对称，后人「顺手统一」成直提就正好制造出上面那个循环
+    // （提交 → 40001 → 直提 → 40001 → 直提 …，每次都让工人白点一下、且没有任何选择余地）。
+    // 不统一的风险其实很小，但**行为不变、只把理由钉在这里**：按冻结的契约「候选恰好
+    // 一条时后端自己会推导」，走这条路时第一次 40001 是因为缺 `next_process_id`，工人
+    // 补上那一条之后再吃 40001 的概率很低（后端此时会走 `20702`（链外）或 `20104`（不在
+    // 工种内），而前者恰恰应该让人换一道、后者则说明候选集本身有问题，两者都不该再让
+    // 系统替他猜一次）。
+    //
     // 只在「本次本来就没填工序」时降级 —— 已经手填过还吃 `40001` 是别的问题，重查即可。
     // ⚠️ 这个 `e.code === 40001` 判据成立的前提是 **`40001` 带信封**（后端
     // `AppError::Validation` 的 422 失败由 `into_response` 手工拼 `{code,message,data}`），
@@ -552,6 +671,12 @@ async function submitTakeOver(
     // `version` 缺省）`code` 是 HTTP 状态码，落不进这个分支 —— 那两类是本弹窗自己拼
     // 请求时就不该犯的形态错误，不该在这里降级弹框。详见 `locateActionErrorText.ts` 文件头。
     if (e instanceof ApiError && e.code === 40001 && nextProcessId == null) {
+      // 降级出口同样受工种候选约束：框内一道可选工序都没有时，弹出来是个只能取消的死胡同，
+      // 直接把「工种没配工序」这件事说清楚。
+      if (workerProcesses.value.length === 0) {
+        ElMessage.warning(NO_WORK_TYPE_PROCESS_TEXT.takeover);
+        return;
+      }
       manualRow.value = { row, kind: 'takeover' };
       showManualDialog.value = true;
       return;

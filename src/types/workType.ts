@@ -8,8 +8,19 @@ export interface WorkType {
   name: string;
   description: string | null;
   sort_order: number;
-  /** 2026-08-05：工种可领取上限（持有批次数）；null=不限 */
+  /** 2026-08-05：工种可领取上限（持有批次数）；`null` = **未配置**，而未配置的工种
+   *  **不可领取**（取件 / 补料路径返 `20904`），不是「不限」。 */
   max_held_batches: number | null;
+  /** 2026-10-16 新增：自动补料上限（refill / auto-allocate / 报工台 worker-scan 的同事务
+   *  refill 三条自动路径各自补到这么多个批次）。
+   *
+   *  `null` = **未配置**，三条自动路径兜底补到 `max_held_batches`（即与人工手动领到上限
+   *  一致）。**不是**「不限」—— `max_held_batches` 才是那个含义，且 `max_held_batches`
+   *  为 `null` 时本字段不许有值（自动补料没有兜底目标）。
+   *
+   *  有值时须 `1 <= 本值 <= max_held_batches`；人工手动领取（move / 报工台 pick-up）只按
+   *  `max_held_batches` 判，不受本字段约束。 */
+  auto_allocate_limit: number | null;
   /** 2026-10-02 补：已映射的工序 id 列表（JSON 形态 `["123","456"]`）。后端
    *  `WorkTypeOut.process_ids`（backend-rust src/modules/prod/work_type/vo/work_type.rs:20）
    *  由 service 层用 `WorkTypeProcessRepo::list_by_work_types_batch` **单条 SQL 批量
@@ -33,6 +44,8 @@ export interface WorkTypeCreatePayload {
   description?: string | null;
   sort_order?: number;
   max_held_batches?: number | null;
+  /** 2026-10-16 新增；`null` = 未配置 ⇒ 自动补料兜底补到 `max_held_batches`。 */
+  auto_allocate_limit?: number | null;
 }
 
 export interface WorkTypeUpdatePayload {
@@ -40,6 +53,15 @@ export interface WorkTypeUpdatePayload {
   description?: string | null;
   sort_order?: number;
   max_held_batches?: number | null;
+  /**
+   * 2026-10-16 新增，**真三态**（与 `description` 的伪三态不同，勿照抄那边的写法）：
+   *  - `undefined`（键缺省）⇒ 不修改；
+   *  - `null`（显式发）    ⇒ 清空，回到「自动补料兜底到可领取上限」；
+   *  - `number`            ⇒ 设为该上限。
+   *
+   * 表单恒把当前值放进 payload（两个动作都发），两种语义都能正确表达。
+   */
+  auto_allocate_limit?: number | null;
 }
 
 /**
@@ -70,7 +92,8 @@ export interface WorkTypeProcessLink {
  * 该端点不接 limit/offset，一次返全部；doc :56 / :112）。
  *
  * ⚠️ 旧实现声明的 `WorkTypeWithProcesses`（extends WorkType + `processes: []`）是
- * v1(Python) 影子类型：响应里既没有 `processes` 也没有 WorkType 的 10 个字段。
+ * v1(Python) 影子类型：响应里既没有 `processes` 也没有 WorkType 的字段（**当时 10 个**，
+ * 2026-10-16 加 `auto_allocate_limit` 后是 11 个）。
  * 线上症状 = 工序管理「工序映射」Tab 点工种后 `Cannot read properties of undefined
  * (reading 'map')`（`detail.processes.map(...)`，TypeError 抛在 try 内被 catch 吞掉
  * 后原样 ElMessage.error 弹出 = 用户看到的 toast）。该影子类型已删除。

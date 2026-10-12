@@ -1018,6 +1018,10 @@ describe('L 组：locate / take-over / outsource-receive 的 URL、query 与 bod
           process_id: '190000000000021',
         },
       ],
+      // 顶层候选数组：恒发的键（空集合 = 工种未映射任何工序），见
+      // `LocateProcessBriefDto`。缺了它 parse 直接抛，与本用例「多发的键被 strip」的
+      // 断言无关，但少了它整份信封就不是后端真实形态。
+      worker_processes: [],
     });
 
     // 行：16 个键一个不多，一个不少，未声明的两个键都不在结果里

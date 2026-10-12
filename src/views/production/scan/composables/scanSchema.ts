@@ -250,10 +250,62 @@ const locatePartBriefSchema = z.object({
   system_delivery_date: z.string().nullable(),
 });
 
-/** `GET /api/v2/prod/scan/locate` 出参：`part` + **全部**批次（不分页、无上限）。 */
+/** 2026-10-16 新增：本次诊断的**工种工序候选**（顶层数组，恒存在、可为空）。
+ *
+ *  ⚠️ **必填声明**：Zod 默认 strip 会静默丢弃未声明的键 —— 不显式声明时后端已发的
+ *  `worker_processes` 会被整个丢掉，候选恒 `undefined` 且**不报任何错**，手填下一道
+ *  工序只能退回「列全部工序」（见 `src/composables/queries/schemas.ts` 文件头的同款警告）。
+ *
+ *  严格度与本段其余 schema 一致：4 字段全必填（空集合表达在数组层，不表达在字段层）。
+ *
+ *  ⚠️ `category` 声明成 `z.string()` 而**不是** `z.enum`（2026-10-16 review 第 1 轮
+ *  订正，先前锁的是枚举，理由方向写反了）。三条依据：
+ *  1. **同 VO 的四个分类字段一律不枚举化**：`status` / `chain_state` / `action` /
+ *     `disabled_reason` 与本字段方向一致 —— 都是「不因为后端加一个取值就让诊断弹窗
+ *     reject」（各自的具体理由不同：`status` 不参与任何判据、只作展示与排查，见本字段自己的
+ *     doc；严格度口径仍按本段开头那条「与本文件上半段保持一致，不要各拍一次」）。同一个 VO
+ *     里锁一个不锁三个，是让后人以为那个枚举是后端写死的白名单。
+ *  2. **本字段零消费**：`category` 前端全仓没有任何读取点（`LocateDialog` 的
+ *     `allowedProcessIds` / `startManualFlow` 只取 `process_id`；同结构的 `code` 同样零消费，
+ *     `name` 在 2026-10-16 修好行内预提示后被 `manualHintText` 读去拼提示、纯展示）。
+ *     锁枚举守不到任何正在跑的判据，没有安全性收益。
+ *  3. 后端加第三类分类时，**宁可让手填框少渲染一个 tab，也不要让整个诊断弹窗连领取动作
+ *     一起 reject**：这份诊断里 `PICK_UP` 之类与工序分类毫无关系的动作，会被一个「工人这次
+ *     不用填工序」的字段拖成红字态。 */
+const locateProcessBriefSchema = z.object({
+  /** 工序 id，雪花 ID **字符串**（发成 number 会被写端点拒成 400 纯文本）。
+   *  ⚠️ **四个字段里只有它参与判据**（候选集的唯一来源）；其余三个都只作展示。 */
+  process_id: z.string(),
+  /** 工序编码；当前零消费。 */
+  code: z.string(),
+  /** 工序名。单候选时 `LocateDialog.manualHintText` 会把它拼进行内提示（「直接接管到…唯一
+   *  的工序 XXX」），**只作展示、不参与任何判据**。 */
+  name: z.string(),
+  /** 工序大类（`INHOUSE` / `OUTSOURCE`）。声明成 `z.string()`，理由见上方那段。 */
+  category: z.string(),
+});
+
+/** 元素类型派生：沿 CLAUDE.md「Zod schema-first」的 `*Data` 后缀约定（api 层用它标注返回类型）。 */
+export type LocateProcessBriefData = z.infer<typeof locateProcessBriefSchema>;
+
+/** `GET /api/v2/prod/scan/locate` 出参：`part` + **全部**批次（不分页、无上限）+
+ *  工种工序候选（顶层数组，恒存在、可为空）。 */
 export const locateResultSchema = z.object({
   part: locatePartBriefSchema,
   batches: z.array(locateBatchRowSchema),
+  /**
+   * 2026-10-16 新增：空集合表达下列成因之一 —— 未传 worker_id / 未绑工种 / 工种未映射
+   * 任何工序 / **工种只映射了已软删工序**（第四种成因，2026-10-16 review 第 2 轮 MINOR-1
+   *  登记：后端读侧闸门用含已软删工序的宽集合判「行可不可点」，出参发未软删的窄集合，
+   *  逐支文案见 `LocateDialog` 的 `manualHintText`）。
+   *
+   *  ⚠️ **部署顺序：后端必须先上** —— 本键是必填（契约：恒发、发空数组而不是缺键），旧后端
+   *  不返 ⇒ `locateResultSchema.parse` 抛 ZodError ⇒ **整个诊断弹窗恒走契约漂移红字态**：
+   *  连「领取」这类与工序候选毫无关系的动作也一起没了。⚠️ 失败点是客户端守门层、抛的是
+   *  ZodError 而**不是**后端业务码，所以现场没有任何 `2xxxx` 可读（只有一句固定漂移文案 +
+   *  console 标签），排障时先怀疑部署顺序，别去查权限 / 查条码。
+   */
+  worker_processes: z.array(locateProcessBriefSchema),
 });
 
 export type LocateResultData = z.infer<typeof locateResultSchema>;

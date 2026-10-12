@@ -19,8 +19,9 @@
 //   - reactive params：params 接受 MaybeRefOrGetter，queryKey 走
 //     computed(toValue(params))，queryFn **从 queryKey[2] 读 params**（不闭包
 //     捕获 stale —— CLAUDE.md 范本 #5 / useProcessesQuery:37-45）；
-//   - queryFn 走 workTypeListResultSchema.parse 守门（M-1 strip 陷阱：本域 10 个
-//     字段全显式声明，含此前 @/types/workType.ts 漏掉的 process_ids）；
+//   - queryFn 走 workTypeListResultSchema.parse 守门（M-1 strip 陷阱：本域 11 个
+//     字段全显式声明，含此前 @/types/workType.ts 漏掉的 process_ids，以及 2026-10-16
+//     新增的 auto_allocate_limit）；
 //   - staleTime / gcTime: 30_000 / 5 * 60 * 1000（CLAUDE.md「缓存时长策略」：
 //     共享基础数据层一律有限缓存；工种/映射表几乎不变，30s 足以去掉同一次操作
 //     流程里的重复拉取）；
