@@ -24,6 +24,8 @@
 //     「切走 5 分钟后回来」命中陈旧诊断）；
 //   - 错误桥接：`watch(error)` + `ElMessage.error`，文案走同目录既有的
 //     `scanListErrorText`（契约漂移给工人一句固定文案、细节只进 console），不新造一套；
+//     漂移的第三、四参（文案 + console 标签）传诊断口吻：本查询不是列表，落列表口吻会把
+//     工人指去看一个他没打开的界面、把排障者引到 `useScanListQuery`；
 //     唯一例外是 `20101`（工单未命中）—— 它是弹窗的空态职责、不弹 toast（见 watch 处）；
 //   - 不写 retry：信任 main.ts 全局 `queries.retry: 0`；
 //   - `fetchList` 别名 = `refetch` 的 async 包装，供弹窗的「刷新」按钮与测试驱动。
@@ -35,7 +37,11 @@ import { ApiError } from '@/api/http';
 import { fetchScanLocate } from '@/api/productionScan';
 import { qk } from '@/composables/queries/keys';
 import { locateResultSchema } from './scanSchema';
-import { scanListErrorText } from './scanListErrorMessage';
+import {
+  scanListErrorText,
+  SCAN_LOCATE_CONTRACT_DRIFT_LOG_TAG,
+  SCAN_LOCATE_CONTRACT_DRIFT_TEXT,
+} from './scanListErrorMessage';
 
 /** 诊断查询的入参形状（与 `qk.scanLocate` 的键位逐字一致）。 */
 export interface UseScanLocateParams {
@@ -92,7 +98,17 @@ export function useScanLocateQuery(params: MaybeRefOrGetter<UseScanLocateParams 
     // 未命中由 `LocateDialog` 的空态承担（灰态 + 「若这是装配件请扫子件」），
     // 在此再弹一条红字 toast 等于同一件事说两遍、其中一遍还在说「你操作错了」。
     if (e instanceof ApiError && e.code === 20101) return;
-    ElMessage.error(scanListErrorText(e, '查询零件位置失败'));
+    // ⚠️ 第三、四参是**必需**的，别省：同一次查询失败有两个渲染出口 —— 这里这条 toast 与
+    // `LocateDialog` 弹窗体内的红字区，两处各调一次 `scanListErrorText`。少传就回落成
+    // 「列表数据格式异常」的口吻，而工人扫的是条码、从没打开过任何列表。
+    ElMessage.error(
+      scanListErrorText(
+        e,
+        '查询零件位置失败',
+        SCAN_LOCATE_CONTRACT_DRIFT_TEXT,
+        SCAN_LOCATE_CONTRACT_DRIFT_LOG_TAG,
+      ),
+    );
   });
 
   async function fetchList(): Promise<void> {

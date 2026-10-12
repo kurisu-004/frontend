@@ -43,12 +43,15 @@
   但它内部启用的「手填工序」弹窗**是**提交闸门（那条链上它是唯一的提交入口），按
   CLAUDE.md「弹窗关闭权」以 `:show-close="false"` 收在 footer 两键上。
 
-  成功路径**不依赖 WS，也不再通知页面去 `refresh()`**：三条写动作的 `onSuccess` /
-  `onError` 都走 `invalidateScanReadSide`（见 `useScanWrite.ts`），它失效的前缀同时盖住
+  写动作**无论成功还是失败，刷新都由 mutation 的 `onSuccess` / `onError` 统一承担**：两条
+  都走 `invalidateScanReadSide`（见 `useScanWrite.ts`），它失效的前缀同时盖住
   ① 页面那两条列表（`qk.scanPickablePrefix` / `qk.scanHeldPrefix`）与 ② 本弹窗自己的诊断
-  （`qk.scanLocatePrefix`）。页面上的列表 query 是 active 的，TanStack 失效即后台重取，
-  且 mutation 的 `onSuccess` 返回的是那条失效链的 promise、`mutateAsync` 会 await 它 ⇒
-  动作成功返回时列表已是重取后的状态。
+  （`qk.scanLocatePrefix`）。这些 query 都是 active 的，TanStack 失效即后台重取，且
+  mutation 的两个回调返回的都是那条失效链的 promise、`mutateAsync` 会 await 它 ⇒ 动作返回
+  时页面列表与本弹窗诊断都已是重取后的状态。因此三条 catch 里都没有手动 `refetch()`
+  （两条通道同时跑会对 diagnose 端点打两次 GET），也**不依赖 WS**、不再通知页面去
+  `refresh()`。刷新这件事的后人不许从 `onError` 里摘掉，理由见 script 里「写动作失败后诊断
+  一定会重查」那段。
 
   三种「没有行可渲染」的状态**必须分开**：`20101` 未命中（条码不对 / 是装配件序列号）、
   工单查到了但**一个未软删批次都没有**（条码对、批次全没了）、契约漂移 / 网络失败。
@@ -438,23 +441,31 @@ function closeManualDialog(): void {
   manualRow.value = null;
 }
 
-/**
- * 2026-10-15：写动作失败后立刻重新诊断一次。
+/*
+ * 2026-10-15：**写动作失败后诊断一定会重查，但通道只有失效链这一条。**
  *
- * 为什么不能只弹一句错误就走：`action` 是**读侧按当前数据算出来的**，而最常见的失败
- * 恰恰意味着读侧那份数据已经过期 —— `40901`（别人已把这批处置了）、`20204`（容量触顶）、
+ * 为什么失败后必须重查：`action` 是**读侧按当前数据算出来的**，而最常见的失败恰恰意味
+ * 着读侧那份数据已经过期 —— `40901`（别人已把这批处置了）、`20204`（容量触顶）、
  * `20103` / `20122`（行的持有关系与诊断结论不符）。不重查的话，这一行仍按旧事实渲染
- * 同一个按钮，工人再点一次吃同一个错，弹窗就成了「反复失败的机器」。
- * 重查后 `action` / `disabled_reason` 由新事实重新决定（如 40901 之后多半落
- * `TERMINAL` 或换成别人的 `MINE`），指引文案也跟着变。
+ * 同一个按钮，工人再点一次吃同一个错，弹窗就成了「反复失败的机器」。重查后 `action` /
+ * `disabled_reason` 由新事实重新决定（如 40901 之后多半落 `TERMINAL` 或换成别人的
+ * `MINE`），指引文案也跟着变。
  *
- * 弹窗自身的诊断数据另有失效通道（写路径成功后 `qk.scanLocatePrefix` 被 invalidate，
- * 见 `useScanWrite.ts` 的 `invalidateScanReadSide`）；这里是**失败即刻重查**，不等
- * 下次挂载。
+ * 触发者是写路径 mutation 的 `onError` → `invalidateScanReadSide`（`useScanWrite.ts`）→
+ * 失效 `qk.scanLocatePrefix`。本弹窗打开时那条 query 是 active 的，TanStack 失效即后台
+ * 重取；且 `mutateAsync` 会 await `onError` 返回的那条失效链 promise ⇒ catch 块跑起来时
+ * 重取已经完成，`action` / `version` 是刷新后的值。
+ *
+ * ⚠️ **删掉失效链 = 失败后不再重查**：下一个人若看到三条 catch 里没有手动 refetch 而把
+ * `onError` 里的失效一并删掉（以为「写路径只需要成功后刷新」），失败后就退回「按旧
+ * `action` / 旧 `version` 渲染」——工人点一次错一次。「不手动重查」和「不重查」是两件事，
+ * 本弹窗只取消了前者。
+ *
+ * ⚠️ 两条通道同时跑会对 `GET /prod/scan/locate` 发两次 GET，且后一次 `query.refetch()`
+ * 默认 `cancelRefetch: true`，会掐掉在途的第一次请求再重发，第一份响应被丢弃。
+ * 弹窗只保留失效链这一条；footer 的「刷新」键是工人显式按的，属第三条、刻意独立（见
+ * `retry`）。
  */
-function reDiagnose(): void {
-  void locate.fetchList();
-}
 
 async function onActionClick(row: LocateBatchRowData): Promise<void> {
   if (row.action === 'PICK_UP') {
@@ -496,8 +507,9 @@ async function onQtyConfirm(qty: number): Promise<void> {
     ElMessage.success(`已领取: ${part.value?.serial_no || props.code} × ${qty}`);
     close();
   } catch (e) {
+    // 诊断的刷新由 mutation 的 `onError` → `invalidateScanReadSide` 承担（见本文件
+    // 「写动作失败后诊断一定会重查」那段），这里只负责把失败说成人话。
     ElMessage.error(locateWriteErrorText(e, 'PICK_UP'));
-    reDiagnose();
   }
 }
 
@@ -544,7 +556,8 @@ async function submitTakeOver(
       showManualDialog.value = true;
       return;
     }
-    reDiagnose();
+    // 非降级分支到此为止：诊断的刷新由 mutation 的 `onError` → `invalidateScanReadSide`
+    // 承担（见本文件「写动作失败后诊断一定会重查」那段），catch 里不再自己 refetch。
   }
 }
 
@@ -559,8 +572,8 @@ async function submitReceive(row: LocateBatchRowData, nextProcessId: string | nu
     ElMessage.success('已从外协收回，并交到你手上');
     close();
   } catch (e) {
+    // 同上：刷新归失效链，这里只出文案。
     ElMessage.error(locateWriteErrorText(e, 'RECEIVE_FROM_OUTSOURCE'));
-    reDiagnose();
   }
 }
 </script>

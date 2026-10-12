@@ -510,6 +510,30 @@ describe('LocateDialog / 不可行动作与守门', () => {
     w.unmount();
   });
 
+  // ⭐ 漂移文案的口吻必须跟着**出口**走，而不是「谁忘了传就回落成列表」。
+  // 同一次查询失败有两个渲染出口，各调一次 `scanListErrorText`：弹窗体内的红字区
+  // （`errorText`）与屏幕上方这条 toast。弹窗体内那条已传「诊断」口吻，toast 这条若漏传
+  // 第三/四参就回落成「列表数据格式异常」—— 而工人扫的是条码、压根没打开过任何列表，
+  // 那句话会把他指去看一个不存在的界面。
+  it('L9b2：契约漂移的 toast 走「诊断」口吻（不得说「列表」）', async () => {
+    // queryFn 里 `locateResultSchema.parse` 对坏响应抛的正是 ZodError（query hook
+    // 「响亮地炸」的设计意图），这就是收口函数的漂移分支。
+    m.fetchScanLocate.mockResolvedValue(locateResult([batch({ holder_display: undefined })]));
+    const w = await mountDialog();
+
+    expect(
+      m.ElMessage.error,
+      '漂移也要弹一次 toast（与 L9b 同一条错误桥接）',
+    ).toHaveBeenCalledTimes(1);
+    const msg = String(m.ElMessage.error.mock.calls[0]?.[0] ?? '');
+    expect(msg, 'toast 与弹窗体内红字必须是同一句').toBe(SCAN_LOCATE_CONTRACT_DRIFT_TEXT);
+    expect(msg).toContain('诊断');
+    expect(msg, '诊断查询的漂移不得说「列表」——工人扫的是条码，本就没打开任何列表').not.toContain(
+      '列表',
+    );
+    w.unmount();
+  });
+
   // 「工单查到了但一个未软删批次都没有」是**第三种**状态：条码是对的，指引不能是
   // 「请改扫子件」（那是未命中才需要的指路）。
   it('L9c：工单存在但批次为空 → 单独的空态文案，不复用「改扫子件」的指引', async () => {
@@ -573,8 +597,8 @@ describe('LocateDialog / 不可行动作与守门', () => {
     w.unmount();
   });
 
-  // 反向对照：本次**已经**手填了工序还吃 `40001`，不降级弹框（那是别的问题，走重查）。
-  it('L11b：已手填工序还吃 40001 → 不重复弹手填框，走重新诊断', async () => {
+  // 反向对照：本次**已经**手填了工序还吃 `40001`，不降级弹框（那是别的问题，靠重查）。
+  it('L11b：已手填工序还吃 40001 → 不重复弹手填框，且诊断恰好重查一次', async () => {
     m.fetchScanLocate.mockResolvedValue(
       locateResult([batch({ action: 'TAKE_OVER', chain_state: 'NONE', next_process_id: null })]),
     );
@@ -591,8 +615,10 @@ describe('LocateDialog / 不可行动作与守门', () => {
     expect(w.find('.mock-picker-dialog').exists(), '已手填还失败时不该再弹一次同一个框').toBe(
       false,
     );
-    // 重新诊断 = 重打一次 locate
-    expect(m.fetchScanLocate.mock.calls.length).toBeGreaterThan(1);
+    // 重查 = 重打一次 locate。**精确计数**：挂载时首取 1 次，写失败后由 mutation 的
+    // `onError` 失效链重取 1 次 ⇒ 恰好 2。用 `toBeGreaterThan(1)` 写不出任何东西
+    // （1 次也过、2 次也过、3 次也过），双重刷新就是从这里漏过去的。
+    expect(m.fetchScanLocate, '失败后由失效链重查，且只重查一次').toHaveBeenCalledTimes(2);
     w.unmount();
   });
 
@@ -654,6 +680,44 @@ describe('LocateDialog / 不可行动作与守门', () => {
     expect(
       m.fetchScanHeld,
       '接管成功后页面列表必须被失效并自动重取（active query + 前缀失效）',
+    ).toHaveBeenCalledTimes(2);
+    w.unmount();
+  });
+
+  // ⭐ 写失败时对 diagnose 端点**只打一次** GET。
+  //
+  // 弹窗开着时 `qk.scanLocatePrefix` 下的 query 是 active 的，mutation 的 `onError` 失效
+  // 它必然触发一次重取；若三条 catch 里再手动 `query.refetch()` 一次，同一次失败就对
+  // `GET /prod/scan/locate` 打两次 —— 而 `refetch` 默认 `cancelRefetch: true`，第二次会把
+  // 第一次**掐掉重发**、已回来的那份响应被丢弃。
+  //
+  // 守法与 L13 同款：**真 QueryClient、不 spy `invalidateQueries`**。断言的是「重取确实
+  // 发生了，且恰好一次」这个外部可观测事实，而不是「某条失效函数被调了」——后者对
+  // 「组件是不是又自己补了一次 refetch」完全失明。
+  //
+  // ⚠️ 这条用例与「失败后必须重查」是一对：只钉次数下界会让「干脆不重查」也过，只钉上界
+  // 会让「失败后不刷新、界面停在旧 `action` / 旧 `version`」也过。故这里钉的是**精确值**
+  // （首取 1 + 失效链 1 = 2），少一次、多一次都红。
+  it('L14：写失败后 locate 端点恰好被重取一次（失效链那条，没有第二次手动 refetch）', async () => {
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: 0 }, mutations: { retry: 0 } },
+    });
+    m.takeOverBatch.mockRejectedValue(new ApiError(40901, '版本冲突：该批次已被他人处置'));
+    const w = mount(LocateDialog, {
+      props: { modelValue: true, code: CODE, worker: WORKER },
+      global: { stubs, plugins: [createPinia(), [VueQueryPlugin, { queryClient: qc }]] },
+    });
+    await flushPromises();
+    // 基线：挂载首取 1 次（`staleTime` 30s 内它自己不会再发）
+    expect(m.fetchScanLocate).toHaveBeenCalledTimes(1);
+
+    await rowButton(w, 0, '接管')!.trigger('click');
+    await flushPromises();
+
+    expect(m.takeOverBatch).toHaveBeenCalledTimes(1);
+    expect(
+      m.fetchScanLocate,
+      '写失败必须重查（onError 失效链），且只重查一次 —— 3 次就是「失效链 + 手动 refetch」两条通道同时跑',
     ).toHaveBeenCalledTimes(2);
     w.unmount();
   });

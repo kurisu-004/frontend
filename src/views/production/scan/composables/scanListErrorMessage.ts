@@ -9,9 +9,12 @@
 // 列表 / 企微绑定查询是同一种 Zod 漂移失败），本文件保留**域内口吻**（给产线看的文案 +
 // 本域 console 标签）与 2 参签名 —— 4 个列表调用点一行未改。
 //
-// 2026-10-15：新增第三个可选参数 `driftText`。诊断弹窗**不是列表**，沿用「列表数据格式
-// 异常」会把工人指去查一个他没在看的界面；两个域的收口机制（人话给工人、完整 issues
-// 给 console）完全相同，只是那句「什么格式错了」的口吻要分开。
+// 2026-10-15：新增两个可选参数 `driftText` / `logTag`。诊断弹窗**不是列表**，沿用
+// 「列表数据格式异常」会把工人指去查一个他没在看的界面；两个域的收口机制（人话给工人、
+// 完整 issues 给 console）完全相同，要分开的是**两处口吻**：给工人看的那句文案，与给
+// 排障者看的 console 标签。console 标签是漂移现场的第一手定位依据（见
+// `src/utils/contractDriftError.ts` 的 `logTag` 说明：按标签 grep），而报工台的 Zod 守门
+// 有两组（两条 list / 一条 locate），标签不分开就等于把排障者引到另一个 hook 上。
 
 import { contractDriftErrorText } from '@/utils/contractDriftError';
 
@@ -20,6 +23,12 @@ export const SCAN_LIST_CONTRACT_DRIFT_TEXT = '列表数据格式异常，请截�
 
 /** 同款漂移，但发生在扫码找件**诊断**结果上（不是列表）：文案不得说「列表」。 */
 export const SCAN_LOCATE_CONTRACT_DRIFT_TEXT = '诊断数据格式异常，请截图上报';
+
+/** console 标签的缺省值（列表口吻），与 `SCAN_LIST_CONTRACT_DRIFT_TEXT` 配套。 */
+const SCAN_LIST_CONTRACT_DRIFT_LOG_TAG = '[scan] 列表响应未通过 Zod 契约守门';
+
+/** 同款漂移的 console 标签（诊断口吻），与 `SCAN_LOCATE_CONTRACT_DRIFT_TEXT` 配套。 */
+export const SCAN_LOCATE_CONTRACT_DRIFT_LOG_TAG = '[scan] 扫码找件诊断响应未通过 Zod 契约守门';
 
 /**
  * 把请求抛出的异常转成可直接展示的文案。
@@ -38,14 +47,23 @@ export const SCAN_LOCATE_CONTRACT_DRIFT_TEXT = '诊断数据格式异常，请�
  *
  * @param e          请求抛出的异常（`ZodError` / `ApiError` / 普通 Error / 未知值）
  * @param fallback   非漂移失败、且异常读不出 message 时的人话兜底
- * @param driftText  漂移时那句「什么格式错了」；缺省用列表口吻（四个列表调用点零改动）
+ * @param driftText  漂移时给工人看的固定文案；缺省用列表口吻（列表调用点零改动）
+ * @param logTag     漂移时 `console.error` 的前缀；缺省用列表口吻（列表调用点零改动）
+ *
+ * ⚠️ `driftText` 与 `logTag` **成对传**：同一次漂移的两处口吻要指同一个端点，只改其中
+ * 一处会得到「工人看到诊断 / 排障者看到列表」这种更难查的错配。
  *
  * 本函数**只转文案**：不吞异常、不重试、不改调用点的控制流。是否提示、是否重试由调用点决定。
  */
-export function scanListErrorText(e: unknown, fallback: string, driftText?: string): string {
+export function scanListErrorText(
+  e: unknown,
+  fallback: string,
+  driftText?: string,
+  logTag?: string,
+): string {
   return contractDriftErrorText(e, {
     driftText: driftText ?? SCAN_LIST_CONTRACT_DRIFT_TEXT,
     fallback,
-    logTag: '[scan] 列表响应未通过 Zod 契约守门',
+    logTag: logTag ?? SCAN_LIST_CONTRACT_DRIFT_LOG_TAG,
   });
 }
