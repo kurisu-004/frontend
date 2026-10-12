@@ -70,9 +70,9 @@ const BACKOFF_FACTOR = 1.6;
  *
  * 后端 `PreviewService` 用 `next_poll_at` 节流：`PENDING` 且未到期时直接返 PENDING，
  * **一次外部 IO（python describe / COS）都不打**。本层的单次等待被夹在
- * `[MIN_RETRY_DELAY_MS, MAX_RETRY_DELAY_MS]`、后端当前固定 2s（上限常数 5s 未启用）
+ * `[MIN_RETRY_DELAY_MS, MAX_RETRY_DELAY_MS]`、后端缺省 2s（可经 env `PREVIEW_POLL_BACKOFF_SECONDS` 调，1..=5）
  * ⇒ 本层第 1 次等待就是 2s，与后端节流齐平；之后指数退避只会让本层**比后端更慢**
- * （2s → 3.2s → 5.1s → 8s），永远不会抢在节流戳前面把后端打成热路径。
+ * （2s → 3.2s → 5.1s → 8s），永远不会抢在节流戳前面把后端打成热路径（2026-10-13 订正：后端该节流值改为 env 可配）。
  * 反向也不构成浪费：本层若偶发抢快（错误重试路径固定 1s），后端也只是多返一次
  * 「未到期 + 剩余 retry_after_ms」的零 IO 响应。⇒ 两侧是叠加的闸，不是竞争的重试。
  */

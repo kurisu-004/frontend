@@ -198,7 +198,7 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 - **预览接口可传 `?size=view|thumb|full`（缺省 `view`，2026-10-12 新增）**：后端按档位给 `pages[]` 的图片直链追加**部署级固定 EdgeOne 参数**（`view` = `eo-img.resize=l/2560`、`thumb` = `eo-img.resize=w/480`、`full` 无参数），直链仍无签名、不过期。参数值由后端 env `COS_PREVIEW_IMAGE_VIEW_PARAMS` / `COS_PREVIEW_IMAGE_THUMB_PARAMS` 控制，每档只允许**单轴**（`w/` 与 `h/` 同用会拉伸失真）。**前端当前不传该参数**（吃默认 `view` 档）；非法值后端返信封 `40001`。
 - **⚠️ 部署前置：跨域预览图的 CORP 头（2026-10-12）**：EdgeOne 必须对该预览域 `previews/*` 追加响应头 `Cross-Origin-Resource-Policy: cross-origin` —— dev/preview（Vite serve）的 COEP `require-corp` 会拦截无 CORP 头的跨域图片（表现为图片加载失败，而地址栏直开却正常）。生产 nginx 当前不带 COOP/COEP、不受此约束；将来若给 nginx 加上这两个头，必须同步确认该 CORP 头存在。
 - **源图渲染配方与 `preview_seed` 渲染版本挂钩（2026-10-12）**：CI 出图配方（ImageDpi=300 / Quality=90）参与 `preview_seed` 渲染版本的计算 —— 改配方必须同步递增 rust 侧 `PREVIEW_RECIPE_VERSION`，否则旧 `READY` 行与缓存不换代（细节以 backend-rust 为准）。
-- **轮询预算**（`usePreviewPolling` 内常量，注释里有量级理由）：次数上限 30、墙钟上限 120s、单次等待封顶 8s、指数退避倍率 1.6、建议间隔缺失时落 1s 下限。次数闸与墙钟闸各堵一个退化方向（后端建议间隔给太大 / 给 0），少一条就会出现「等五分钟」或「两分钟打上百次请求」。**与后端节流不打架**：后端 `next_poll_at` 当前固定 2s，未到期时直接返 PENDING 且**零外部 IO**；本层第 1 次等待就是 2s、之后指数退避只会更慢，永远抢不到节流戳前面。
+- **轮询预算**（`usePreviewPolling` 内常量，注释里有量级理由）：次数上限 30、墙钟上限 120s、单次等待封顶 8s、指数退避倍率 1.6、建议间隔缺失时落 1s 下限。次数闸与墙钟闸各堵一个退化方向（后端建议间隔给太大 / 给 0），少一条就会出现「等五分钟」或「两分钟打上百次请求」。**与后端节流不打架**：后端 `next_poll_at` 缺省 2s（env `PREVIEW_POLL_BACKOFF_SECONDS` 可调 1..=5），未到期时直接返 PENDING 且**零外部 IO**；本层第 1 次等待就是 2s、之后指数退避只会更慢，永远抢不到节流戳前面。
 - **角色不区分预览路径**：后端 `/preview` 与 `/content` 对 5 个角色（含 `SHELF_ACCOUNT`）都放开，前端不按角色分流。`/files/objects/{id}/url`（下载）**刻意没放开**，前端闸门见 `utils/partsPermissions`。
 
 两个预览组件的缩放模型与承载高度契约（都容易被改版静默破坏）。
