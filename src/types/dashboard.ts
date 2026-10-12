@@ -39,6 +39,11 @@ export type DashboardEventType =
   | 'PART_SCAN_INSPECT_FAILED'
   | 'PART_BATCH_WITH_PDFS_CREATED'
   | 'PART_PICKED_UP'
+  // 2026-10-15：扫码接管端点 `POST /prod/scan/take-over` 的唯一 WS 产出。payload 四键
+  // （part_id / batch_id / from_worker_id / to_worker_id）全部是 JSON 字符串；语义是
+  // 「这一批换人了」。**没有** quantity / process_id 等键 —— 要更多事实的消费方从刷新
+  // 后的列表读，不要指望事件带全量快照。
+  | 'PART_TRANSFERRED'
   | 'WORKER_SCAN_RETURNED'
   | 'WORKER_SCAN_INSPECTED'
   | 'WORKER_POOL_REFILL_DONE'
@@ -66,6 +71,13 @@ export interface DashboardEventPayload {
   /** PART_FORCE_COMPLETED 携带的被强推工单 id（雪花 ID 字符串）。该事件绕过状态机
    *  直写 COMPLETED，不带任何展示字段 —— 消费方要按行定位只能靠这个 id。 */
   part_id?: string | null;
+  // PART_TRANSFERRED（扫码接管）携带的三个键，全部是雪花 ID 字符串：被接管的批次、
+  // 所属工单、接管**前**的持有人。该事件的四键 payload 里没有任何展示字段，语义是
+  // 「这一批换人了」—— 想知道换给了谁、要刷哪些列表，按本文件头「本仓只按 event_type
+  // 失效」的纪律走（`useDashboardInvalidation`），不要指望事件带全量快照。
+  batch_id?: string | null;
+  from_worker_id?: string | null;
+  to_worker_id?: string | null;
   // 装配体事件携带的字段
   assembly_id?: string | null;
 }

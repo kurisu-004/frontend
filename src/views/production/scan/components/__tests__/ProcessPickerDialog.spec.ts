@@ -51,7 +51,17 @@ beforeEach(() => {
   h.ElMessage.error.mockReset();
 });
 
-function render(props: { kind?: 'return' | 'inspection'; hint?: string } = {}) {
+/**
+ * `kind` 的取值**从组件 props 派生**，不手写联合 —— 手写一份等于把组件的 kind 声明复制
+ * 到测试里：将来 `ProcessPickerDialog.vue` 加第 5 个 kind 时，下面的用例循环不会红，
+ * 只有真去渲染那个 kind 时才会发现用例根本没覆盖它。
+ *
+ * 取法走 `InstanceType<...>['$props']`（本仓 Vue 版本未导出 `ComponentProps` 这个
+ * 泛型助手；它对 `defineComponent` 出来的 SFC 同样能拿到同一份 props 类型）。
+ */
+type PickerKind = InstanceType<typeof ProcessPickerDialog>['$props']['kind'];
+
+function render(props: { kind?: PickerKind; hint?: string } = {}) {
   return mount(ProcessPickerDialog, {
     props: { modelValue: true, ...props },
     global: { stubs },
@@ -104,5 +114,27 @@ describe('ProcessPickerDialog / hint 常驻横幅', () => {
     expect(w.find('.mock-alert').attributes('data-title')).toBe(
       '「CUT-01 下料」为最后一道工序，加工完成后请送检。',
     );
+  });
+});
+
+// 「作用说明」那行（`.picker-purpose`）只在两个自助恢复 kind 下渲染：
+// 放回页（return）与送检页（inspection）走的是既有观感，多一行文字就是对两个不在本组件
+// 职责内的页面的可见 UI 变更；两个新 kind 的确认动作不选货架，工人需要一个能确认语义
+// 的地方，故它们才有这句。
+describe('ProcessPickerDialog / 作用说明行的渲染范围', () => {
+  it('takeover / outsource：渲染作用说明', async () => {
+    for (const kind of ['takeover', 'outsource'] as const) {
+      const w = render({ kind });
+      await flushPromises();
+      expect(w.find('.picker-purpose').exists(), `${kind} 应有作用说明`).toBe(true);
+    }
+  });
+
+  it('return / inspection：不渲染作用说明（既有两页观感零变化）', async () => {
+    for (const kind of ['return', 'inspection'] as const) {
+      const w = render({ kind });
+      await flushPromises();
+      expect(w.find('.picker-purpose').exists(), `${kind} 不该多出作用说明行`).toBe(false);
+    }
   });
 });

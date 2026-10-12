@@ -29,6 +29,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ZodError } from 'zod';
 
 import {
+  locateResultSchema,
   scanPartListResultSchema,
   scanPartRowSchema,
 } from '@/views/production/scan/composables/scanSchema';
@@ -58,10 +59,13 @@ vi.mock('@/api/http', () => ({
 
 import {
   fetchScanHeld,
+  fetchScanLocate,
   fetchScanPickable,
   findWorkerByBadge,
   pickUpBatch,
+  receiveFromOutsource,
   scanWorker,
+  takeOverBatch,
 } from '../productionScan';
 
 const WORK_TYPE_ID = '190000000000001';
@@ -828,5 +832,200 @@ describe('G 组：api 层原样透传，不在 API 边界 parse', () => {
     await expect(
       scanWorker({ serial_no: 'F2256', badge_code: 'W-001', event_type: 'RETURNED' }),
     ).resolves.toEqual(wire);
+  });
+});
+
+// ============================================================
+// L 组：扫码找件 · 自助恢复三件套（2026-10-15 新增）的 URL / query / body 逐字钉死。
+//
+// 为什么这组必须独立于 A 组存在：A 组守的是「list / badge / worker-scan / pick-up」
+// 那 5 条端点，而本组三条的 wire 形态与它们**方向相反**——入参侧的雪花 id 必须是
+// JSON 字符串、而 `version` 必须是裸 number，两者发错任一个得到的是 axum 提取器的
+// 400 / 422 **纯文本**（不进 `{code,message,data}` 信封）⇒ 页面连业务码都读不到，
+// 现场只看到一句 axios 错误，没有任何可分流的信息。这类失败在 A 组的断言形状下
+// 完全看不出来（那里只 assert path 与 params 的键）。
+// ============================================================
+describe('L 组：locate / take-over / outsource-receive 的 URL、query 与 body 逐字钉死', () => {
+  const SERIAL_NO = 'F2256';
+  const NEXT_PROCESS_ID = '190000000000777';
+
+  it('L1：诊断 = GET /prod/scan/locate（序列号走 query，不是 path 分段）', async () => {
+    const req = await fetchedRequest(() => fetchScanLocate({ serialNo: SERIAL_NO }));
+    expect(req.path).toBe('/prod/scan/locate');
+    expect(
+      req.path,
+      'serial_no 必须走 query：后端是 Query extractor，path 上再带会 404',
+    ).not.toContain(SERIAL_NO);
+  });
+
+  // ⚠️ `serial_no` 后端必填（`LocateQuery.serial_no` 无 `#[serde(default)]`），漏传得到的是
+  // **HTTP 400 纯文本**，页面拿到的东西连业务码都没有。这条钉住「它一定在 params 里」。
+  it('L2：serial_no 必带；worker_id 是字符串键（后端 deserialize_i64_opt 只吃 str）', async () => {
+    const req = await fetchedRequest(() =>
+      fetchScanLocate({ serialNo: SERIAL_NO, workerId: WORKER_ID }),
+    );
+    expect(req.params.serial_no).toBe(SERIAL_NO);
+    expect(req.params.worker_id).toBe(WORKER_ID);
+    expect(typeof req.params.worker_id, '发数字会被 QueryRejection 拒成 400 纯文本').toBe('string');
+  });
+
+  // `worker_id` 缺省时**不能发空串**：后端 `worker_id` 是 `Option<i64>` + `default`，
+  // 空串过不了 `deserialize_i64_opt` ⇒ 400 纯文本。这条钉住 cleanParams 那一剥。
+  it('L3：worker_id 缺省时整个键不出现（发空串会被 deserialize_i64_opt 拒成 400）', async () => {
+    const a = await fetchedRequest(() => fetchScanLocate({ serialNo: SERIAL_NO }));
+    expect(a.params).toEqual({ serial_no: SERIAL_NO });
+    const b = await fetchedRequest(() => fetchScanLocate({ serialNo: SERIAL_NO, workerId: null }));
+    expect(b.params).toEqual({ serial_no: SERIAL_NO });
+  });
+
+  // ⚠️ 两个写端点的 `batch_id` 都在 **body**（不是 path 段）：后端 `TakeOverRequest` /
+  // `OutsourceReceiveRequest` 的 `batch_id` 是 body 字段且走 `deserialize_i64`（只吃 str）。
+  it('L4：take-over = POST /prod/scan/take-over，batch_id 走 body 且是字符串', async () => {
+    const req = await postedRequest(() =>
+      takeOverBatch(BATCH_ID, { batch_id: BATCH_ID, badge_code: 'W-001', version: 6 }),
+    );
+    expect(req.path).toBe('/prod/scan/take-over');
+    expect(req.body.batch_id).toBe(BATCH_ID);
+    expect(typeof req.body.batch_id, '发数字会被 Json 提取器拒成 422 纯文本').toBe('string');
+  });
+
+  // `version` 方向与雪花 id **相反**：后端是裸 i32、无自定义反序列化器，且无 `default`
+  // （本仓 OCC 规约）⇒ 缺失是 422 纯文本，发字符串则 serde 直接类型不匹配。
+  it('L5：两个写端点的 version 发裸 number（OCC 锚，必填且非字符串）', async () => {
+    const take = await postedRequest(() =>
+      takeOverBatch(BATCH_ID, { batch_id: BATCH_ID, badge_code: 'W-001', version: 6 }),
+    );
+    expect(take.body.version).toBe(6);
+    expect(typeof take.body.version, '发字符串会让 serde 类型不匹配').toBe('number');
+
+    const recv = await postedRequest(() =>
+      receiveFromOutsource(BATCH_ID, { batch_id: BATCH_ID, badge_code: 'W-001', version: 6 }),
+    );
+    expect(recv.path).toBe('/prod/scan/outsource-receive');
+    expect(recv.body.version).toBe(6);
+    expect(typeof recv.body.version).toBe('number');
+  });
+
+  // `next_process_id` 键缺省时**不发**（不发 null）：后端两侧都是 `Option<String>` +
+  // `#[serde(default)]`，语义上等价，但「不发」让「本次链能自推、所以没带工序」在
+  // 请求体上直接可读 —— 排查稀疏链问题时这条差别很值钱。
+  it('L6：next_process_id 缺省时键不出现（接管链能自推时不带走工序）', async () => {
+    const take = await postedRequest(() =>
+      takeOverBatch(BATCH_ID, { batch_id: BATCH_ID, badge_code: 'W-001', version: 6 }),
+    );
+    expect('next_process_id' in take.body).toBe(false);
+    const recv = await postedRequest(() =>
+      receiveFromOutsource(BATCH_ID, { batch_id: BATCH_ID, badge_code: 'W-001', version: 6 }),
+    );
+    expect('next_process_id' in recv.body).toBe(false);
+  });
+
+  // ⚠️ 外协收回在 `chain_state === 'NEXT'` 时**也必须**把 locate 行的 next_process_id
+  // 原样回传：写侧缺省推导的口径是 `sort_order = 当前 + 1`，与读侧
+  // `sort_order > 当前 LIMIT 1` 在稀疏链上不等价 ⇒ 省略会吃 20706 / 40001。
+  // 这条钉住「传了就逐字发出去、且仍是字符串形态」。
+  it('L7：手填 / 回传的 next_process_id 原样发出去，仍是字符串', async () => {
+    const recv = await postedRequest(() =>
+      receiveFromOutsource(BATCH_ID, {
+        batch_id: BATCH_ID,
+        badge_code: 'W-001',
+        version: 6,
+        next_process_id: NEXT_PROCESS_ID,
+      }),
+    );
+    expect(recv.body.next_process_id).toBe(NEXT_PROCESS_ID);
+    expect(typeof recv.body.next_process_id).toBe('string');
+
+    const take = await postedRequest(() =>
+      takeOverBatch(BATCH_ID, {
+        batch_id: BATCH_ID,
+        badge_code: 'W-001',
+        version: 6,
+        next_process_id: NEXT_PROCESS_ID,
+      }),
+    );
+    expect(take.body.next_process_id).toBe(NEXT_PROCESS_ID);
+    expect(typeof take.body.next_process_id).toBe('string');
+  });
+
+  // 收回**没有** note 键（后端 `OutsourceReceiveRequest` 就没这个字段），多发会被 serde
+  // 默认忽略 —— 但留着一条「发出去也没有」的断言，是为了将来有人照着接管端点复制一份
+  // payload 时在这里看到差别。
+  it('L8：接管可带 note，收回没有这个键（后端 DTO 逐字段对照）', async () => {
+    const take = await postedRequest(() =>
+      takeOverBatch(BATCH_ID, {
+        batch_id: BATCH_ID,
+        badge_code: 'W-001',
+        version: 6,
+        note: '隔壁工位转来',
+      }),
+    );
+    expect(take.body.note).toBe('隔壁工位转来');
+    expect('note' in take.body).toBe(true);
+  });
+
+  // G 组口径对三条新端点同样成立：api 层只发请求，不 parse。
+  it('L9：api 层原样透传坏响应，不在边界 parse（守门在 queryFn）', async () => {
+    httpGetMock.mockReset();
+    httpGetMock.mockResolvedValue({ data: { part: {}, batches: [{}] } });
+    await expect(fetchScanLocate({ serialNo: SERIAL_NO, workerId: WORKER_ID })).resolves.toEqual({
+      part: {},
+      batches: [{}],
+    });
+  });
+
+  // ⚠️ 诊断侧的 strip 守卫，与 E8（list 行那份）**不是同一条**，两条都得在。
+  //
+  // `scanSchema.ts` 的诊断段声明了「后端多发未声明的键 ⇒ 被 strip 且不抛错（灰度期新旧
+  // 后端并存）」，但 list 行的 E8 断言的是 `scanPartRowSchema`、管不到 `locateResultSchema`
+  // —— 后者是把 `z.object` 的默认 strip 当契约用的那一份，必须有自己的一条：将来有人把
+  // 诊断 schema 改成 `.strict()`，或把某个键声明错，灰度期后端多发一个键就会让整个诊断
+  // 弹窗 reject。
+  it('L10：诊断 schema 对后端多发的键 strip 且不抛错（行与工单两侧都被覆盖）', () => {
+    const locateRow = {
+      batch_id: BATCH_ID,
+      batch_no: 1,
+      quantity: 3,
+      status: 'IN_PROCESS',
+      version: 6,
+      location: 'WORKER',
+      holder_display: '李四',
+      current_process_name: '车削',
+      chain_state: 'NEXT',
+      next_process_id: NEXT_PROCESS_ID,
+      next_process_name: '铣削',
+      updated_at: '2026-10-15 09:00:00',
+      company_name: null,
+      sent_at: null,
+      action: 'TAKE_OVER',
+      disabled_reason: null,
+    };
+    const parsed = locateResultSchema.parse({
+      part: {
+        id: '190000000000101',
+        serial_no: SERIAL_NO,
+        name: '法兰盘',
+        drawing_no: 'DWG-1',
+        is_urgent: false,
+        planned_delivery_date: '2026-10-20',
+        system_delivery_date: null,
+      },
+      batches: [
+        {
+          ...locateRow,
+          // 后端将来新增、当前 schema 未声明的键（灰度期新旧后端并存时的常态）
+          assembly_id: null,
+          process_id: '190000000000021',
+        },
+      ],
+    });
+
+    // 行：16 个键一个不多，一个不少，未声明的两个键都不在结果里
+    expect(Object.keys(parsed.batches[0]!).sort()).toEqual(Object.keys(locateRow).sort());
+    expect(parsed.batches[0]!).not.toHaveProperty('assembly_id');
+    expect(parsed.batches[0]!).not.toHaveProperty('process_id');
+
+    // 工单侧同理（brief 7 字段）
+    expect(Object.keys(parsed.part)).toHaveLength(7);
   });
 });

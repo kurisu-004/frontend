@@ -151,6 +151,16 @@
       @cancel="cancelSelect"
     />
 
+    <!-- 扫码找件诊断（2026-10-15）：扫到 0 匹配时问「这个件现在在哪、谁能动它」，
+         并把能动的行接成自助恢复按钮。旧兜底是 `findPartBySerialAndPrompt` 的
+         `GET /parts/by-serial/{sn}` 弹窗 —— 那条端点不放行 SHELF_ACCOUNT，恒 403。 -->
+    <LocateDialog
+      v-if="showLocate && worker"
+      v-model="showLocate"
+      :code="locateCode"
+      :worker="worker"
+    />
+
     <!-- 图纸 / 图片 预览（2026-10-11 抽成 components/PartDrawingPreviewDialog.vue：
          四个分支 + 下载闸门 + blob 生命周期是一件事的完整口径，此前三页各抄一份） -->
     <PartDrawingPreviewDialog
@@ -182,12 +192,13 @@ import BatchPickerDialog, {
   type BatchPickerRow,
 } from '@/views/production/scan/components/BatchPickerDialog.vue';
 import RefillTakenDialog from '@/views/production/scan/components/RefillTakenDialog.vue';
+import LocateDialog from '@/views/production/scan/components/LocateDialog.vue';
 import { useScanHeldQuery } from '@/views/production/scan/composables/useScanListQuery';
 import { useScanWorkerScanMutation } from '@/views/production/scan/composables/useScanWrite';
 
 const workerScanMutation = useScanWorkerScanMutation();
 import type { TakenItemDto } from '@/api/productionQueue.contract';
-import { findAllByCode, findPartBySerialAndPrompt } from '@/utils/scanHelpers';
+import { findAllByCode } from '@/utils/scanHelpers';
 
 const router = useRouter();
 const { worker, requireWorker, reset: resetScanSession } = useScanSession();
@@ -253,6 +264,15 @@ const showBatchPicker = ref(false);
 const batchPickerCode = ref('');
 const batchPickerRows = ref<ScanPartRowSchema[]>([]);
 
+// --- 扫码找件诊断弹窗（2026-10-15）：扫到 0 匹配时的兜底 ---
+const showLocate = ref(false);
+const locateCode = ref('');
+
+function openLocate(code: string): void {
+  locateCode.value = code;
+  showLocate.value = true;
+}
+
 onBeforeMount(() => {
   requireWorker(router);
 });
@@ -304,7 +324,10 @@ async function onScanToSelect(rawCode: string): Promise<void> {
     batchPickerRows.value = matches;
     showBatchPicker.value = true;
   } else {
-    await findPartBySerialAndPrompt(code);
+    // 2026-10-15：0 匹配的兜底从 `findPartBySerialAndPrompt`（`GET /parts/by-serial/{sn}`）
+    // 改接报工台自己的 `LocateDialog`（`GET /prod/scan/locate`）。原因见 LocateDialog
+    // 的文件头：那条 by-serial 端点的后端闸门不含 `SHELF_ACCOUNT`，工人一体机账号恒 403。
+    openLocate(code);
   }
 }
 

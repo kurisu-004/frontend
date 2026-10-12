@@ -9,9 +9,18 @@
 
   props:
     modelValue: boolean                 弹窗可见
-    kind?: 'return' | 'inspection'      picker 用途（影响 title / empty 文案 / 下一步按钮）
+    kind?: 'return' | 'inspection' | 'takeover' | 'outsource'
+                                          picker 用途（只影响 title / 作用说明 / 下一步按钮文案；
+                                          2026-10-15 新增 takeover（扫码接管）与 outsource
+                                          （外协确认收回）两个 kind，供 LocateDialog 的
+                                          手填下一道工序弹窗复用；作用说明那行也只在这两个
+                                          kind 下渲染）
     currentProcessId?: string | null    工件 next_process_id，预填为推荐
+    excludeProcessIds?: string[]        不可选的工序 id（显示为禁用卡片 + hint）
     hint?: string                       常驻横幅提示（缺省不渲染）
+    showClose?: boolean                 是否显示右上角 ×（缺省 true；传 false 把关闭权收在
+                                          footer 两键上，供「本框是某条路径唯一提交入口」
+                                          的调用方使用，见 prop 的详细注释）
   emits:
     update:modelValue(v: boolean)
     confirm(processId: string)
@@ -24,6 +33,7 @@
     width="min(95vw, 1100px)"
     :close-on-click-modal="false"
     :close-on-press-escape="false"
+    :show-close="showClose"
     @update:model-value="(v: boolean) => emit('update:modelValue', v)"
   >
     <!-- 2026-10-04 新增 hint：调用方要在弹窗里传达的**常驻**信息（放回页链尾
@@ -48,6 +58,11 @@
       <p class="error-text">{{ errorMessage }}</p>
     </div>
     <div v-else>
+      <!-- 按 kind 给一句「选完会发生什么」。⚠️ **只渲染在 takeover / outsource 两个 kind
+           下**：放回页（return）与送检页（inspection）走的是既有观感，加一行说明文字
+           是对两个不在本组件职责内的页面的可见 UI 变更。两个新 kind 的确认动作不选货架，
+           工人需要一个能确认语义的地方，故它们才有这句。 -->
+      <p v-if="showPurpose" class="picker-purpose">{{ kindText.purpose }}</p>
       <el-tabs v-model="activeTab" class="process-tabs">
         <el-tab-pane v-for="cat in tabs" :key="cat.key" :label="cat.label" :name="cat.key">
           <div v-if="cat.processes.length === 0" class="tab-empty">
@@ -109,20 +124,40 @@ import type { Process } from '@/types/process';
 const props = withDefaults(
   defineProps<{
     modelValue: boolean;
-    /** 'return' = 选下一道工序；'inspection' = 选送检对应工序 */
-    kind?: 'return' | 'inspection';
+    /**
+     * picker 用途。**只影响文案**（title / 作用说明 / 「下一步」按钮），**不改任何行为**：
+     *  - `return`     —— 放回页选下一道工序；
+     *  - `inspection` —— 送检页选送检对应工序；
+     *  - `takeover`   —— 2026-10-15 新增：扫码接管（`POST /prod/scan/take-over`）手填下一道；
+     *  - `outsource`  —— 2026-10-15 新增：外协确认收回（`POST /prod/scan/outsource-receive`）
+     *    手填下一道。
+     *  后两个是 `LocateDialog`（扫码找件诊断弹窗）的复用方：它们的写端点在
+     *  `chain_state !== 'NEXT'` 时都要求前端手填 `next_process_id`。
+     */
+    kind?: 'return' | 'inspection' | 'takeover' | 'outsource';
     /** 工件 next_process_id：预填选中并标推荐（橙色边框） */
     currentProcessId?: string | null;
     /** 不可选的工序 id 列表（被排除的卡片显示为禁用 + hint） */
     excludeProcessIds?: string[];
-    /** 常驻横幅提示（el-alert）；缺省 / 空串不渲染。两个 kind 都可用，与用途无关。 */
+    /** 常驻横幅提示（el-alert）；缺省 / 空串不渲染。所有 kind 都可用，与用途无关。 */
     hint?: string;
+    /**
+     * 是否显示右上角 × 按钮（默认 true = 保持既有观感）。
+     *
+     * 2026-10-15 新增，**只为把关闭权交给「本框是某条路径唯一出口」的调用方**：× 只 emit
+     * `update:modelValue(false)`、**不发 `cancel`**，调用方在 `cancel` 里做的收尾（清待填
+     * 状态）一律不会发生。`LocateDialog` 的接管 / 外协收回手填流就属于这种调用方 ——
+     * 那条链上本框是提交那个写端点的唯一入口，故它传 `:show-close="false"`，关闭权收在
+     * footer 的「取消」/「下一步」两键上。
+     */
+    showClose?: boolean;
   }>(),
   {
     kind: 'return',
     currentProcessId: null,
     excludeProcessIds: () => [],
     hint: '',
+    showClose: true,
   },
 );
 
@@ -139,13 +174,47 @@ const processes = ref<Process[]>([]);
 const selectedId = ref<string | null>(null);
 const activeTab = ref<'INHOUSE' | 'OUTSOURCE'>('INHOUSE');
 
-const titleText = computed<string>(() =>
-  props.kind === 'inspection' ? '选择送检对应工序' : '选择下一道工序',
-);
+/** 四个 kind 的文案映射（**纯文案**，不改变组件的任何行为分支）。
+ *
+ *  取舍：原先只有 `inspection` 与「其余」两条分支，`takeover` / `outsource` 会各自落到
+ *  「其余」那条、放回页的标题与「选货架」按钮文案出现在接管流程里 —— 工人读到的是一句
+ *  与本次动作无关的话。逐 kind 列出来后**新增 kind 忘了补文案表是编译期错误**
+ *  （`Record<NonNullable<typeof props.kind>, …>` 的键集合由 props 声明推出，不是靠运行时
+ *  兜底的 `''`）。 */
+const KIND_TEXT: Record<
+  NonNullable<typeof props.kind>,
+  { title: string; purpose: string; next: string }
+> = {
+  return: {
+    title: '选择下一道工序',
+    purpose: '确认后工件按负载放到合适的货架。',
+    next: '下一步 · 选货架',
+  },
+  inspection: {
+    title: '选择送检对应工序',
+    purpose: '确认后工件送进品检区。',
+    next: '下一步 · 选送检架',
+  },
+  takeover: {
+    title: '选择接管后的下一道工序',
+    purpose: '这批的工序链推不出下一道，请手工指定；接管后这批会落到你选的工序上。',
+    next: '接管到这道工序',
+  },
+  outsource: {
+    title: '选择收回后的下一道工序',
+    purpose: '这批的工序链推不出下一道，请手工指定；收回后这批会落到你选的工序上。',
+    next: '收回到这道工序',
+  },
+};
 
-const nextButtonText = computed<string>(() =>
-  props.kind === 'inspection' ? '下一步 · 选送检架' : '下一步 · 选货架',
-);
+const kindText = computed(() => KIND_TEXT[props.kind]);
+
+/** 「作用说明」那行是否渲染：只在两个自助恢复 kind 下渲染（见模板内注释）。 */
+const showPurpose = computed(() => props.kind === 'takeover' || props.kind === 'outsource');
+
+const titleText = computed<string>(() => kindText.value.title);
+
+const nextButtonText = computed<string>(() => kindText.value.next);
 
 interface TabEntry {
   key: 'INHOUSE' | 'OUTSOURCE';
@@ -238,6 +307,12 @@ function onCancel(): void {
 .picker-hint {
   margin-bottom: 12px;
   font-size: 16px;
+}
+/* 2026-10-15 新增：kind 作用说明行（见模板内同名注释）。 */
+.picker-purpose {
+  margin: 0 0 8px;
+  color: #909399;
+  font-size: 15px;
 }
 .process-tabs {
   // 抵消 el-dialog 默认内边距，让 tabs 内容贴边

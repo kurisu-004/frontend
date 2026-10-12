@@ -172,3 +172,88 @@ export const scanPartListResultSchema = z.object({
 });
 
 export type ScanPartListResultSchema = z.infer<typeof scanPartListResultSchema>;
+
+// ============================================================
+// 2026-10-15 新增：扫码找件 · 只读诊断端点 `GET /api/v2/prod/scan/locate` 的守门 schema。
+//
+// 严格度口径**与本文件上半段的 `scanPartRowSchema` 保持一致**（逐条同款取舍，不要
+// 各拍一次）：
+//   - **除链四件套外全部必填**，可空的一律 `.nullable()`；Zod 默认 strip 会静默丢弃
+//     未声明的键，所以必填字段必须显式声明，否则「后端漏发」一路流到视图层；
+//   - 后端多发未声明的键 ⇒ **被 strip 且不抛错**（灰度期新旧后端并存时这是想要的
+//     行为；诊断 schema 自己那条断言见 `src/api/__tests__/productionScan.contract.spec.ts`
+//     的 L10 —— 上半段 list 行的 E8 守的是 `scanPartRowSchema`，管不到本段这两个 schema）；
+//   - **雪花 id 一律 `z.string()`**（后端 `serialize_i64` / `serialize_i64_opt` → JSON
+//     string），禁止 `z.number()`（19 位在 JS `Number` 下会丢精度）；
+//   - `batch_no` / `quantity` / `version` 是裸 i32 ⇒ `z.number()`。
+//
+// ⚠️ **为什么诊断行不用上半段那套「带默认值降级」**：`chain_state` 在本 VO 里与
+// `action` / `disabled_reason` 是一组决策输入（`LocateDialog` 靠 `chain_state` 决定
+// 要不要弹手填工序、靠 `action` 决定渲染哪个按钮），缺键会让按钮渲染落到兜底分支却
+// 不报错 —— 与 `has_process_chain` 那条「缺键就在边界炸出来」的理由同款。诊断行由一个
+// 弹窗独用，炸掉也只炸一个弹窗，不存在上半段那种「报工台整体停工」的失败模式。
+// ============================================================
+
+/** `locate` 诊断行（后端 `LocateBatchItem`，**16 字段**，键名即网络契约）。 */
+export const locateBatchRowSchema = z.object({
+  /** 批次 id（雪花 ID 字符串）。两个写端点的批次锚，原样回传。 */
+  batch_id: z.string(),
+  /** 零件内递增批次号（裸 i32 ⇒ number）。拆批产生的同号行由 batch_id 兜底。 */
+  batch_no: z.number(),
+  /** 批次数量（裸 i32 ⇒ number；不是工单数量）。 */
+  quantity: z.number(),
+  /** `t_part_batch.status` 原文透出（含终态与可能的脏值）—— 不在这里枚举化：
+   *  分类结论在 `action` / `disabled_reason`，本键只作展示与排查。 */
+  status: z.string(),
+  /** 批次 OCC 锚（裸 i32 ⇒ number），两个写端点必填原样回传。 */
+  version: z.number(),
+  /** 位置**真实值**（与上半段 list 行那个恒 null 的占位方向相反）。 */
+  location: z.string().nullable(),
+  /** 持有人显示名（三表 COALESCE 的结果，可能为 null）。 */
+  holder_display: z.string().nullable(),
+  /** 批次当前工序名（工序被软删 / 出池清列时为 null）。 */
+  current_process_name: z.string().nullable(),
+  /** 链位置三值（`"NONE"` / `"NEXT"` / `"TAIL"`）。声明成 `z.string()` 而非
+   *  `z.enum`：加取值是纯后端单方面改动，届时本字段退化成「非 NEXT 即手填」，不会
+   *  让整个诊断弹窗 reject（与 list 行那四件套的降级取舍同向，理由见上）。 */
+  chain_state: z.string(),
+  /** 链内推导出的下一道工序 id。⚠️ **可空字符串**，**不是**上半段 list 行的 `"0"` 兜底
+   *  （诊断语义里「没有下一道」必须显式是 null，否则前端要去猜 `"0"` 是不是合法 id）。 */
+  next_process_id: z.string().nullable(),
+  /** 下一道工序名（下一道工序被软删时 id 仍有值、名字为 null）。 */
+  next_process_name: z.string().nullable(),
+  /** 批次位置事实的新鲜度。 */
+  updated_at: z.string(),
+  /** 仅外协批次：在途公司名；非外协批次恒 null。 */
+  company_name: z.string().nullable(),
+  /** 仅外协批次：开口 shipment 的发出时间；找不到时 null。 */
+  sent_at: z.string().nullable(),
+  /** 针对该工人的可行动作。声明成可空字符串而非 `z.enum`：未知字面量时退化成
+   *  「渲染不成按钮」这一保守分支（不会炸），`LocateDialog` 的 `switch` 默认分支按
+   *  不可行动作处理。 */
+  action: z.string().nullable(),
+  /** 不能点的原因（同上，默认文案走 `UNKNOWN` 那一档）。 */
+  disabled_reason: z.string().nullable(),
+});
+
+/** 行派生类型：沿 CLAUDE.md「Zod schema-first」的 `*Data` 后缀约定（api 层用它标注返回类型）。 */
+export type LocateBatchRowData = z.infer<typeof locateBatchRowSchema>;
+
+/** `locate` 的工单侧最小投影（后端 `LocatePartBrief`，**7 字段**）。 */
+const locatePartBriefSchema = z.object({
+  id: z.string(),
+  serial_no: z.string().nullable(),
+  name: z.string(),
+  drawing_no: z.string(),
+  is_urgent: z.boolean(),
+  planned_delivery_date: z.string(),
+  system_delivery_date: z.string().nullable(),
+});
+
+/** `GET /api/v2/prod/scan/locate` 出参：`part` + **全部**批次（不分页、无上限）。 */
+export const locateResultSchema = z.object({
+  part: locatePartBriefSchema,
+  batches: z.array(locateBatchRowSchema),
+});
+
+export type LocateResultData = z.infer<typeof locateResultSchema>;

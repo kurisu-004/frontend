@@ -33,6 +33,15 @@
 //   - `total` / `limit` / `offset` 是裸 i64 → JSON **number**（与雪花 ID 字段相反）。
 //   - `planned_delivery_date` 现在是**真实投影值**（不再是 `1970-01-01` 占位符）⇒
 //     声明成非 null string，不要拿它判「无交期」。
+//
+// 2026-10-15 新增「扫码找件 · 自助恢复三件套」的前端契约（locate 只读诊断 +
+// take-over / outsource-receive 两个写端点）。这三个端点是报工台三页「扫到 0 匹配」
+// 时的兜底出口：旧兜底走 `GET /parts/by-serial/{sn}`，而那条端点的后端闸门不含
+// `SHELF_ACCOUNT`，工人一体机账号恒 403；报工台自有的 8 个端点全部放行它。
+// ⚠️ 后端 `docs/api/scan.md` 是本节的权威来源，按小节指：逐字段见「逐字段 · locate /
+// take-over / outsource-receive」三节，action 取值与写侧守卫的对照见「口径表 · locate 的
+// action 决策表与写侧守卫对照」，前端接线清单见「表依赖 · 前端配套改动清单」里的
+// 「扫码找件诊断前端接入 / 扫码接管前端接入 / 外协确认收回前端接入」三条。
 
 import type { QueueRefillResultDto } from './productionQueue.contract';
 import type { PartOutDto } from './parts/crud';
@@ -211,3 +220,226 @@ export interface ScanPickUpRequest {
  *  （订正前本文件声明的就是它）。也**别与本文件的 `ScanListItemDto` 混用** ——
  *  后者是报工台两条 list 专用的 17 字段窄投影。 */
 export type ScanPickUpResultDto = PartOutDto;
+
+// ============================================================
+// 2026-10-15 新增：扫码找件 · 自助恢复三件套的 wire 契约。
+// 后端权威来源：`docs/api/scan.md` 的「逐字段」一节里 locate / take-over /
+// outsource-receive 三个小节，与「口径表」一节里 locate 的 action 决策表那节。
+//
+// 四个贯穿本节的形态事实（写错就线上炸，逐条有后端护栏单测钉着）：
+//   1. **雪花 id 一律 JSON 字符串**（`serialize_i64` / `serialize_i64_opt`）：入参侧
+//      `batch_id` / `next_process_id`（query 侧 `worker_id`）只吃 `str`，发 number
+//      得到的是 axum 提取器的 **422 / 400 纯文本**、不进 `{code,message,data}` 信封
+//      ⇒ 不能落进「`code != 0`」的错误分支，调用方连业务码都读不到；
+//   2. **`version` / `batch_no` / `quantity` 是裸 number**（i32，无自定义反序列化器），
+//      方向与第 1 条相反；
+//   3. **`next_process_id` 在 locate 出参里是可空字符串**（`null`，**不是** `"0"` 兜底 ——
+//      那是同域两条 list 的 `chain_next_process_id` 口径，诊断行刻意分叉）；
+//   4. 两个写端点的 `version` **必填**：缺失 → HTTP 422 纯文本。
+// ============================================================
+
+/** `GET /api/v2/prod/scan/locate` 的 query 入参。
+ *
+ *  `serialNo` **必填**且**必发**（缺省 → axum `QueryRejection` → HTTP 400 纯文本）；
+ *  `trim()` 后为空串由后端按「未命中」处理（业务码 `20101` / HTTP 404）。
+ *
+ *  `workerId` 可选，但**本项目三页都必须发**：`locate` 只在传了它时才计算可行动作
+ *  `action` / 不可行原因 `disabled_reason`，不传则两者恒 `null`（纯位置事实、拿不到
+ *  按钮）。它是**字符串**（后端 `deserialize_i64_opt` 只吃 `str`，发 number → 400 纯文本）。 */
+export interface ScanLocateParams {
+  serialNo: string;
+  workerId?: string | null;
+}
+
+/** `locate` 诊断行里的可行动作（4 个 wire 字面量，`SCREAMING_SNAKE_CASE`）。
+ *
+ *  它只回答「**这个工人**、**这一批**，现在能做什么」，**不是**写侧守卫本身 ——
+ *  写侧还会做各自的 OCC / 存在性校验。`null` 时读 `disabled_reason`。
+ *  ⚠️ 后端另有 9 个 `disabled_reason` 字面量，其中 `PROCESS_CHAIN_REQUIRED` 已随
+ *  外协收回写端点落地被删除（假阻挡），前端 `switch` 里不要留该分支。 */
+export type LocateActionValue = 'PICK_UP' | 'MINE' | 'TAKE_OVER' | 'RECEIVE_FROM_OUTSOURCE';
+
+/** `locate` 诊断行里的「不能点」原因（**9 个** wire 字面量）。
+ *
+ *  分组语义与判定优先级（状态类 → 工种未绑定 → 工序 ∉ 工种 → 容量）逐条对齐后端
+ *  `decide_action` 决策表；`UNKNOWN` 是后端没见过的状态 / 位置组合的保守出口。 */
+export type LocateDisabledReasonValue =
+  /** 批次 `PROGRAMMING`：待编程，指引找 CNC 编程。 */
+  | 'PROGRAMMING'
+  /** 批次 `INSPECTION`：在品检，指引找品检。 */
+  | 'INSPECTION'
+  /** `READY_TO_SHIP` / `DELIVERED` / `COMPLETED` / `CANCELLED`：终态。 */
+  | 'TERMINAL'
+  /** 工人未绑工种（除 `MINE` 外一切动作都不可行）。 */
+  | 'WORK_TYPE_NOT_SET'
+  /** 推导出的下一道工序不在该工种的活跃工序映射里。 */
+  | 'PROCESS_NOT_IN_WORK_TYPE'
+  /** 有链但链内没有未软删 step ⇒ 写侧没有可落的链首（对位写侧 `20702`）。 */
+  | 'PROCESS_CHAIN_STEP_NOT_FOUND'
+  /** 该工人持有的批次已达工种上限 `max_held_batches`（对位写侧 `20204`）。 */
+  | 'WORKER_HOLD_LIMIT_EXCEEDED'
+  /** 工种未配 `max_held_batches`（`NULL` = 未配置，对位写侧 `20904`）。 */
+  | 'WORK_TYPE_MAX_HELD_NOT_SET'
+  /** 状态 / 位置组合不在决策表内（保守出口，出现即需补表）。 */
+  | 'UNKNOWN';
+
+/** `locate` 的工单侧最小投影（**7 字段**）。 */
+export interface LocatePartBriefDto {
+  /** part id，**雪花 ID 字符串**。 */
+  id: string;
+  /** `t_part.serial_no`（可空列；本端点按序列号命中 ⇒ 实际恒非空）。 */
+  serial_no: string | null;
+  name: string;
+  drawing_no: string;
+  is_urgent: boolean;
+  /** 计划交付日（`t_part.planned_delivery_date`，真实值非占位）。 */
+  planned_delivery_date: string;
+  /** 系统推算交付日（可空列）。 */
+  system_delivery_date: string | null;
+}
+
+/** `locate` 的一行批次诊断（**16 字段**，键名即网络契约）。
+ *
+ *  行单位是**批次**，覆盖该 part 的**全部未软删批次**（含终态）：找件场景里「这批被
+ *  取消了」本身就是要回答的事实。它与同域两条 list 的 `ScanListItem` **刻意不复用**：
+ *  列表行被状态 / 位置 / 持有人过滤且 `location` 恒 null，本行 `location` 是真实值
+ *  （它就是「件在哪个位置」的答案本身）。 */
+export interface LocateBatchItemDto {
+  /** 批次 id，**雪花 ID 字符串**。两个写端点的批次锚（原样回传）。 */
+  batch_id: string;
+  /** `t_part_batch.batch_no`（零件内递增；拆批产生的同号行由 batch_id 兜底）。**裸 number**。 */
+  batch_no: number;
+  /** `t_part_batch.quantity`（批次数量，不是工单数量）。**裸 number**。 */
+  quantity: number;
+  /** `t_part_batch.status` **原文透出**（含终态、含可能的脏值）；分类结论在
+   *  `action` / `disabled_reason`，本键只作展示与排查。 */
+  status: string;
+  /** `t_part_batch.version`（OCC 锚，两个写端点必填）。**裸 number**。 */
+  version: number;
+  /** 位置真实值（`PRODUCTION_SHELF` / `WORKER` / `OUTSOURCE_COMPANY` /
+   *  `INSPECTION_SHELF` / `OFFICE` / `NULL`），**不是** list 端点那个恒 null 的占位。 */
+  location: string | null;
+  /** 持有人显示名：`COALESCE(t_shelf.name, t_worker.name, t_outsource_company.name)`。 */
+  holder_display: string | null;
+  /** 批次当前工序名（走 `current_process_id` 权威列；工序被软删时 null；出池过的
+   *  `INSPECTION` / `DELIVERED` 批次按「出池清该列」不变式恒 null）。 */
+  current_process_name: string | null;
+  /** 链位置三值（`"NONE"` / `"NEXT"` / `"TAIL"`），与同域 `/held` 的 `chain_state` 同源。 */
+  chain_state: string;
+  /** 链内推导出的下一道工序 id。**可空字符串**，不是 `"0"` 兜底（诊断行用 `null`
+   *  表达「没有下一道」）；仅 `chain_state === 'NEXT'` 时非空。 */
+  next_process_id: string | null;
+  /** 下一道工序名（下一道工序被软删时 id 仍有值、名字 null）。 */
+  next_process_name: string | null;
+  /** `t_part_batch.updated_at`（位置事实的新鲜度）。 */
+  updated_at: string;
+  /** 仅外协批次（`status='OUTSOURCE'`）：在途公司名；非外协批次恒 null。 */
+  company_name: string | null;
+  /** 仅外协批次：该批次**开口 shipment**（`status='OUTSOURCING'`）的发出时间。 */
+  sent_at: string | null;
+  /** 针对 query 里那个工人的可行动作；未传 `worker_id` 时恒 null。 */
+  action: LocateActionValue | null;
+  /** 不能点 `action` 的原因；`action` 非空或未传 `worker_id` 时恒 null。 */
+  disabled_reason: LocateDisabledReasonValue | null;
+}
+
+/** `GET /api/v2/prod/scan/locate` 出参：`part` + **全部**批次。
+ *
+ *  **不分页、无上限**（找件场景要一次看全），顺序即 `batch_no ASC, id ASC`
+ *  （件数递增 + 拆批兜底），前端不必二次排序。 */
+export interface ScanLocateResultDto {
+  part: LocatePartBriefDto;
+  batches: LocateBatchItemDto[];
+}
+
+/** `POST /api/v2/prod/scan/take-over`（扫码接管）请求。
+ *
+ *  场景：批次仍挂在**别的**工人名下，但图纸 / 实物已流转到这位工人手里 ⇒ holder 换成
+ *  我、顺手推进到我工种下的下一道工序，同一事务原子完成。**整批接管，不做部分数量。** */
+export interface ScanTakeOverRequest {
+  /** 批次锚，**必须发字符串**（后端 `deserialize_i64` 只吃 `str`，发 number → 422 纯文本）。
+   *
+   *  ⚠️ **调用方不必自己填它、填了也不作数**：`takeOverBatch(batchId, payload)` 组装
+   *  请求体时一律写形参 `batchId`，本字段在 payload 里传的值会被**整个丢弃**（不是合并，
+   * 两者不一致时发出去的是形参那个）。本字段仍声明在这里，是因为它属于 wire 契约（后端
+   *  body 的必填键）—— 路径参数与 body 字段承载的是同一个批次锚。 */
+  batch_id: string;
+  /** **接管人**（扫码人）工牌码。旧持有人由批次行的 `current_holder_id` 决定，
+   *  客户端不需要、也不应该指定。 */
+  badge_code: string;
+  /** 批次 OCC 锚，**必填且发裸 number**（缺失 → 422 纯文本；不一致 → `40901`）。 */
+  version: number;
+  /** 接管后要推进到的工序，**字符串**。
+   *  - `chain_state === 'NEXT'`：**可省略**（后端按链自推）。
+   *  - 其余形态（无链 / 链尾 / 指针漂移）：**必填**，缺失 → `40001`；有链但该工序不在
+   *    链内 → `20702`。 */
+  next_process_id?: string | null;
+  /** `t_part_event.note` 的附加备注；缺省时事件备注自动写「接管自 worker {旧持有人 id}」。 */
+  note?: string | null;
+}
+
+/** `POST /api/v2/prod/scan/take-over` 出参（**7 个 JSON 键**，键名即网络契约）。
+ *
+ *  后端另有一个 `#[serde(skip)]` 的内部管道字段 `synced_assembly_id`
+ *  （handler 在 commit 后补发 `ASSEMBLY_UPDATED` 用）**不在 JSON 里**，别自己加。 */
+export interface ScanTakeOverResultDto {
+  /** 被接管的批次，雪花 ID 字符串。 */
+  batch_id: string;
+  /** 所属工单，雪花 ID 字符串。 */
+  part_id: string;
+  /** **旧**持有人（接管前批次行上的 `current_holder_id`，服务端层面恒非空）。 */
+  from_worker_id: string;
+  /** **新**持有人（扫牌反查出的接管人）。 */
+  to_worker_id: string;
+  /** 接管后批次落到哪道工序。 */
+  next_process_id: string;
+  /** 目标工序在链内的 step id；**无链时为 null**（不是 `"0"` 兜底）。 */
+  next_process_step_id: string | null;
+  /** 接管**后**的批次锚（= 客户端传值 + 1）。**裸 number**，继续用作下一次动作的 OCC。 */
+  version: number;
+}
+
+/** `POST /api/v2/prod/scan/outsource-receive`（外协确认收回）请求。
+ *
+ *  场景：件实际已从外协回厂，但库里批次仍停在 `OUTSOURCE + OUTSOURCE_COMPANY` 挂在公司
+ *  名下 ⇒ 一步「收回落自动选架 + 立刻交到扫码工人手上」，同一事务原子完成。
+ *  **整批动作，没有 `quantity`，也没有 `note`。** */
+export interface ScanOutsourceReceiveRequest {
+  /** 批次锚，**必须发字符串**（与 take-over 同款）。
+   *
+   *  ⚠️ 与 `ScanTakeOverRequest.batch_id` 同一条纪律：请求体里这个键一律取
+   *  `receiveFromOutsource` 的形参 `batchId`，调用方在 payload 里传的值会被**整个丢弃**。 */
+  batch_id: string;
+  /** 收回人（扫码人）工牌码；收回后立刻交到这位工人手上。 */
+  badge_code: string;
+  /** 批次 OCC 锚，**必填且发裸 number**。 */
+  version: number;
+  /** 收回后要落到的工序，**字符串**。语义与 take-over **不同**：这里是可选的
+   *  **显式覆盖**（传了就用），缺省才按链推导。
+   *  - ⚠️ `chain_state === 'NEXT'` 时**也必须把 locate 行的 `next_process_id` 原样回传**：
+   *    写侧缺省推导的口径是 `sort_order = 当前 + 1`，与读侧 `sort_order > 当前 LIMIT 1`
+   *    **在稀疏链上不等价** ⇒ 省略会在稀疏链 / part 无链但指针存活的形态上吃 `20706` /
+   *    `40001`。
+   *  - `chain_state !== 'NEXT'`（含无链）：前端应弹手填；无链且缺省 → `40001`。 */
+  next_process_id?: string | null;
+}
+
+/** `POST /api/v2/prod/scan/outsource-receive` 出参（**6 个 JSON 键**，键名即网络契约）。
+ *
+ *  后端另有一个 `#[serde(skip)]` 的内部管道字段 `picked_quantity`（handler 在 commit 后
+ *  补发 `PART_PICKED_UP` 用）**不在 JSON 里**，别自己加。 */
+export interface ScanOutsourceReceiveResultDto {
+  /** 被收回的批次，雪花 ID 字符串。 */
+  batch_id: string;
+  /** 所属工单，雪花 ID 字符串。 */
+  part_id: string;
+  /** **新**持有人（扫牌反查出的收回人）。 */
+  worker_id: string;
+  /** **收回前**的在途公司（批次行收回前的 `current_holder_id`，服务端层面恒非空）。 */
+  company_id: string;
+  /** 收回后批次落到哪道工序。 */
+  next_process_id: string;
+  /** 收回 + 交人**两段写之后**的批次锚（**由库写后读回**，不是请求的 `version + 2`）。
+   *  **裸 number**，继续用作下一次动作的 OCC。 */
+  version: number;
+}
