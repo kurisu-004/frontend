@@ -19,7 +19,12 @@ import { pdfjsCmapsPlugin } from './scripts/pdfjsCmapsPlugin.ts';
 // 给 dev server + preview server 加这两个 header，未来接入 occt-wasm Worker 时
 // 也能直接复用，不需要再改。
 //
-// 仅 serve 模式生效；prod 走 nginx，nginx.conf 已带 COOP/COEP（见 5-build-and-deploy）。
+// 仅 serve 模式（dev + preview server）由本插件加这两个头（occt-wasm 需要）；
+// **生产 nginx 当前不带 COOP/COEP**（nginx.conf / nginx.http-only.conf 均无此二头）。
+//
+// ⚠️ 2026-10-12 补注 COEP `require-corp` 的副作用：跨域预览图（EdgeOne `previews/*`）
+// 必须在响应侧回 `Cross-Origin-Resource-Policy: cross-origin`，否则被浏览器拦截 ——
+// dev/preview 表现为图片加载失败，而把该 URL 在地址栏直开却正常。
 function crossOriginIsolation(): PluginOption {
   return {
     name: 'cross-origin-isolation',

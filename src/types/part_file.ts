@@ -129,7 +129,8 @@ export interface PartFileUrlResult {
  * `FAILED` 只存在于后端 `t_file_preview.state` 表列里、不出现在响应里。故消费侧拿到
  * 本枚举之外的值（后端将来加了新状态）当「不认识」处理，不要当成功也不要当失败。
  *
- * - `READY`：转图完成，`pages` 是逐页图片直链（CDN / COS 签名 URL），长度 = `page_count`；
+ * - `READY`：转图完成，`pages` 是逐页图片直链（公开读直链，无签名、不过期，可带部署级
+ *   固定查询参数，见 `?size=` 档位；2026-10-12 补注），长度 = `page_count`；
  * - `PENDING`：CI 仍在转，`pages` 恒为空数组，`retry_after_ms` 是**建议**重试间隔。
  */
 export type FilePreviewState = 'READY' | 'PENDING';
@@ -148,7 +149,7 @@ export interface FilePreviewResult {
   state: FilePreviewState;
   /** PDF 总页数；`PENDING` 时后端返 0，消费侧只在 `READY` 时读它。 */
   page_count: number;
-  /** 逐页图片直链；仅 `READY` 时非空。 */
+  /** 逐页图片直链；仅 `READY` 时非空。公开读、无签名、不过期，可带部署级固定查询参数。 */
   pages: string[];
   /** 建议重试间隔（毫秒）；后端 `READY` 时返 0（不是 null）。 */
   retry_after_ms: number | null;

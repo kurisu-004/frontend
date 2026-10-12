@@ -182,6 +182,11 @@ export async function deletePartFile(fileId: string, version: number): Promise<v
  * 浏览器不再下载整份 PDF 交给 pdf.js 解析（大图纸的解析与首帧渲染是秒级的），
  * 直接把 CDN 图片挂进 `<img>` 即可。
  *
+ * 可选 query `size=view|thumb|full`（缺省 `view`，2026-10-12 新增）：后端按档位给
+ * `pages[]` 的直链追加**部署级固定 EdgeOne 参数**（`view` = `eo-img.resize=l/2560`、
+ * `thumb` = `eo-img.resize=w/480`、`full` 无参数），直链仍无签名、不过期。**前端当前
+ * 不传该参数**（吃默认 `view` 档）；非法值后端返信封 `40001`。
+ *
  * 两态返回（`state`）：`READY`（`pages` 齐）/ `PENDING`（还在转，看 `retry_after_ms`）。
  * **转码失败不在 `state` 里** —— 后端一律返 5xx + 信封业务码（21117 终态失败 /
  * 21118 转发失败），故失败分支按 `ApiError.code` 分流（`isPreviewUnsupportedError` /
