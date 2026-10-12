@@ -39,6 +39,11 @@ export type DashboardEventType =
   | 'PART_SCAN_INSPECT_FAILED'
   | 'PART_BATCH_WITH_PDFS_CREATED'
   | 'PART_PICKED_UP'
+  // 2026-10-15：扫码接管端点 `POST /prod/scan/take-over` 的唯一 WS 产出。payload 四键
+  // （part_id / batch_id / from_worker_id / to_worker_id）全部是 JSON 字符串；语义是
+  // 「这一批换人了」。**没有** quantity / process_id 等键 —— 要更多事实的消费方从刷新
+  // 后的列表读，不要指望事件带全量快照。
+  | 'PART_TRANSFERRED'
   | 'WORKER_SCAN_RETURNED'
   | 'WORKER_SCAN_INSPECTED'
   | 'WORKER_POOL_REFILL_DONE'

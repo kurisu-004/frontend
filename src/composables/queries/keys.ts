@@ -589,6 +589,17 @@ export const qk = {
   /** 持有件列表域前缀 —— pick-up（新增持有）与 worker-scan（移除持有 / 补料新增持有）
    *  两条写路径完成后都要失效它。 */
   scanHeldPrefix: ['production-scan', 'held'] as const,
+  /** 扫码找件诊断键（`GET /api/v2/prod/scan/locate`，弹窗式只读诊断，2026-10-15 新增）。
+   *  **参数键**：端点按序列号 + （可选）工人分片返回，换扫的件 / 换工人必须换缓存身份，
+   *  否则工人连扫两件不同条码时第二次命中第一次的诊断结果。
+   *  ⚠️ **参数形状含 `serial_no` 与 `worker_id` 两段，别把整个 params 对象漏掉** ——
+   *  漏掉后所有序列号共用一条键，「上一件在哪」会被当成「这一件在哪」渲染出来。
+   *  ⚠️ **不挂 `partsPrefix` 下，也不另立前缀**：本键是只读诊断、零写点
+   *  （take-over / outsource-receive 的写点在报工台域内失效链上，见 `useScanWrite.ts`
+   *  的 `invalidateScanLists`），而挂到任何会被一把全刷的前缀下都只会让这个弹窗在
+   *  无关写操作后多余地重拉一次。 */
+  scanLocate: (params: { serialNo: string; workerId?: string | null } | null) =>
+    ['production-scan', 'locate', params] as const,
   // ============================================================
   // 2026-10-10 新增：零件详情页（`/parts/:id`）域 queryKey 工厂。
   //

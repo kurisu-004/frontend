@@ -84,7 +84,7 @@ vi.mock('@/api/dashboard', () => ({
 import { useDashboardInvalidation, AFFECTS_DASHBOARD_SIZE } from '../useDashboardInvalidation';
 import { qk } from '@/composables/queries/keys';
 
-// 25 个 AFFECTS_DASHBOARD 事件类型白名单（与 useDashboardInvalidation.ts 同源）
+// 26 个 AFFECTS_DASHBOARD 事件类型白名单（与 useDashboardInvalidation.ts 同源）
 const AFFECTS_DASHBOARD_EVENTS: string[] = [
   'PART_TO_SHIP',
   'PART_TO_INSPECTION',
@@ -99,6 +99,7 @@ const AFFECTS_DASHBOARD_EVENTS: string[] = [
   'PART_SCAN_INSPECT_FAILED',
   'PART_BATCH_WITH_PDFS_CREATED',
   'PART_PICKED_UP',
+  'PART_TRANSFERRED',
   'WORKER_SCAN_RETURNED',
   'WORKER_SCAN_INSPECTED',
   'WORKER_POOL_REFILL_DONE',
@@ -155,9 +156,9 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
     vi.useRealTimers();
   });
 
-  it('I1：AFFECTS_DASHBOARD 集合大小为 25（与 useDashboardInvalidation 同源）', () => {
-    expect(AFFECTS_DASHBOARD_SIZE).toBe(25);
-    expect(AFFECTS_DASHBOARD_EVENTS).toHaveLength(25);
+  it('I1：AFFECTS_DASHBOARD 集合大小为 26（与 useDashboardInvalidation 同源）', () => {
+    expect(AFFECTS_DASHBOARD_SIZE).toBe(26);
+    expect(AFFECTS_DASHBOARD_EVENTS).toHaveLength(26);
   });
 
   it('I2：AFFECTS_DASHBOARD 内事件触发 invalidate', async () => {

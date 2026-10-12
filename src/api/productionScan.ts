@@ -14,14 +14,26 @@
 // ⚠️ **两条 list 的过滤键必须发 JSON 字符串**（后端 `deserialize_i64` 只吃 string，
 // 发数字或漏传 → axum `QueryRejection` → **HTTP 400 纯文本**，不进 `R<T>` 信封）。
 // `workTypeId` / `workerId` 的类型就是 `string`，调用方不要 `Number()`。
+//
+// 2026-10-15 新增「扫码找件 · 自助恢复三件套」：`fetchScanLocate`（只读诊断，
+// `GET /prod/scan/locate`）+ `takeOverBatch` / `receiveFromOutsource`（两个写端点）。
+// 它们是报工台三页「扫到 0 匹配」时的兜底出口 —— 旧兜底走 `GET /parts/by-serial/{sn}`，
+// 而那条端点的后端闸门不含 `SHELF_ACCOUNT`，工人一体机账号恒 403；报工台自有的 8 个端点
+// 全部放行它。逐字段契约见 `./productionScan.contract.ts` 末尾的同名小节。
 
 import { ApiError, api, cleanParams } from '@/api/http';
 import type {
   ScanHeldParams,
   ScanListResultDto,
+  ScanLocateParams,
+  ScanLocateResultDto,
+  ScanOutsourceReceiveRequest,
+  ScanOutsourceReceiveResultDto,
   ScanPickableParams,
   ScanPickUpRequest,
   ScanPickUpResultDto,
+  ScanTakeOverRequest,
+  ScanTakeOverResultDto,
   ScanWorkerBriefDto,
   ScanWorkerRequest,
   ScanWorkerResultDto,
@@ -142,5 +154,79 @@ export async function pickUpBatch(
     `/prod/scan/batches/${encodeURIComponent(batchId)}/pick-up`,
     payload,
   );
+  return resp.data;
+}
+
+/**
+ * GET /api/v2/prod/scan/locate —— 扫码找件 · 只读诊断（2026-10-15 新增）。
+ *
+ * 返回该工单的**全部**批次（含终态）与逐行针对 `workerId` 的可行动作 `action` /
+ * 不可行原因 `disabled_reason`。
+ *
+ * ⚠️ `serial_no` **必带**（缺省 → axum `QueryRejection` → HTTP 400 纯文本）。
+ * ⚠️ `worker_id` **可空但本项目三页必发**：不传则 `action` / `disabled_reason` 恒 `null`
+ *   （纯位置事实、一颗按钮都拿不到）。它是**字符串**（后端只吃 `str`，发 number → 400）。
+ *   为空时经 `cleanParams` 剔掉整个键、绝不发出 `worker_id=` 空串。
+ *
+ * 业务错：`20101`（工单未命中，HTTP 404，**不回退 `t_assembly`** —— 扫的是装配件序列号
+ *  时应提示扫子件）/ `20201`（工人不存在）/ `20202`（工人已停用）。三者都走
+ * `ApiError.code` 分流，**不**在本函数内吞掉。
+ */
+export async function fetchScanLocate(params: ScanLocateParams): Promise<ScanLocateResultDto> {
+  const resp = await api.get<ScanLocateResultDto>('/prod/scan/locate', {
+    params: cleanParams({
+      serial_no: params.serialNo,
+      worker_id: params.workerId ?? undefined,
+    }),
+  });
+  return resp.data;
+}
+
+/**
+ * POST /api/v2/prod/scan/take-over —— 扫码接管（2026-10-15 新增）。
+ *
+ * `batch_id` 走 body 且**必须发字符串**、`version` **必填且发裸 number**（缺失 → 422
+ * 纯文本）；`next_process_id` 仅「链位置推导不出下一道」时必填。
+ * 整批接管，不做部分数量（无 `quantity` 键）。
+ */
+export async function takeOverBatch(
+  batchId: string,
+  payload: ScanTakeOverRequest,
+): Promise<ScanTakeOverResultDto> {
+  // ⚠️ `batch_id` 走 **body** 而不是 path 段（后端 TakeOverRequest.batch_id 是 body
+  // 字段）；形参 `batchId` 是它的权威来源并覆盖 payload 同名字段，避免两个真相源。
+  // ⚠️ `next_process_id` / `note` **键缺省就不发**（不是发 null）：这两个是后端
+  // `Option<String>` + `#[serde(default)]`，发 null 与不发等价，但「不发」让
+  // 「链能自推、所以本次没带工序」这件事在请求体上直接可读。
+  const body: ScanTakeOverRequest = {
+    version: payload.version,
+    badge_code: payload.badge_code,
+    batch_id: batchId,
+    ...(payload.next_process_id != null ? { next_process_id: payload.next_process_id } : {}),
+    ...(payload.note != null ? { note: payload.note } : {}),
+  };
+  const resp = await api.post<ScanTakeOverResultDto>('/prod/scan/take-over', body);
+  return resp.data;
+}
+
+/**
+ * POST /api/v2/prod/scan/outsource-receive —— 外协确认收回（2026-10-15 新增）。
+ *
+ * 形态与 take-over 逐字同款（`batch_id` 字符串、`version` 裸 number 必填）；
+ * 语义上 `next_process_id` 是**显式覆盖**：`chain_state === 'NEXT'` 时也必须把 locate 行
+ * 的 `next_process_id` 原样回传（写侧缺省推导口径与读侧在稀疏链上不等价）。
+ */
+export async function receiveFromOutsource(
+  batchId: string,
+  payload: ScanOutsourceReceiveRequest,
+): Promise<ScanOutsourceReceiveResultDto> {
+  // 与 take-over 逐字同款：batch_id 走 body、形参是权威来源；next_process_id 键缺省不发。
+  const body: ScanOutsourceReceiveRequest = {
+    version: payload.version,
+    badge_code: payload.badge_code,
+    batch_id: batchId,
+    ...(payload.next_process_id != null ? { next_process_id: payload.next_process_id } : {}),
+  };
+  const resp = await api.post<ScanOutsourceReceiveResultDto>('/prod/scan/outsource-receive', body);
   return resp.data;
 }

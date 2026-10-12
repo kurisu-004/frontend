@@ -51,6 +51,10 @@ const AFFECTS_DASHBOARD: ReadonlySet<DashboardEventType> = new Set<DashboardEven
   'PART_BATCH_WITH_PDFS_CREATED',
   // B 方案手动 pick-up
   'PART_PICKED_UP',
+  // 2026-10-15：扫码接管（`POST /prod/scan/take-over`）—— 批次从一个工人转到另一个，
+  // 大屏「工人持有」格子据此重取。（外协收回端点发的是既有的 `PART_PICKED_UP`，本轮
+  // 无需新增事件名。）
+  'PART_TRANSFERRED',
   // worker-scan 双向流
   'WORKER_SCAN_RETURNED',
   'WORKER_SCAN_INSPECTED',
