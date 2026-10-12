@@ -360,7 +360,10 @@ export interface LocateProcessBriefDto {
   process_id: string;
   code: string;
   name: string;
-  /** `INHOUSE` 自产 / `OUTSOURCE` 外协（前端只读，取值域由 `ProcessCategory` 锁死）。 */
+  /** `INHOUSE` 自产 / `OUTSOURCE` 外协。⚠️ **本联合类型是给读代码的人看的意图声明，不是
+   *  运行时闸门** —— 守门侧（`views/production/scan/composables/scanSchema.ts` 的
+   *  `locateProcessBriefSchema`）刻意用 `z.string()` 而不锁枚举，理由见那里的注释（2026-10-16
+   *  review 第 1 轮）。别拿本行去把 Zod 改回 `z.enum`。 */
   category: 'INHOUSE' | 'OUTSOURCE';
 }
 

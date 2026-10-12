@@ -175,8 +175,8 @@ describe('ProcessPickerDialog / 作用说明行的渲染范围', () => {
 });
 
 // 2026-10-16 新增：`allowedProcessIds` 收窄。扫码接管 / 外协收回两条自助恢复路径的目标
-// 工序必须落在工人工种映射内（写端点会拒），所以候选由后端按工种算好后传进来；放回页与
-// 送检页不传这个 prop，观感必须逐字不变。
+// 工序必须落在工人工种映射内（写端点会拒），所以候选由后端按工种算好后传进来；放回页
+// （`ScanReturnParts.vue`，`kind="return"`）不传这个 prop，观感必须逐字不变。
 describe('ProcessPickerDialog / allowedProcessIds 收窄候选', () => {
   /** 已渲染的工序代码（按工序分类 tab 顺序，与渲染顺序一致）。 */
   async function renderedCodes(props: Parameters<typeof render>[0] = {}): Promise<string[]> {
@@ -197,7 +197,7 @@ describe('ProcessPickerDialog / allowedProcessIds 收窄候选', () => {
     expect(PROCESSES.map((p) => p.code)).toContain('WELD');
   });
 
-  it('不传：渲染全部工序（放回页 / 送检页两个既有调用方的观感零变化）', async () => {
+  it('不传：渲染全部工序（放回页 `ScanReturnParts.vue` 的观感零变化）', async () => {
     for (const kind of ['return', 'inspection'] as const) {
       expect(await renderedCodes({ kind }), `${kind} 不得被收窄`).toEqual(['CUT', 'WELD', 'SUB']);
     }
@@ -228,5 +228,37 @@ describe('ProcessPickerDialog / allowedProcessIds 收窄候选', () => {
     const empty = w.findAll('.tab-empty');
     expect(empty).toHaveLength(1);
     expect(empty[0]!.text()).toBe('「外协」暂无工序');
+  });
+
+  // 2026-10-16 review 第 1 轮：空态文案（「你的工种暂无可选工序」还是「暂无工序」）与卡片
+  // 列表必须来自**同一时刻的同一份快照**。
+  //
+  // 改坏时的症状：`restricted` 是响应式的、卡片列表却不是（watch 依赖刻意不含
+  // `allowedProcessIds`，理由是避开数组 prop 引用抖动）⇒ 弹窗开着、父组件换一次候选集，
+  // 空态文案已经翻到另一种「空」、卡片还停在上一份筛选结果 —— 同一屏两句话互相打脸，且
+  // 两句都「有依据」（文案说的是真 prop、卡片说的是真数据）。
+  //
+  // 断言方式：弹窗打开后把 `allowedProcessIds` 从 `[]` 改成 `null`，卡片集**不会**重跑
+  // （本组件刻意不重跑 `listProcesses`），那么文案也不许翻 —— 否则就是文案在描述一份
+  // 不再生效的快照。
+  it('打开后改 allowedProcessIds：卡片不重跑，空态文案也不许翻（同一快照）', async () => {
+    h.listProcesses.mockResolvedValue({ items: PROCESSES, total: PROCESSES.length });
+    const w = render({ kind: 'takeover', allowedProcessIds: [] });
+    await flushPromises();
+
+    expect(w.findAll('.tab-empty')[0]!.text()).toContain('你的工种暂无可选工序');
+    expect(h.listProcesses).toHaveBeenCalledTimes(1);
+
+    await w.setProps({ allowedProcessIds: null });
+    await flushPromises();
+
+    // 候选集换了，但本组件的快照没换（`listProcesses` 刻意不重跑）
+    expect(h.listProcesses, 'watch 依赖刻意不含 allowedProcessIds，不该重拉').toHaveBeenCalledTimes(
+      1,
+    );
+    expect(w.findAll('.stub-card'), '卡片集与空态文案必须是同一份快照').toHaveLength(0);
+    for (const el of w.findAll('.tab-empty')) {
+      expect(el.text()).toContain('你的工种暂无可选工序');
+    }
   });
 });

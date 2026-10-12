@@ -27,6 +27,10 @@
 //      读侧给不出的那部分只能靠「吃 40001 ⇒ 降级弹手填框」兜底，否则弹窗是个死循环；
 //   6. **动作成功后页面列表自己会刷新**（L13）：弹窗不发「请刷新页面」信号，三页的列表
 //      靠写路径的前缀失效自动重取 —— 这条钉住「三页不接刷新回调也能刷新」。
+//   7. **行内预提示随候选条数变**（2026-10-16 review 第 1 轮补）：单候选时不弹框、直接
+//      提交，此时说「需…指定下一道」是假话，而单候选恰是主用例。
+//   8. **工种一道工序都没有时的两条降级出口**（同上轮补）：`startManualFlow` 的那条与
+//      `submitTakeOver` catch 里那条，都要出「找管理员配工序」的提示而不是静默。
 //
 // 桩法：`@/api/productionScan` 整模块桩掉（弹窗的取数与三条写路径都走它）；
 // `element-plus` 桩成 `{ ElMessage }`；`@/api/parts` 桩掉以便把「零调用」钉成断言
@@ -308,6 +312,10 @@ beforeEach(() => {
   m.getPartBySerial.mockReset();
   m.ElMessage.success.mockReset();
   m.ElMessage.error.mockReset();
+  // 2026-10-16 review 第 1 轮补：warning 此前只在用例体内单独 mockClear，靠的是「上一条
+  // 用例恰好没弹过 warning」这种巧合。用例顺序一换（新增了「0 候选出 warning」那两条），
+  // 跨用例串味就变红了。三个 ElMessage 入口一律在这里统一 reset。
+  m.ElMessage.warning.mockReset();
 });
 
 describe('LocateDialog / 取数走 locate 而不是 parts/by-serial', () => {
@@ -832,7 +840,6 @@ describe('LocateDialog / 手填工序的候选来自工种工序', () => {
   });
 
   it('候选为空：不弹框也不提交，给出「工种未映射工序」的兜底提示', async () => {
-    m.ElMessage.warning.mockClear();
     m.fetchScanLocate.mockResolvedValue(locateResult([batch(NO_MANUAL_ROW)], []));
     const w = await mountDialog();
 
@@ -844,6 +851,124 @@ describe('LocateDialog / 手填工序的候选来自工种工序', () => {
     const msg = String(m.ElMessage.warning.mock.calls[0]?.[0] ?? '');
     expect(msg).toContain('该工种未映射任何工序');
     expect(msg).toContain('管理员');
+    w.unmount();
+  });
+});
+
+// 「0 候选」这条降级路径有**两个出口**，都必须说人话 —— 静默 return 会让工人看着按钮毫无
+// 反应。第二个出口（`submitTakeOver` 的 catch 分支）此前零覆盖：那条分支的守卫是
+// `e.code === 40001 && nextProcessId == null`，写错成 `< 40001` 或 `== null` 都不会让任何
+// 既有用例变红。
+describe('LocateDialog / 工种一道工序都没有时的两条降级出口', () => {
+  /** 0 候选 + 读侧判不出写侧要求的那类行（chain NEXT 却是指针漂移）。 */
+  it('出口一：接管首次吃 40001 且 0 候选 → 不弹框，出「工种未映射工序」的 warning', async () => {
+    m.fetchScanLocate.mockResolvedValue(locateResult([batch()], []));
+    // ⚠️ 默认那一条候选（190000000000881）此时**不传**，所以这次提交不带 next_process_id
+    // ——正是「本次本来就没填工序」的前提（catch 的 `nextProcessId == null` 守卫）。
+    m.takeOverBatch.mockRejectedValue(new ApiError(40001, '必须在 next_process_id 里显式指定'));
+    const w = await mountDialog();
+
+    await rowButton(w, 0, '接管')!.trigger('click');
+    await flushPromises();
+
+    // 吃 40001 的事实（确认走的是降级分支，不是别的路）
+    expect(m.takeOverBatch).toHaveBeenCalledTimes(1);
+    const [, body] = m.takeOverBatch.mock.calls[0] as [string, Record<string, unknown>];
+    expect('next_process_id' in body).toBe(false);
+
+    // ⭐ 0 候选时**不弹框**：弹出来是个只能取消的死胡同
+    expect(
+      w.findAll('.mock-picker-dialog'),
+      '0 候选不得弹框（框内一道可选工序都没有）',
+    ).toHaveLength(0);
+    const msg = String(m.ElMessage.warning.mock.calls[0]?.[0] ?? '');
+    expect(msg).toContain('该工种未映射任何工序');
+    expect(msg).toContain('管理员');
+    // 失败仍然要说一遍（诊断刷新归失效链，这里只管文案）
+    expect(m.ElMessage.error).toHaveBeenCalledTimes(1);
+    w.unmount();
+  });
+
+  // 外协收回那条出口此前零覆盖：`NO_WORK_TYPE_PROCESS_TEXT.outsource` 那句文案在源码里
+  // 存在却从未被任何用例触发过，而它是按 `kind` 取的 —— 守卫一旦恒传 'takeover'，
+  // 工人在外协那行会读到「无法接管」。
+  it('出口二：外协收回链推不出下一道且 0 候选 → 出「无法收回」那句', async () => {
+    m.fetchScanLocate.mockResolvedValue(
+      locateResult(
+        [
+          batch({
+            action: 'RECEIVE_FROM_OUTSOURCE',
+            chain_state: 'TAIL',
+            next_process_id: null,
+            location: 'OUTSOURCE_COMPANY',
+          }),
+        ],
+        [],
+      ),
+    );
+    const w = await mountDialog();
+
+    await rowButton(w, 0, '确认收回')!.trigger('click');
+    await flushPromises();
+
+    expect(w.findAll('.mock-picker-dialog')).toHaveLength(0);
+    expect(m.receiveFromOutsource, '没有可提交的工序就不该发写请求').not.toHaveBeenCalled();
+    const msg = String(m.ElMessage.warning.mock.calls[0]?.[0] ?? '');
+    expect(msg).toContain('该工种未映射任何工序');
+    // ⭐ 动作对不上就是让工人在外协这行读到「无法接管」
+    expect(msg, '外协收回的兜底文案必须说「收回」').toContain('无法收回');
+    expect(msg).not.toContain('无法接管');
+    w.unmount();
+  });
+});
+
+// 2026-10-16 review 第 1 轮补：行内预提示必须跟着**候选条数**变。单候选时组件直接提交那
+// 一条、根本不弹框，此时说「需…指定下一道」就是假话 —— 而单候选恰恰是主用例。
+describe('LocateDialog / 行内预提示随候选条数变', () => {
+  it('候选恰好 1 条：提示说「直接接管到…唯一的工序」，不说「需指定」', async () => {
+    m.fetchScanLocate.mockResolvedValue(
+      locateResult([batch({ action: 'TAKE_OVER', chain_state: 'NONE', next_process_id: null })]),
+    );
+    const w = await mountDialog();
+
+    const hint = rowsText(w);
+    expect(hint, '单候选不弹框，提示不得再叫工人去指定').not.toContain('需在你的工种工序中指定');
+    expect(hint).toContain('直接接管');
+    expect(hint).toContain('唯一的工序');
+    // 那一条候选的工序名要出现（工人据此知道会落到哪道工序）
+    expect(hint).toContain('车削');
+    w.unmount();
+  });
+
+  it('候选多条：保留「需在你的工种工序中指定下一道」的原措辞', async () => {
+    m.fetchScanLocate.mockResolvedValue(
+      locateResult(
+        [batch({ action: 'TAKE_OVER', chain_state: 'NONE', next_process_id: null })],
+        twoProcesses(),
+      ),
+    );
+    const w = await mountDialog();
+
+    expect(rowsText(w)).toContain('无工序链，需在你的工种工序中指定下一道');
+    w.unmount();
+  });
+
+  it('外协收回的单候选提示说「收回」而不是「接管」', async () => {
+    m.fetchScanLocate.mockResolvedValue(
+      locateResult([
+        batch({
+          action: 'RECEIVE_FROM_OUTSOURCE',
+          chain_state: 'TAIL',
+          next_process_id: null,
+          location: 'OUTSOURCE_COMPANY',
+        }),
+      ]),
+    );
+    const w = await mountDialog();
+
+    const hint = rowsText(w);
+    expect(hint).toContain('直接收回');
+    expect(hint, '动作对不上就是让工人以为这一步是接管').not.toContain('接管');
     w.unmount();
   });
 });

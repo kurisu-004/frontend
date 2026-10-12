@@ -35,7 +35,7 @@
 //   - T6：useWorkTypeProcessesQuery('') **零请求**（未选中工种不发）。
 //   - T7：useWorkTypeProcessesQuery(id) 正常发且 URL 入参正确。
 //   - T8（Zod 守门）：listWorkTypes 响应缺 process_ids → parse 抛错 → data 为
-//         undefined、isError 为 true（M-1 strip 陷阱 guard：本域 10 个字段全显式
+//         undefined、isError 为 true（M-1 strip 陷阱 guard：本域 11 个字段全显式
 //         声明，漏一个就静默丢；这条用例是「漏声明必须变红」的证据）。
 //   - T9（Zod 守门）：映射响应缺 sort_order → parse 抛错 → data undefined。
 //   - T10：total / limit / offset 是**裸 i64** ⇒ 必须是 JSON number（与

@@ -111,13 +111,13 @@
  *
  * 数据源：一次性 GET /processes?limit=200 拉所有 INHOUSE+OUTSOURCE 工序，可展示范围由
  * `allowedProcessIds` 决定 —— 传了只渲染该集合（扫码接管 / 外协收回两条自助恢复路径按
- * 工人工种收窄），不传则渲染全量（放回页与送检页的既有形态）。
+ * 工人工种收窄），不传则渲染全量（放回页 `ScanReturnParts.vue`，`kind="return"`，观感逐字
+ * 不变）。
  *
  * 收窄的产品理由：接管与收回的目标工序必须落在**当前工人的工种映射内**（写端点会拿这条
  * 闸门拒不在集合内的工序），而这两条路径上工序已经能由工种唯一确定 —— 让工人从全量工序
- * 里挑一个再被写端点拒，是把一条本该由后端判好的事做成了工人的负担。放回页 / 送检页不在
- * 收窄范围内：那里的下一道工序是「活做完了下一站是谁」，工序链上有什么就选什么，与工种
- * 授权无关。
+ * 里挑一个再被写端点拒，是把一条本该由后端判好的事做成了工人的负担。放回页不在收窄范围
+ * 内：那里的下一道工序是「活做完了下一站是谁」，工序链上有什么就选什么，与工种授权无关。
  *
  * 工件 next_process_id 推荐态通过 currentProcessId prop 传入，预填选中并切到对应 category tab。
  *
@@ -135,15 +135,19 @@ const props = withDefaults(
   defineProps<{
     modelValue: boolean;
     /**
-     * picker 用途。**只影响文案**（title / 作用说明 / 「下一步」按钮），**不改任何行为**：
+     * picker 用途。**只影响文案**（title / 作用说明 /「下一步」按钮），**不改任何行为**：
      *  - `return`     —— 放回页选下一道工序；
-     *  - `inspection` —— 送检页选送检对应工序；
+     *  - `inspection` —— 选送检对应工序。⚠️ **当前无调用方**（送检页 `ScanInspectParts.vue`
+     *    根本没 import 本组件，这条是留着给「将来送检页也要选工序」的取值位；写注释时别把它
+     *    算成既有调用方，见 review 第 1 轮的登记）；
      *  - `takeover`   —— 2026-10-15 新增：扫码接管（`POST /prod/scan/take-over`）手填下一道；
      *  - `outsource`  —— 2026-10-15 新增：外协确认收回（`POST /prod/scan/outsource-receive`）
      *    手填下一道。
      *  后两个是 `LocateDialog`（扫码找件诊断弹窗）的复用方：它们的写端点在
-     *  `chain_state !== 'NEXT'` 时都要求前端手填 `next_process_id`。这两个 kind 也只接收
-     *  `allowedProcessIds` 收窄后的候选集（另两个 kind 的调用方不传该 prop，观感不变）。
+     *  `chain_state !== 'NEXT'` 时都要求前端**给出** `next_process_id`（⚠️ 「给出」不等于
+     *  「工人手选」：工种候选恰好一条时 `LocateDialog` 直接把那一条带上，根本不弹本框）。
+     *  这两个 kind 也只接收 `allowedProcessIds` 收窄后的候选集（放回页 `ScanReturnParts.vue`
+     *  不传该 prop，观感逐字不变）。
      */
     kind?: 'return' | 'inspection' | 'takeover' | 'outsource';
     /** 工件 next_process_id：预填选中并标推荐（橙色边框） */
@@ -152,7 +156,8 @@ const props = withDefaults(
     excludeProcessIds?: string[];
     /**
      * 2026-10-16 新增：限定可展示的工序 id 集合。传了 ⇒ `load()` 只保留该集合内的工序；
-     * **不传（默认 `null`）⇒ 渲染全部工序**（放回页 / 送检页两个既有调用方保持原样）。
+     * **不传（默认 `null`）⇒ 渲染全部工序**（放回页 `ScanReturnParts.vue`，`kind="return"`，
+     * 不传这个 prop、观感逐字不变）。
      *
      * 集合来自后端按工种算好的候选（locate 出参的 `worker_processes`），前端只做过滤，
      * 不自己再判「这个工种能不能做这道工序」—— 写端点用的是同一份判据，两处各判一次
@@ -260,8 +265,19 @@ const tabs = computed<TabEntry[]>(() => [
   },
 ]);
 
-/** 是否处于「按工种收窄」形态（`allowedProcessIds` 传了数组，含空数组）。 */
-const restricted = computed<boolean>(() => props.allowedProcessIds != null);
+/** 是否处于「按工种收窄」形态（`allowedProcessIds` 传了数组，含空数组）。
+ *
+ *  ⚠️ **刻意是普通 `ref`、不是 `computed`**（2026-10-16 review 第 1 轮）：它必须与
+ *  `processes` 取自**同一时刻的同一份快照**（都由 `load()` 里那次局部取值填）。若它是响应式
+ *  的，就会出现自相矛盾态 —— 弹窗开着、后台 refetch 把候选集从 `[a,b]` 变成 `[]` 时，
+ *  `processes` **不会**重跑（watch 依赖刻意不含 `allowedProcessIds`，理由见那段注释），
+ *  于是卡片停在旧的 `[a,b]`、空态文案却已切成「你的工种暂无可选工序」：同一屏内两句话
+ *  互相打脸，而两句话都「有依据」。
+ *
+ *  另一种修法（把 `props.allowedProcessIds` 加进 watch 依赖、接受重跑 `listProcesses`）
+ *  也成立，但代价是每次父组件给新数组引用就重拉一次全量工序；本组件的候选集在一次打开
+ *  期间本就不该变（换集的那条路径会连带换掉整行数据与动作结论），取快照更贴合语义。 */
+const restricted = ref(false);
 
 /**
  * tab 空态文案：收窄形态下「这个分类下你的工种一道工序都没有」与「这个分类本来就没有
@@ -302,15 +318,19 @@ watch(
 async function load(): Promise<void> {
   loading.value = true;
   errorMessage.value = null;
+  // ⚠️ 收窄集合取成局部常量再连同 `restricted` 一起赋值：这两者必须来自**同一次取值**
+  // （`restricted` 与 `processes` 的口径是同一个判据的两面，分两次读 prop 就会在
+  // 「弹窗开着 + 父组件换集合」时对不上，见 `restricted` 的注释）。顺带省掉 filter 回调里
+  // 的非空断言 —— `allowed != null` 已在本分支判过，逐项再判一次是白费。
+  const allowed = props.allowedProcessIds;
+  restricted.value = allowed != null;
   try {
     const resp = await listProcesses({ limit: 200 });
     // 收窄在**拉全量之后本地过滤**，不在请求里下推：那条 list 端点没有按 id 过滤的入参，
     // 候选集合也只有几百条，本地过滤比多造一条端点便宜。`[]`（空数组）同样是「不展示任何
     // 工序」，与 `null`（不限定）的区别只体现在空态文案上。
     processes.value =
-      props.allowedProcessIds == null
-        ? resp.items
-        : resp.items.filter((p) => props.allowedProcessIds!.includes(p.id));
+      allowed == null ? resp.items : resp.items.filter((p) => allowed.includes(p.id));
     // 若 currentProcessId 在新列表中找不到（已被软删、或不落在收窄集合内），清空选中让用户重选
     if (selectedId.value && !processes.value.some((p) => p.id === selectedId.value)) {
       selectedId.value = null;
