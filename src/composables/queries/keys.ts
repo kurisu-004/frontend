@@ -594,12 +594,20 @@ export const qk = {
    *  否则工人连扫两件不同条码时第二次命中第一次的诊断结果。
    *  ⚠️ **参数形状含 `serial_no` 与 `worker_id` 两段，别把整个 params 对象漏掉** ——
    *  漏掉后所有序列号共用一条键，「上一件在哪」会被当成「这一件在哪」渲染出来。
-   *  ⚠️ **不挂 `partsPrefix` 下，也不另立前缀**：本键是只读诊断、零写点
-   *  （take-over / outsource-receive 的写点在报工台域内失效链上，见 `useScanWrite.ts`
-   *  的 `invalidateScanLists`），而挂到任何会被一把全刷的前缀下都只会让这个弹窗在
-   *  无关写操作后多余地重拉一次。 */
+   *  ⚠️ **不挂 `partsPrefix` 下**：挂到任何会被一把全刷的前缀下，只会让这个弹窗在
+   *  与它无关的写操作（改零件主数据、下发 / 召回…）之后多余地重拉一次。 */
   scanLocate: (params: { serialNo: string; workerId?: string | null } | null) =>
     ['production-scan', 'locate', params] as const,
+  /** 扫码找件诊断的域前缀 —— 报工台四条写路径（pick-up / worker-scan / take-over /
+   *  outsource-receive）**全部**完成后失效它。
+   *
+   *  2026-10-15：写端点接进这个弹窗之前，「诊断是只读的、零写点」成立；接进之后诊断结果
+   *  的每一个字段（`action` / `disabled_reason` / `chain_state` / `next_process_id` /
+   *  `version`）都会随写操作变，而 `staleTime` 是 30s ⇒ 不失效就是「关窗 → 重扫同一条码
+   *  → 直接渲染写之前的旧行」，工人点下去必吃 `40901`（旧 `version`）。
+   *  ⚠️ 「不被无关写操作一把全刷」与「被自己的写操作失效」是两件事，不冲突：前者决定
+   *  **挂在哪个前缀下**，后者决定**哪些 mutation 要调 `invalidateQueries`**。 */
+  scanLocatePrefix: ['production-scan', 'locate'] as const,
   // ============================================================
   // 2026-10-10 新增：零件详情页（`/parts/:id`）域 queryKey 工厂。
   //

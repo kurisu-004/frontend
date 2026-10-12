@@ -22,24 +22,32 @@
   ⚠️ `worker_id` 必传：后端 `locate` 只在传了它时才计算 `action` / `disabled_reason`，
   不传则两者恒 null、一颗按钮都渲染不出来（只剩纯位置事实）。
 
-  四类动作与「工序参数」的形态（后端 `docs/api/scan.md` §2.8 / §2.9 / §3.6 是权威）：
+  动作取值与「工序参数」的形态（后端 `docs/api/scan.md` 的「逐字段 · locate / take-over /
+  outsource-receive」与「口径表 · locate 的 action 决策表与写侧守卫对照」两节是权威）：
     - `PICK_UP`            → 复用取件端点，**先弹数量弹窗**（支持部分领取），确认后提交；
     - `MINE`               → 无按钮，行内写明「该批次已在你手上」（引导去放回 / 送检流）；
     - `TAKE_OVER`          → `POST /prod/scan/take-over`。`chain_state === 'NEXT'` 时
                              **不发** `next_process_id`（后端按链自推）；其余形态先弹
-                             `ProcessPickerDialog` 手填（缺 → `40001`，链外 → `20702`）；
+                             `ProcessPickerDialog` 手填（缺 → `40001`，链外 → `20702`）。
+                             ⚠️ 写侧的免填前置比读侧多一道「指针一致性」，而它不在 locate 出参里
+                             ⇒ 这类行吃 `40001` 时降级弹手填框兜底（见 `submitTakeOver`）；
     - `RECEIVE_FROM_OUTSOURCE` → `POST /prod/scan/outsource-receive`。`chain_state ===
                              'NEXT'` 时**必须把诊断行的 `next_process_id` 原样回传**
                              （写侧缺省推导口径是 `sort_order = 当前 + 1`，与读侧
                              `sort_order > 当前 LIMIT 1` 在稀疏链上不等价，省略会吃
                              `20706` / `40001`）；其余形态先弹手填。
     - `action === null`    → 渲染 `disabled_reason` 的指引文案（9 个字面量逐条映射），
-                             **该行不给按钮**。
+                             **该行不给按钮**；未知字面量同样不给按钮（`isWritableAction`）。
 
   关闭权：本弹窗**不是**提交闸门（关掉只丢一次诊断，工人可重扫），故保留右上角 ×；
   但它内部启用的「手填工序」弹窗**是**提交闸门（那条链上它是唯一的提交入口），按
   CLAUDE.md「弹窗关闭权」以 `:show-close="false"` 收在 footer 两键上。
-  本弹窗的成功路径**不依赖 WS**：动作成功后主动 `emit('done')` 让页面 refetch。
+  本弹窗的成功路径**不依赖 WS**：动作成功后主动 `emit('done')` 让页面 refetch 页面自己的
+  列表；弹窗自身的诊断数据由写路径的失效链负责（`qk.scanLocatePrefix`，见 `useScanWrite.ts`）。
+
+  三种「没有行可渲染」的状态**必须分开**：`20101` 未命中（条码不对 / 是装配件序列号）、
+  工单查到了但**一个未软删批次都没有**（条码对、批次全没了）、契约漂移 / 网络失败。
+  把后两者混进第一段文案会把「条码是对的」说成「条码错了」。
 -->
 <template>
   <el-dialog
@@ -63,11 +71,22 @@
       <el-button size="large" @click="retry">重新查询</el-button>
     </div>
 
-    <!-- 未命中（后端返 20101）或该工单一个未软删批次都没有 -->
-    <div v-else-if="notFound || !part || batches.length === 0" class="state-block">
+    <!-- 未命中（后端返 20101 / 响应无工单侧数据）。locate 只按 t_part.serial_no 查、
+         **不回退 t_assembly** ⇒ 扫装配件序列号也落这一态，所以要给「改扫子件」的指引。
+         ⚠️ 必须排在「没有在制批次」那一态**之前**：20101 时响应里根本没有 part，
+         `batches` 自然也是空数组，两个判据都为真、顺序反了就会把未命中说成「批次没了」。 -->
+    <div v-else-if="notFound || !part" class="state-block">
       <el-icon :size="48" color="#c0c4cc"><Box /></el-icon>
       <p>没有找到条码 {{ code }} 对应的在制零件。</p>
       <p class="sub">若这是装配件，请改扫子件的序列号。</p>
+    </div>
+
+    <!-- 工单查到了、但它名下**一个未软删批次都没有**。这是与「未命中」不同的第三种状态，
+         指引不能复用「请改扫子件」—— 条码是对的，工单在，只是全部批次已软删 / 已归档。 -->
+    <div v-else-if="batches.length === 0" class="state-block">
+      <el-icon :size="48" color="#c0c4cc"><Box /></el-icon>
+      <p>工单 {{ part?.serial_no || code }} 当前没有在制批次。</p>
+      <p class="sub">该工单的批次可能已全部交付 / 取消，可点「刷新」重新确认。</p>
     </div>
 
     <template v-else>
@@ -160,9 +179,15 @@
             <span v-else-if="(row as LocateBatchRowData).action === 'MINE'" class="mine-hint"
               >该批次已在你手上</span
             >
+            <span v-else-if="!isWritableAction(row as LocateBatchRowData)" class="disabled-hint">{{
+              locateDisabledReasonText(null)
+            }}</span>
             <template v-else>
+              <!-- HMI 触屏：同域所有提交级交互件都是 `size="large"`（footer 两键、
+                   QuantityDialog 全套、ProcessPickerDialog footer），行内这个按钮是本弹窗
+                   唯一的提交入口，小号在一体机上手指点不准。 -->
               <el-button
-                size="small"
+                size="large"
                 type="primary"
                 :loading="submitting"
                 @click="onActionClick(row as LocateBatchRowData)"
@@ -266,7 +291,7 @@ const receiveMutation = useScanOutsourceReceiveMutation();
 
 /** 打开时才发起诊断：params 为 null 时 query 走占位键 + `enabled` 闸门，不发请求。 */
 const locate = useScanLocateQuery(() =>
-  props.modelValue && props.code && props.worker?.id
+  props.modelValue && props.code && props.worker.id
     ? { serialNo: props.code, workerId: String(props.worker.id) }
     : null,
 );
@@ -276,10 +301,13 @@ const part = computed(() => data.value?.part ?? null);
 const batches = computed<LocateBatchRowData[]>(() => data.value?.batches ?? []);
 // `isPending` 而非 `isFetching`：后者在后台 refetch 期间也为 true，会让整表闪一次。
 const loading = computed(() => locate.query.isPending.value);
-// 2026-10-15：`20101`（工单未命中）走**空态**而不是失败态。
+// `20101`（工单未命中）走**空态**而不是失败态。
 // 本弹窗只在「扫到 0 匹配」时打开，所以「扫了个不存在的条码」是它最高频的输入形态 —
 // 把它渲染成一句红字「查询失败」+「重新查询」按钮是在告诉工人他操作错了，而他并没有。
-// ⚠️ `locate` 刻意不回退 `t_assembly`（后端 §8 有登记），所以装配件序列号也走这一态。
+// ⚠️ `locate` 刻意不回退 `t_assembly`（后端「已知偏差登记」有这条），所以装配件序列号
+// 也走这一态。
+// ⚠️ 这一态**不弹 toast**：`useScanLocateQuery` 的错误桥接对 `20101` 早退，红字提示由本
+// 弹窗的空态独家承担（同一件事不出现两遍）。
 const notFound = computed(
   () => locate.error.value instanceof ApiError && locate.error.value.code === 20101,
 );
@@ -337,8 +365,7 @@ function nextProcessText(row: LocateBatchRowData): string {
  *
  * 按钮所在的那个分支同时覆盖 `PICK_UP` / `TAKE_OVER` / `RECEIVE_FROM_OUTSOURCE` 三个
  * 取值（`MINE` 与 `action === null` 在更上面两个分支各自 render 掉了），二选一会让
- * `PICK_UP` 的行长出「确认收回」这种与动作无关的按钮。`unknown` 档兜住后端新增字面量
- * 时「文案是个空白按钮」这个更难被发现的失败形态。
+ * `PICK_UP` 的行长出「确认收回」这种与动作无关的按钮。
  */
 const ACTION_LABEL: Readonly<Record<string, string>> = {
   PICK_UP: '领取',
@@ -346,12 +373,33 @@ const ACTION_LABEL: Readonly<Record<string, string>> = {
   RECEIVE_FROM_OUTSOURCE: '确认收回',
 };
 
+/** 三个可写动作的判据（`MINE` 与 `null` 走另外两条分支）。
+ *
+ *  ⚠️ **按钮只对这三条渲染**：后端将来给 `LocateAction` 加第四个变体时，守门 schema
+ *  （`z.string().nullable()`，刻意不锁枚举）会把它原样透进来，而
+ *  `onActionClick` 只认这三条 ⇒ 未知的字面量落成「一个按下去静默 return 的按钮」，
+ *  现场表现是按了没动静。未知字面量改走 `disabled-hint` 分支（与「无可行动作」同款指引），
+ *  至少让工人看到一句「暂不支持」而不是一个骗人的按钮。
+ */
+function isWritableAction(row: LocateBatchRowData): boolean {
+  const a = row.action;
+  return a === 'PICK_UP' || a === 'TAKE_OVER' || a === 'RECEIVE_FROM_OUTSOURCE';
+}
+
 function actionLabel(action: string | null): string {
+  // `'处理'` 兜底在当前渲染分支里不可达（按钮由 `isWritableAction` 把关，只放三个已知
+  // 字面量进来）；留着它是为了将来有人放宽渲染条件时不至于渲染出「空文案按钮」。
   return ACTION_LABEL[action ?? ''] ?? '处理';
 }
 
-/** 该行是否必须先手填下一道工序：`chain_state !== 'NEXT'` 的形态（无链 / 链尾 /
- *  指针漂移）写侧都要求显式 `next_process_id`。 */
+/** 该行是否在**点按钮之前**先弹手填下一道工序。
+ *
+ *  读侧只有 `chain_state` 一个信号，它覆盖不了写侧闸门的全部形态 —— 写侧接管要求
+ *  `is_pointer_consistent(batch) && chain_state == "NEXT"` 才免填，而 `pointer_consistent`
+ *  **不在 locate 出参里**（16 字段 VO 无此键）⇒ 「指针漂移但 `chain_state` 读作 NEXT」
+ *  这类行在前端看起来与免填形态无异，发出去必吃 `40001`。
+ *  故这里只做**读侧能判的那部分**（无链 / 链尾 / 链外），读侧判不出的那部分由
+ *  `submitTakeOver` 的 catch 降级弹手填框兜底（那里是唯一拿到失败码的地方）。 */
 function needManualProcess(row: LocateBatchRowData): boolean {
   if (row.action !== 'TAKE_OVER' && row.action !== 'RECEIVE_FROM_OUTSOURCE') return false;
   return row.chain_state !== 'NEXT';
@@ -392,8 +440,9 @@ function closeManualDialog(): void {
  * 重查后 `action` / `disabled_reason` 由新事实重新决定（如 40901 之后多半落
  * `TERMINAL` 或换成别人的 `MINE`），指引文案也跟着变。
  *
- * ⚠️ 失效链 `invalidateScanLists` 只覆盖报工台两条 list，不含本诊断查询
- * （见 `qk.scanLocate` 的注释：只读诊断、零写点），故这里显式 refetch。
+ * 弹窗自身的诊断数据另有失效通道（写路径成功后 `qk.scanLocatePrefix` 被 invalidate，
+ * 见 `useScanWrite.ts` 的 `invalidateScanReadSide`）；这里是**失败即刻重查**，不等
+ * 下次挂载。
  */
 function reDiagnose(): void {
   void locate.fetchList();
@@ -472,6 +521,18 @@ async function submitTakeOver(
     emit('done');
   } catch (e) {
     ElMessage.error(locateWriteErrorText(e, 'TAKE_OVER'));
+    // 读侧判不出「写侧要求显式工序」的那一类形态（见 needManualProcess 的说明）：
+    // 写侧免填的前置是 `is_pointer_consistent(batch) && chain_state == "NEXT"`，而指针
+    // 一致性不在 locate 出参里 ⇒ 这类行读侧仍给 `TAKE_OVER` + `NEXT`，前端就走了「不发
+    // next_process_id」分支，必吃 `40001`。此时**降级弹手填框**而不是只报错重查：
+    // 重查的读侧结论不变（同一份数据算同一个 `chain_state`），工人点一次错一次、弹窗
+    // 变成死循环；让他补一次工序才有出口。
+    // 只在「本次本来就没填工序」时降级 —— 已经手填过还吃 `40001` 是别的问题，重查即可。
+    if (e instanceof ApiError && e.code === 40001 && nextProcessId == null) {
+      manualRow.value = { row, kind: 'takeover' };
+      showManualDialog.value = true;
+      return;
+    }
     reDiagnose();
   }
 }

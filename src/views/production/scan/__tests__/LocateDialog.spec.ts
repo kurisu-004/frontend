@@ -11,17 +11,20 @@
 // 现在兜底改接报工台自有的 `locate`（放行 `SHELF_ACCOUNT`）。三条页面的接线守卫在
 // 同目录 `ScanZeroMatchLocate.spec.ts`，本文件守组件自身的取数与写动作。
 //
-// 这批用例守四件「写错了也**不会报错**、只会让工人读一句无关文案或做一次注定失败的
+// 这批用例守五件「写错了也**不会报错**、只会让工人读一句无关文案或做一次注定失败的
 // 操作」的事：
 //   1. **走的是 locate 而不是 by-serial**（L1）；
 //   2. **工序参数的形态随 `chain_state` 变**（L2 / L3）：接管在 `NEXT` 时**不发**
 //      `next_process_id`（后端自推）；外协收回在 `NEXT` 时**必须原样回传** diagnose 行
 //      的那个 id —— 写侧缺省推导是 `sort_order = 当前 + 1`，与读侧
 //      `sort_order > 当前 LIMIT 1` 在稀疏链上不等价，省略就吃 `20706` / `40001`；
-//   3. **`action === null` 的行不给按钮**（L4）：给了就是「点了必失败」；
+//   3. **`action === null` 与未知字面量的行都不给按钮**（L4 / L10）：给了就是
+//      「点了必失败」或「点了没动静」；
 //   4. **守门 schema 真在 queryFn 上**（L5）：把 `locateResultSchema.parse` 整段删掉时，
 //      少键 / 雪花 id 发成 number 的响应会一路流到视图层，页面变成一张空表 ——
-//      所以这里断言的是「固定文案出现」，不是「页面没崩」。
+//      所以这里断言的是「固定文案出现」，不是「页面没崩」；
+//   5. **失败必须给得出下一步**（L11 / L11b）：写侧要求的工序条件比读侧多一道判据，
+//      读侧给不出的那部分只能靠「吃 40001 ⇒ 降级弹手填框」兜底，否则弹窗是个死循环。
 //
 // 桩法：`@/api/productionScan` 整模块桩掉（弹窗的取数与三条写路径都走它）；
 // `element-plus` 桩成 `{ ElMessage }`；`@/api/parts` 桩掉以便把「零调用」钉成断言
@@ -364,6 +367,8 @@ describe('LocateDialog / 取件动作（部分数量）', () => {
     const buttons = w.findAll('.mock-row').at(0)!.findAll('button');
     const labels = buttons.map((b) => b.text().replace(/\s+/g, ''));
     expect(labels).toEqual(['领取']);
+    // HMI 一体机：同域提交级交互件一律 `size="large"`，行内这个按钮是本弹窗唯一的提交入口。
+    expect(buttons[0]!.attributes('size'), '触屏规格：动作按钮不得用 small').toBe('large');
     w.unmount();
   });
 
@@ -451,6 +456,122 @@ describe('LocateDialog / 不可行动作与守门', () => {
     expect(w.text()).toContain('没有找到条码');
     expect(w.text()).toContain('装配件');
     expect(w.text()).not.toContain(SCAN_LIST_CONTRACT_DRIFT_TEXT);
+    // ⭐ 同一件事只说一遍：query hook 的错误桥接必须对 `20101` 早退，否则弹窗渲染灰态的
+    // 同时屏幕上方还弹一条红色 ElMessage.error（把「扫了个不存在的条码」说成一次失败）。
+    expect(m.ElMessage.error, '20101 归空态承担，不得再弹红色错误 toast').not.toHaveBeenCalled();
+    w.unmount();
+  });
+
+  // 非 20101 的失败仍要弹 toast（否则 query hook 的错误桥接就成了死代码，契约漂移 /
+  // 网络失败会静默 —— 弹窗里虽然有 errorText，但工人看不到弹窗外的那条提示）。
+  it('L9b：非 20101 的失败仍然弹一次错误 toast', async () => {
+    m.fetchScanLocate.mockRejectedValue(new ApiError(20201, '工人不存在'));
+    const w = await mountDialog();
+
+    expect(m.ElMessage.error).toHaveBeenCalledTimes(1);
+    w.unmount();
+  });
+
+  // 「工单查到了但一个未软删批次都没有」是**第三种**状态：条码是对的，指引不能是
+  // 「请改扫子件」（那是未命中才需要的指路）。
+  it('L9c：工单存在但批次为空 → 单独的空态文案，不复用「改扫子件」的指引', async () => {
+    m.fetchScanLocate.mockResolvedValue(locateResult([]));
+    const w = await mountDialog();
+
+    expect(w.text()).toContain('当前没有在制批次');
+    expect(w.text(), '条码是对的，不能把人指去扫子件').not.toContain('改扫子件');
+    expect(w.find('.mock-table').exists()).toBe(false);
+    w.unmount();
+  });
+
+  // ⭐ 未知 action 字面量**不给按钮**：守门 schema 刻意不锁枚举（`z.string().nullable()`），
+  // 后端加第四个 `LocateAction` 变体时会原样透进来，而 `onActionClick` 只认三个可写动作
+  // ⇒ 给按钮就是给一个「按下去静默 return」的骗人按钮。
+  it('L10：未知 action 字面量 → 落指引文案、不渲染动作按钮、点不动', async () => {
+    m.fetchScanLocate.mockResolvedValue(
+      locateResult([batch({ action: 'SOME_FUTURE_ACTION', disabled_reason: null })]),
+    );
+    const w = await mountDialog();
+
+    expect(rowsText(w), '未知动作必须走 disabled-hint 分支').toContain('暂不支持自助操作');
+    expect(
+      w.findAll('.mock-row').every((r) => r.findAll('button').length === 0),
+      '未知动作不得渲染按钮',
+    ).toBe(true);
+    // 三个可写动作的按钮文案都不能被误挂到这一行
+    expect(w.find('.mock-table').text()).not.toContain('接管');
+    w.unmount();
+  });
+
+  // ⭐ 接管收 `40001` 且本次本来就没填工序 ⇒ 降级弹手填框。
+  //
+  // 写侧免填的前置是 `is_pointer_consistent(batch) && chain_state == "NEXT"`，而指针一致性
+  // **不在 locate 出参里** ⇒ 「指针漂移但读侧 chain_state 仍是 NEXT」的行在 wire 上与免填
+  // 形态不可区分，前端必然走「不发 next_process_id」分支 ⇒ 必吃 `40001`。只弹错误 + 重查
+  // 是死循环（读侧结论不变，工人点一次错一次）；必须给出手填出口。
+  it('L11：接管吃 40001 且本次没填工序 → 降级弹手填框（不是死循环）', async () => {
+    m.takeOverBatch.mockRejectedValue(new ApiError(40001, '必须在 next_process_id 里显式指定'));
+    const w = await mountDialog();
+
+    // chain NEXT ⇒ 点按钮不发 next_process_id，直接提交
+    await rowButton(w, 0, '接管')!.trigger('click');
+    await flushPromises();
+
+    const [batchId, body] = m.takeOverBatch.mock.calls[0] as [string, Record<string, unknown>];
+    expect(batchId).toBe(BATCH_ID);
+    expect('next_process_id' in body).toBe(false);
+
+    const picker = w.find('.mock-picker-dialog');
+    expect(picker.exists(), '40001 且本次没填工序 ⇒ 必须降级弹手填框').toBe(true);
+    expect(picker.attributes('data-kind')).toBe('takeover');
+    expect(m.ElMessage.error, '仍要告诉工人这次失败').toHaveBeenCalledTimes(1);
+
+    // 补一次工序后应能提交成功（出口真的通）
+    m.takeOverBatch.mockResolvedValue({ batch_id: BATCH_ID, version: 7 });
+    await w.find('.mock-picker-dialog .picker-ok').trigger('click');
+    await flushPromises();
+    const [, body2] = m.takeOverBatch.mock.calls[1] as [string, Record<string, unknown>];
+    expect(body2.next_process_id).toBe('190000000000888');
+    w.unmount();
+  });
+
+  // 反向对照：本次**已经**手填了工序还吃 `40001`，不降级弹框（那是别的问题，走重查）。
+  it('L11b：已手填工序还吃 40001 → 不重复弹手填框，走重新诊断', async () => {
+    m.fetchScanLocate.mockResolvedValue(
+      locateResult([batch({ action: 'TAKE_OVER', chain_state: 'NONE', next_process_id: null })]),
+    );
+    m.takeOverBatch.mockRejectedValue(new ApiError(40001, 'next_process_id 非法'));
+    const w = await mountDialog();
+
+    await rowButton(w, 0, '接管')!.trigger('click');
+    await flushPromises();
+    expect(w.find('.mock-picker-dialog').exists()).toBe(true);
+
+    await w.find('.mock-picker-dialog .picker-ok').trigger('click');
+    await flushPromises();
+
+    expect(w.find('.mock-picker-dialog').exists(), '已手填还失败时不该再弹一次同一个框').toBe(
+      false,
+    );
+    // 重新诊断 = 重打一次 locate
+    expect(m.fetchScanLocate.mock.calls.length).toBeGreaterThan(1);
+    w.unmount();
+  });
+
+  // `20104` 在 take-over 路径上有**两个真因**：「批次已在你手上，无需接管」与「接管目标
+  // 工序不在你的工种范围内」。共用表里那句「所选工序不在你的工种范围内」在前一条路径上
+  // 完全指错方向（工人根本没选过工序），故接管自己的文案必须覆盖两条。
+  it('L12：接管的 20104 文案覆盖两个真因（不预设「所选工序」）', async () => {
+    m.takeOverBatch.mockRejectedValue(new ApiError(20104, '批次已在你手上，无需接管'));
+    const w = await mountDialog();
+
+    await rowButton(w, 0, '接管')!.trigger('click');
+    await flushPromises();
+
+    const msg = String(m.ElMessage.error.mock.calls[0]?.[0] ?? '');
+    expect(msg).toContain('可能已不在别人手上');
+    expect(msg).toContain('不在你的工种范围内');
+    expect(msg, '不得预设工人选过工序').not.toContain('请改选其他工序');
     w.unmount();
   });
 });

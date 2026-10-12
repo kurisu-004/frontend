@@ -38,7 +38,10 @@
 // take-over / outsource-receive 两个写端点）。这三个端点是报工台三页「扫到 0 匹配」
 // 时的兜底出口：旧兜底走 `GET /parts/by-serial/{sn}`，而那条端点的后端闸门不含
 // `SHELF_ACCOUNT`，工人一体机账号恒 403；报工台自有的 8 个端点全部放行它。
-// ⚠️ 后端 `docs/api/scan.md` §7.2 第 14 / 12 / 13 条是本节逐字段的权威来源。
+// ⚠️ 后端 `docs/api/scan.md` 是本节的权威来源，按小节指：逐字段见「逐字段 · locate /
+// take-over / outsource-receive」三节，action 取值与写侧守卫的对照见「口径表 · locate 的
+// action 决策表与写侧守卫对照」，前端接线清单见「表依赖 · 前端配套改动清单」里的
+// 「扫码找件诊断前端接入 / 扫码接管前端接入 / 外协确认收回前端接入」三条。
 
 import type { QueueRefillResultDto } from './productionQueue.contract';
 import type { PartOutDto } from './parts/crud';
@@ -220,8 +223,8 @@ export type ScanPickUpResultDto = PartOutDto;
 
 // ============================================================
 // 2026-10-15 新增：扫码找件 · 自助恢复三件套的 wire 契约。
-// 后端权威来源：`docs/api/scan.md` §2.7（locate）/ §2.8（take-over）/
-// §2.9（outsource-receive）/ §3.6（action 决策表）。
+// 后端权威来源：`docs/api/scan.md` 的「逐字段」一节里 locate / take-over /
+// outsource-receive 三个小节，与「口径表」一节里 locate 的 action 决策表那节。
 //
 // 四个贯穿本节的形态事实（写错就线上炸，逐条有后端护栏单测钉着）：
 //   1. **雪花 id 一律 JSON 字符串**（`serialize_i64` / `serialize_i64_opt`）：入参侧

@@ -24,12 +24,14 @@
 //     「切走 5 分钟后回来」命中陈旧诊断）；
 //   - 错误桥接：`watch(error)` + `ElMessage.error`，文案走同目录既有的
 //     `scanListErrorText`（契约漂移给工人一句固定文案、细节只进 console），不新造一套；
+//     唯一例外是 `20101`（工单未命中）—— 它是弹窗的空态职责、不弹 toast（见 watch 处）；
 //   - 不写 retry：信任 main.ts 全局 `queries.retry: 0`；
 //   - `fetchList` 别名 = `refetch` 的 async 包装，供弹窗的「刷新」按钮与测试驱动。
 
 import { computed, toValue, watch, type MaybeRefOrGetter } from 'vue';
 import { useQuery } from '@tanstack/vue-query';
 import { ElMessage } from 'element-plus';
+import { ApiError } from '@/api/http';
 import { fetchScanLocate } from '@/api/productionScan';
 import { qk } from '@/composables/queries/keys';
 import { locateResultSchema } from './scanSchema';
@@ -84,12 +86,18 @@ export function useScanLocateQuery(params: MaybeRefOrGetter<UseScanLocateParams 
   });
 
   watch(query.error, (e) => {
-    if (e) ElMessage.error(scanListErrorText(e, '查询零件位置失败'));
+    if (!e) return;
+    // `20101`（工单未命中）**不弹错误 toast**：本查询的最高频输入形态就是「扫了个不存在
+    // 的条码」——弹窗只在三页扫到 0 匹配时打开，那时它要回答的正是「这个条码在哪」。
+    // 未命中由 `LocateDialog` 的空态承担（灰态 + 「若这是装配件请扫子件」），
+    // 在此再弹一条红字 toast 等于同一件事说两遍、其中一遍还在说「你操作错了」。
+    if (e instanceof ApiError && e.code === 20101) return;
+    ElMessage.error(scanListErrorText(e, '查询零件位置失败'));
   });
 
   async function fetchList(): Promise<void> {
     await query.refetch();
   }
 
-  return { query, data: query.data, isFetching: query.isFetching, error: query.error, fetchList };
+  return { query, data: query.data, error: query.error, fetchList };
 }

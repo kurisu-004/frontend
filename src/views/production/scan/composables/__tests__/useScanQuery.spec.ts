@@ -16,8 +16,10 @@
 //      为 true。把 queryFn 里的 `.parse()` 整段删掉时 Q2 / Q3 仍绿而线上三页崩 —— 这条
 //      就是那个失败模式的守卫。
 //   W1 **失效链**：pick-up 与 worker-scan 的 `onSuccess` **与 `onError`** 都失效
-//      `qk.scanPickablePrefix` + `qk.scanHeldPrefix` 两条前缀。少失效一条会留下半截陈旧
-//      列表（取件后候选列表里还留着刚领走的卡 / 放回后徽章少算一件）。
+//      `qk.scanPickablePrefix` + `qk.scanHeldPrefix` + `qk.scanLocatePrefix` 三条前缀。
+//      少失效 list 那两条会留下半截陈旧列表（取件后候选列表里还留着刚领走的卡 /
+//      放回后徽章少算一件）；少失效 `scanLocatePrefix` 那一条，扫码找件诊断弹窗在
+//      30s 内重扫同一条码时会渲染写之前的旧行（stale `action` + stale `version`）。
 //
 // 测试手法与 `composables/queries/__tests__/useWorkTypesQuery.spec.ts` 同款，三个坑照抄：
 //   - ⚠️ **必须用 `app.runWithContext`**：vue-query 的 `useQueryClient()` 走 Vue `inject()`，
@@ -26,8 +28,8 @@
 //   - ⚠️ `mockResolvedValue`（持久）而非 `Once`：useQuery 在 setup 时会自动首调，紧接的
 //     refetch 是第二调，两次都要命中 mock。
 //
-// api 层整模块桩掉（`@/api/productionScan`）：本文件要断言的正是「query 只发一次请求」与
-// 「失效键是哪两条」，真 axios 会让这两条都变成时序赌博。api 层自身的 URL / query / body
+// api 层整模块桩掉（`/api/productionScan`）：本文件要断言的正是「query 只发一次请求」与
+// 「失效键是哪三条」，真 axios 会让这两条都变成时序赌博。api 层自身的 URL / query / body
 // 契约由 `src/api/__tests__/productionScan.contract.spec.ts` 守。
 // `element-plus` 也桩掉（node env 下真 ElMessage 会因 `document is not defined` 污染输出）。
 
@@ -40,6 +42,7 @@ const h = vi.hoisted(() => ({
   fetchScanPickable: vi.fn(),
   pickUpBatch: vi.fn(),
   scanWorker: vi.fn(),
+  takeOverBatch: vi.fn(),
 }));
 
 vi.mock('@/api/productionScan', () => ({
@@ -47,6 +50,7 @@ vi.mock('@/api/productionScan', () => ({
   fetchScanPickable: h.fetchScanPickable,
   pickUpBatch: h.pickUpBatch,
   scanWorker: h.scanWorker,
+  takeOverBatch: h.takeOverBatch,
 }));
 
 vi.mock('element-plus', () => ({
@@ -60,6 +64,7 @@ import {
 } from '@/views/production/scan/composables/useScanListQuery';
 import {
   useScanPickUpMutation,
+  useScanTakeOverMutation,
   useScanWorkerScanMutation,
 } from '@/views/production/scan/composables/useScanWrite';
 
@@ -101,6 +106,7 @@ beforeEach(() => {
   h.fetchScanHeld.mockReset().mockResolvedValue(envelope([WORKER_A]));
   h.fetchScanPickable.mockReset().mockResolvedValue(envelope([WORKER_A]));
   h.pickUpBatch.mockReset().mockResolvedValue({});
+  h.takeOverBatch.mockReset().mockResolvedValue({ batch_id: '190000000000111', version: 8 });
   h.scanWorker.mockReset().mockResolvedValue({
     scan: {
       worker_id: WORKER_A,
@@ -303,7 +309,11 @@ describe('Q 组：useScanHeldQuery / useScanPickableQuery', () => {
 });
 
 describe('W 组：写 mutation 的失效链', () => {
-  it('W1：pick-up 成功后失效 scanPickablePrefix + scanHeldPrefix 两条（少一条留半截陈旧列表）', async () => {
+  // 2026-10-15：失效链从两条前缀扩到三条 —— 扫码找件诊断（`qk.scanLocatePrefix`）也
+  // 失效。四条写路径都会改诊断结果的字段（`action` / `disabled_reason` /
+  // `chain_state` / `next_process_id` / `version`），而它 `staleTime` 30s ⇒ 少这一条就是
+  // 「关窗 → 重扫同一条码 → 渲染写之前的旧行」，工人点下去必吃 `40901`。
+  it('W1：pick-up 成功后失效 scanPickablePrefix + scanHeldPrefix + scanLocatePrefix 三条', async () => {
     const keys: unknown[][] = [];
     const spy = vi.spyOn(testQueryClient, 'invalidateQueries').mockImplementation((q?: unknown) => {
       keys.push((q as { queryKey: unknown[] }).queryKey);
@@ -322,7 +332,7 @@ describe('W 组：写 mutation 的失效链', () => {
       quantity: '4',
     });
 
-    expect(keys).toEqual([qk.scanPickablePrefix, qk.scanHeldPrefix]);
+    expect(keys).toEqual([qk.scanPickablePrefix, qk.scanHeldPrefix, qk.scanLocatePrefix]);
     // 正向对照：mutationFn 真的把 payload 组装成了 ScanPickUpRequest 的形态
     expect(h.pickUpBatch).toHaveBeenCalledWith('190000000000111', {
       version: 7,
@@ -334,7 +344,9 @@ describe('W 组：写 mutation 的失效链', () => {
     scope.stop();
   });
 
-  it('W1b：worker-scan 成功后同样失效两条前缀', async () => {
+  // worker-scan（放回 / 送检）顺链推进同样改诊断的 `chain_state` / `next_process_id`，
+  // 故它也走三条前缀。
+  it('W1b：worker-scan 成功后同样失效三条前缀', async () => {
     const keys: unknown[][] = [];
     const spy = vi.spyOn(testQueryClient, 'invalidateQueries').mockImplementation((q?: unknown) => {
       keys.push((q as { queryKey: unknown[] }).queryKey);
@@ -361,7 +373,7 @@ describe('W 组：写 mutation 的失效链', () => {
     // 响应原样交给调用方（放回页按 res.scan.event_type 分成功文案）
     expect(res.scan.event_type).toBe('WORKER_SCAN_RETURNED');
     expect(h.scanWorker.mock.calls[0]![0]).toMatchObject({ quantity: '3' });
-    expect(keys).toEqual([qk.scanPickablePrefix, qk.scanHeldPrefix]);
+    expect(keys).toEqual([qk.scanPickablePrefix, qk.scanHeldPrefix, qk.scanLocatePrefix]);
     spy.mockRestore();
     scope.stop();
   });
@@ -387,15 +399,51 @@ describe('W 组：写 mutation 的失效链', () => {
     await expect(
       pick!.mutateAsync({ batchId: '190000000000111', version: 7, workerId: WORKER_A }),
     ).rejects.toThrow('40901');
-    expect(keys).toEqual([qk.scanPickablePrefix, qk.scanHeldPrefix]);
+    expect(keys).toEqual([qk.scanPickablePrefix, qk.scanHeldPrefix, qk.scanLocatePrefix]);
 
     keys.length = 0;
     h.scanWorker.mockReset().mockRejectedValue(new Error('20103 状态不允许'));
     await expect(
       scan!.mutateAsync({ serial_no: 'SN-1', badge_code: 'W-001', event_type: 'INSPECTED' }),
     ).rejects.toThrow('20103');
-    expect(keys).toEqual([qk.scanPickablePrefix, qk.scanHeldPrefix]);
+    expect(keys).toEqual([qk.scanPickablePrefix, qk.scanHeldPrefix, qk.scanLocatePrefix]);
 
+    spy.mockRestore();
+    scope.stop();
+  });
+
+  // ⭐ 扫码接管成功后**必须**失效 `qk.scanLocatePrefix`。
+  //
+  // 守的是这一条真实故障链：接管成功 → 诊断弹窗关掉 → 工人 30s 内重扫同一工单的另一个
+  // 批次（该 part 仍有别的批次不在他的列表里 ⇒ 又是 0 匹配）→ 弹窗挂载时 queryKey 与上次
+  // 完全相同、`staleTime: 30_000` 内算「新鲜」⇒ 不发请求、直接渲染接管前的旧行（仍显示
+  // 旧持有人 + 「接管」按钮 + 旧 `version`）⇒ 点下去必吃 `40901`。
+  // 只断言 keys 里出现该前缀即可：失效的具体形态（mark stale / 立即 refetch）由
+  // TanStack 自己管，前端只负责「调了 invalidateQueries 且键是这一条」。
+  it('W3：take-over 成功后失效扫码找件诊断前缀（不失效则重扫同一条码命中写前的诊断）', async () => {
+    const keys: unknown[][] = [];
+    const spy = vi.spyOn(testQueryClient, 'invalidateQueries').mockImplementation((q?: unknown) => {
+      keys.push((q as { queryKey: unknown[] }).queryKey);
+      return Promise.resolve();
+    });
+
+    const scope = effectScope();
+    let m: ReturnType<typeof useScanTakeOverMutation> | undefined;
+    scope.run(() => {
+      m = testApp.runWithContext(() => useScanTakeOverMutation());
+    });
+    await m!.mutateAsync({
+      batchId: '190000000000111',
+      badgeCode: 'W-001',
+      version: 7,
+      nextProcessId: null,
+    });
+
+    expect(keys).toContainEqual(qk.scanLocatePrefix);
+    expect(
+      qk.scanLocatePrefix,
+      '诊断前缀必须是 pickable / held 的同级前缀，否则写路径的失效匹配不上诊断键',
+    ).toEqual(['production-scan', 'locate']);
     spy.mockRestore();
     scope.stop();
   });

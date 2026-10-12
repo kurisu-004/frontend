@@ -13,9 +13,14 @@
                                           picker 用途（只影响 title / 作用说明 / 下一步按钮文案；
                                           2026-10-15 新增 takeover（扫码接管）与 outsource
                                           （外协确认收回）两个 kind，供 LocateDialog 的
-                                          手填下一道工序弹窗复用）
+                                          手填下一道工序弹窗复用；作用说明那行也只在这两个
+                                          kind 下渲染）
     currentProcessId?: string | null    工件 next_process_id，预填为推荐
+    excludeProcessIds?: string[]        不可选的工序 id（显示为禁用卡片 + hint）
     hint?: string                       常驻横幅提示（缺省不渲染）
+    showClose?: boolean                 是否显示右上角 ×（缺省 true；传 false 把关闭权收在
+                                          footer 两键上，供「本框是某条路径唯一提交入口」
+                                          的调用方使用，见 prop 的详细注释）
   emits:
     update:modelValue(v: boolean)
     confirm(processId: string)
@@ -53,9 +58,11 @@
       <p class="error-text">{{ errorMessage }}</p>
     </div>
     <div v-else>
-      <!-- 2026-10-15 新增：按 kind 给一句「选完会发生什么」。两个新 kind（takeover /
-           outsource）的确认动作不选货架，工人需要一个能确认语义的地方。 -->
-      <p class="picker-purpose">{{ kindText.purpose }}</p>
+      <!-- 按 kind 给一句「选完会发生什么」。⚠️ **只渲染在 takeover / outsource 两个 kind
+           下**：放回页（return）与送检页（inspection）走的是既有观感，加一行说明文字
+           是对两个不在本组件职责内的页面的可见 UI 变更。两个新 kind 的确认动作不选货架，
+           工人需要一个能确认语义的地方，故它们才有这句。 -->
+      <p v-if="showPurpose" class="picker-purpose">{{ kindText.purpose }}</p>
       <el-tabs v-model="activeTab" class="process-tabs">
         <el-tab-pane v-for="cat in tabs" :key="cat.key" :label="cat.label" :name="cat.key">
           <div v-if="cat.processes.length === 0" class="tab-empty">
@@ -167,12 +174,13 @@ const processes = ref<Process[]>([]);
 const selectedId = ref<string | null>(null);
 const activeTab = ref<'INHOUSE' | 'OUTSOURCE'>('INHOUSE');
 
-/** 2026-10-15：四个 kind 的文案映射（**纯文案**，不改变组件的任何行为分支）。
+/** 四个 kind 的文案映射（**纯文案**，不改变组件的任何行为分支）。
  *
  *  取舍：原先只有 `inspection` 与「其余」两条分支，`takeover` / `outsource` 会各自落到
  *  「其余」那条、放回页的标题与「选货架」按钮文案出现在接管流程里 —— 工人读到的是一句
- *  与本次动作无关的话。逐 kind 列出来后，新增 kind 忘了补会落到 `''`（空串 ⇒ 按钮上没有
- *  文字），比「悄悄显示别人的文案」更容易被发现。 */
+ *  与本次动作无关的话。逐 kind 列出来后**新增 kind 忘了补文案表是编译期错误**
+ *  （`Record<NonNullable<typeof props.kind>, …>` 的键集合由 props 声明推出，不是靠运行时
+ *  兜底的 `''`）。 */
 const KIND_TEXT: Record<
   NonNullable<typeof props.kind>,
   { title: string; purpose: string; next: string }
@@ -200,6 +208,9 @@ const KIND_TEXT: Record<
 };
 
 const kindText = computed(() => KIND_TEXT[props.kind]);
+
+/** 「作用说明」那行是否渲染：只在两个自助恢复 kind 下渲染（见模板内注释）。 */
+const showPurpose = computed(() => props.kind === 'takeover' || props.kind === 'outsource');
 
 const titleText = computed<string>(() => kindText.value.title);
 

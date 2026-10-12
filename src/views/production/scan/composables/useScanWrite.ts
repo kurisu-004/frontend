@@ -15,6 +15,12 @@
 //   worker-scan 同事务跑的 refill 会给该工人抢进新批次（可能落回 pickable）。单失效一个
 //   会留下半截陈旧列表 —— 表现是「取件后候选列表里还有刚领走的那张卡」或「放回后徽章
 //   少算了一件」。
+//   外加 `qk.scanLocatePrefix`（扫码找件诊断）：诊断结果的每个字段（`action` /
+//   `disabled_reason` / `chain_state` / `next_process_id` / `version`）都随这四条写路径
+//   变，而它 `staleTime` 30s ⇒ 不失效就是「关窗 → 重扫同一条码 → 渲染写之前的旧行」，
+//   工人点下去必吃 `40901`（旧 `version`）。诊断弹窗的三个按钮各由一条写路径驱动
+//   （`PICK_UP` / `TAKE_OVER` / `RECEIVE_FROM_OUTSOURCE`），而 worker-scan 顺链推进同样
+//   改链位置，故四条一律失效它。
 //
 // **onError 也要走全套失效**：报工台最常见的失败恰恰是 40901（OCC 版本冲突，批次已被别人
 // 处置）与 20103（状态机非法），两者都意味着**服务端那份数据已经变了**、本端副本已过期。
@@ -51,6 +57,21 @@ export async function invalidateScanLists(qc: QueryClient): Promise<void> {
   await qc.invalidateQueries({ queryKey: qk.scanHeldPrefix });
 }
 
+/** 失效扫码找件诊断（`qk.scanLocatePrefix`）—— 写操作完成后调。 */
+export async function invalidateScanLocate(qc: QueryClient): Promise<void> {
+  await qc.invalidateQueries({ queryKey: qk.scanLocatePrefix });
+}
+
+/**
+ * 四条写路径的**读侧**失效链（`onSuccess` 与 `onError` 都走）。
+ *
+ * 顺序固定：pickable → held → locate，让测试能逐字断言调用序。
+ */
+export async function invalidateScanReadSide(qc: QueryClient): Promise<void> {
+  await invalidateScanLists(qc);
+  await invalidateScanLocate(qc);
+}
+
 /**
  * 取件（pick-up）mutation。
  *
@@ -80,9 +101,9 @@ export function useScanPickUpMutation() {
       return pickUpBatch(vars.batchId, payload);
     },
     // 包一层闭包：onSuccess/onError 的入参是 (data, variables) 而不是 QueryClient，
-    // 直接把 invalidateScanLists 挂上去会拿 data 当 qc 用。
-    onSuccess: () => invalidateScanLists(qc),
-    onError: () => invalidateScanLists(qc),
+    // 直接把失效函数挂上去会拿 data 当 qc 用。
+    onSuccess: () => invalidateScanReadSide(qc),
+    onError: () => invalidateScanReadSide(qc),
   });
 }
 
@@ -101,8 +122,8 @@ export function useScanWorkerScanMutation() {
   return useMutation({
     mutationKey: ['scan', 'worker-scan'],
     mutationFn: (payload: ScanWorkerRequest): Promise<ScanWorkerResultDto> => scanWorker(payload),
-    onSuccess: () => invalidateScanLists(qc),
-    onError: () => invalidateScanLists(qc),
+    onSuccess: () => invalidateScanReadSide(qc),
+    onError: () => invalidateScanReadSide(qc),
   });
 }
 
@@ -115,11 +136,14 @@ export function useScanWorkerScanMutation() {
  *   - `nextProcessId` 仅「链位置推导不出下一道」时必填（`chain_state === 'NEXT'` 可省略，
  *     后端自推）。
  *
- * 失效链与既有两个 mutation 同款：`onSuccess` 与 `onError` 都调 `invalidateScanLists` ——
- * 接管把行从「别的工人手上」移到自己手上，pickable / held 两个列表的行集同时变了；
+ * 失效链与既有两个 mutation 同款：`onSuccess` 与 `onError` 都调 `invalidateScanReadSide`
+ * （两条 list 前缀 + 扫码找件诊断前缀）—— 接管把行从「别的工人手上」移到自己手上，pickable /
+ * held 两个列表的行集同时变了；**诊断查询也变了**（那一行的 `action` 由 `TAKE_OVER` 变
+ * `MINE`），不失效的话工人 30s 内重扫同一工单会看到写之前的旧行与旧 `version`。
  * 而 40901 恰恰意味着别人已把这批处置了，本端副本已过期。
- * ⚠️ 诊断弹窗自身**不靠 WS 刷新**：mutation settle 后弹窗由 `LocateDialog` 主动
- * `emit('done')` 让页面 refetch（与报工台现状一致）。
+ * ⚠️ 诊断弹窗**自己**的刷新不靠 WS：mutation settle 后由 `LocateDialog` 主动
+ * `emit('done')` 让页面 refetch 自己的列表（与报工台现状一致）；弹窗自身的诊断数据由上面
+ * 那条前缀失效负责（页面 refetch 的是 list，不是诊断）。
  */
 export function useScanTakeOverMutation() {
   const qc = useQueryClient();
@@ -141,8 +165,8 @@ export function useScanTakeOverMutation() {
       };
       return takeOverBatch(vars.batchId, payload);
     },
-    onSuccess: () => invalidateScanLists(qc),
-    onError: () => invalidateScanLists(qc),
+    onSuccess: () => invalidateScanReadSide(qc),
+    onError: () => invalidateScanReadSide(qc),
   });
 }
 
@@ -174,7 +198,7 @@ export function useScanOutsourceReceiveMutation() {
       };
       return receiveFromOutsource(vars.batchId, payload);
     },
-    onSuccess: () => invalidateScanLists(qc),
-    onError: () => invalidateScanLists(qc),
+    onSuccess: () => invalidateScanReadSide(qc),
+    onError: () => invalidateScanReadSide(qc),
   });
 }
