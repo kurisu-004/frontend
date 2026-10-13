@@ -355,7 +355,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
    * 为什么不是「该根的直接子」：客户改成任意深度后，「分厂」这一层可能根本没有子节点，
    * 直接子就是叶子；也可能「分厂 → 车间 → 班组」三层，直接子（分厂）是中间层，**业务
    * 单据不能挂中间层**（零件 / 装配件只能挂叶子）⇒ 只列直接子会让下拉里能选的值全部
-   * 被后端拒（20302），而真正的末级部门一个都选不到。
+   * 被后端拒（20104），而真正的末级部门一个都选不到。
    *
    * 遍历用「parent_id → children」索引 + 显式栈，深度不可控也不递归（与
    * `api/customer.tree.ts::buildCustomerTree` 同一份脏数据口径：成环靠 `seen` 断开，
@@ -736,7 +736,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
    *
    * 2026-10-17（客户无限层级改造）：查找范围由「所选根的**直接子**」改成「所选根的
    * **整棵子树**」，且只在**叶子**里匹配 —— 业务单据只能挂叶子，命中中间层等于交一份
-   * 必然被后端拒（20302）的数据。叶子口径与 `leafCustomerOptions`（行内下拉候选）
+   * 必然被后端拒（20104）的数据。叶子口径与 `leafCustomerOptions`（行内下拉候选）
    * 逐字一致 ⇒ 「Excel 能自动回填的值一定能在下拉里选到，用户看得懂它是什么」。
    *
    * **同名多命中不猜**：子树里出现两个同名叶子（不同分支下都有「一车间」）时返回
@@ -2484,7 +2484,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     summarizeUploads();
   }
 
-  /** 前端兜底：所有 row 的 customer_id 必须已指定客户（后端强校验「必须是叶子」，20302）。
+  /** 前端兜底：所有 row 的 customer_id 必须已指定客户（后端强校验「必须是叶子」，20104）。
    *  返回 true 表示通过，false 表示阻塞；阻塞时已通过 ElMessage.warning 提示。 */
   function validateLeafCustomers(): boolean {
     const missing: string[] = [];
@@ -2557,7 +2557,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     return {
       name: a.name || a.drawing_no || `装配件-${a.uid}`,
       drawing_no: a.drawing_no,
-      // 必须是叶子客户，后端强校验（20302）；空值由 validateLeafCustomers 挡在前头。
+      // 必须是叶子客户，后端强校验（20104）；空值由 validateLeafCustomers 挡在前头。
       customer_id: a.customer_id,
       applicant_name: a.applicant_name,
       request_date: a.request_date,

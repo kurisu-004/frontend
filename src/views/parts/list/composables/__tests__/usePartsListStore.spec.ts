@@ -65,6 +65,8 @@ vi.mock('@/api/com/unionList', () => ({
         note: null,
         customer_name: null,
         l1_customer_name: null,
+        // 2026-10-17：partSchema 新增 customer_path 必填字段（后端查不到客户行时落空串）
+        customer_path: '',
         location: null,
         is_urgent: false,
         // 2026-09-29：partSchema 新增 has_cnc_program 必填字段，mock 必须带
@@ -89,6 +91,8 @@ vi.mock('@/api/com/unionList', () => ({
         note: null,
         customer_name: null,
         l1_customer_name: null,
+        // 2026-10-17：partSchema 新增 customer_path 必填字段（后端查不到客户行时落空串）
+        customer_path: '',
         location: null,
         is_urgent: false,
         // 2026-09-29：partSchema 新增 has_cnc_program 必填字段
@@ -449,6 +453,8 @@ describe('usePartsListStore', () => {
       note: null,
       customer_name: null,
       l1_customer_name: null,
+      // 2026-10-17：partSchema 必填 customer_path（后端查不到客户行时落空串，不是 null）
+      customer_path: '',
       location: null,
       holder_name: null,
       process_chain_id: null,
@@ -495,6 +501,8 @@ describe('usePartsListStore', () => {
       note: null,
       customer_name: null,
       l1_customer_name: null,
+      // 2026-10-17：partSchema 必填 customer_path
+      customer_path: '',
       location: null,
       // 2026-09-29 新增：has_cnc_program 是必填字段，mock 必须带；旧 fixtures 仍可写 false（未编程状态）
       has_cnc_program: false,

@@ -58,9 +58,10 @@ describe('enrichAssemblyItem —— 客户三字段的补全', () => {
     expect(out.parent_customer_name).toBe('手机部');
   });
 
-  it('A2：后端 VO 补上 customer_path 后优先用它（与本地算法口径统一，前端零改动自愈）', () => {
-    // ⚠️ 这是**对后端新契约的依赖点**：`AssemblyOut` 目前仍不返该字段（mapper 置 null），
-    // 本用例钉的是「一旦后端补上，前端不再覆盖它」这条接线。
+  it('A2：后端 VO 带了 customer_path 时优先用它（本地 customers 只作兜底）', () => {
+    // 2026-10-17：`AssemblyOut.customer_path` **已经**是后端必填键，mapper 在
+    // `parseAssemblyOutToItemCore` 里透传 ⇒ 这一支是**正常路径**，不是「将来」。
+    // 本用例钉的是「本地算出的串不覆盖后端值」这条优先级。
     const out = enrichAssemblyItem(assembly({ customer_path: '后端给的路径' }), [customer()]);
     expect(out.customer_path).toBe('后端给的路径');
   });
@@ -88,7 +89,9 @@ describe('enrichAssemblyItem —— 客户三字段的补全', () => {
       parent_customer_name: null,
       customer_path: null,
     });
-    expect(enrichAssemblyItem(assembly({ customer_id: 'no-such' }), [customer()]).customer_path).toBeNull();
+    expect(
+      enrichAssemblyItem(assembly({ customer_id: 'no-such' }), [customer()]).customer_path,
+    ).toBeNull();
   });
 
   it('A6：不 mutate 入参（纯函数，调用方负责把返回值赋回）', () => {
@@ -112,7 +115,12 @@ describe('formatCustomerOptionLabel —— 客户下拉 option 文案', () => {
   it('F3：根客户取自己（customer_path 恒等于 name）', () => {
     expect(
       formatCustomerOptionLabel(
-        customer({ name: '某某集团', parent_id: null, parent_name: null, customer_path: '某某集团' }),
+        customer({
+          name: '某某集团',
+          parent_id: null,
+          parent_name: null,
+          customer_path: '某某集团',
+        }),
       ),
     ).toBe('某某集团');
   });

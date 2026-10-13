@@ -36,9 +36,11 @@ export type DeliveryNoteRow = DeliveryNoteItemData;
 //      deliveryNotePrintColumnDefs::printColumnOrderListKey）。老版本那条单序列
 //      `print_preview_dialog_columnOrder` 就此作废、**不可迁移** —— 一个序列表达不了
 //      N 张表的列顺序。
-//   2. 「分厂」列的 key 是老快照里的 `customer_name`（行数据字段叫 `l2_customer`，
-//      渲染 / prop 取后者）。曾一度改成 `l2_customer`，等于让所有老用户这列的显隐设置
-//      作废，已回滚；key ≠ prop 是这里的刻意形态。
+//   2. 送货单打印预览那张表的客户列 key 是老快照里的 `customer_name`（行数据字段叫
+//      `l2_customer`，渲染 / prop 取后者）。曾一度改成 `l2_customer`，等于让所有老用户
+//      这列的显隐设置作废，已回滚；key ≠ prop 是这里的刻意形态。
+//      （2026-10-17：该列的 **label** 已从「分厂」改成「客户」—— 客户树放开任意深度后
+//      「分厂」不再是固定的那一层。label 不进任何快照，改它零风险；key 一律不动。）
 // （2026-10-08：用 `//` 块而非 JSDoc —— 这段登记是模块级约定，不宿主于任何单个导出物；
 //  写成 `/** */` 会在 IDE 里成为悬空的孤立注释。）
 // ============================================================================

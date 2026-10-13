@@ -32,21 +32,23 @@ import type { PartListItem } from '@/types/parts';
 /**
  * 2026-09-29 修复：消化 backend-rust `AssemblyDetail` 的 `#[serde(flatten)]` quirk。
  *
- * 后端 wire 形态（backend-rust src/modules/assembly/vo/assembly.rs:113-119）：
- *   { ...AssemblyOut 19 字段, children: [...], files: [...] }
- *   —— 无 `assembly` 嵌套键，AssemblyOut 19 字段被 `#[serde(flatten)]` 平铺到顶层。
+ * 后端 wire 形态（backend-rust src/modules/assembly/vo/assembly.rs 的 `AssemblyDetail`）：
+ *   { ...AssemblyOut 20 字段, children: [...], files: [...] }
+ *   —— 无 `assembly` 嵌套键，AssemblyOut 20 字段被 `#[serde(flatten)]` 平铺到顶层。
  *
  * 前端类型契约保持嵌套 `{assembly, children, files}`（最小爆炸半径），
  * 本函数在 api 边界把平铺转回嵌套 + 字段对齐：
  *   - child_count 由 mapper 注入 = flat.children.length
- *   - customer_name / parent_customer_name / customer_path 暂置 null，
- *     由 useAssemblyDetail composable 在 fetchData 后用 useCustomersQuery 派生补全
+ *   - customer_name / parent_customer_name 暂置 null（只含客户行本身与根客户名，
+ *     需要整条客户列表才能算），由 useAssemblyDetail composable 在 fetchData 后用
+ *     useCustomersQuery 派生补全；`customer_path` **后端已下发**（`AssemblyOut`
+ *     的第 20 个字段），mapper 直接透传，不再由本地算
  *   - unit_price / total_price nullable 走 null 兜底（review 第 1 轮 m1/m5）：
  *     旧实现用 '0' 伪装 number 与 PartListItem string 桥接的过渡形态；
  *     实际语义「后端未落库」应该是 null，UI 端用 — 占位（el-descriptions 自动处理）。
  *
- * 守门走 Zod parse（assemblyDetailFlatSchema.strict）：后端意外把 assembly 改回嵌套键
- * 会立刻抛 ZodError，避免静默 fail。
+ * 守门走 Zod parse（assemblyDetailFlatSchema.strict）：后端意外增删字段（多一个键
+ * 触发 `unrecognized_keys`、少一个键触发 `required`）立刻抛 ZodError，避免静默 fail。
  */
 export function parseAssemblyDetail(raw: unknown): AssemblyDetail {
   const flat: AssemblyDetailFlatSchema = assemblyDetailFlatSchema.parse(raw);
@@ -57,20 +59,21 @@ export function parseAssemblyDetail(raw: unknown): AssemblyDetail {
   };
 }
 
-/** 2026-09-29 review 第 1 轮 C1 修复：把后端 AssemblyOut 19 字段（write 接口响应 /
+/** 2026-09-29 review 第 1 轮 C1 修复：把后端 AssemblyOut 20 字段（write 接口响应 /
  * list 接口 item）转成前端 AssemblyItem。
  *
- * 后端实际响应形态（已核对 backend-rust/src/modules/assembly/handler.rs:168, 211）：
+ * 后端实际响应形态（已核对 backend-rust/src/modules/assembly/handler.rs 的写端点）：
  *   - POST /api/v2/assemblies/{id}/update → R<AssemblyOut>
  *   - POST /api/v2/assemblies/{id}/cancel → R<AssemblyOut>
- *   - GET /api/v2/assemblies → AssemblyListItem（= AssemblyOut）
+ *   - GET /api/v2/assemblies → AssemblyListItem（= AssemblyOut 平铺 + 两个客户名字段）
  *
  * 字段对齐：
  *   - child_count 派生：write 接口不返 children → 用 caller 传的 count（list 调用传
  *     children.length，update / cancel 调用传 0，由 composable 后续 mutate 校正）
- *   - customer_name / parent_customer_name / customer_path 三字段后端不返，置 null，
- *     由 useAssemblyDetail composable 在 fetchData / 写操作成功后用 useCustomersQuery
- *     派生补全（enrichAssemblyCustomer）。
+ *   - customer_name / parent_customer_name 两个后端**不返**的字段置 null，由
+ *     useAssemblyDetail composable 在 fetchData / 写操作成功后用 useCustomersQuery
+ *     派生补全（enrichAssemblyCustomer）；`customer_path` 是后端下发的必填键，
+ *     这里直接透传（见下方 `enrichAssemblyItem` 的取值优先级）
  *   - unit_price / total_price nullable → Number() 或 null（不再 '0' 伪装）。
  *
  * 走 assemblyOutSchema.parse 守门：后端意外增删字段立刻抛 ZodError。
@@ -92,7 +95,9 @@ function parseAssemblyOutToItemCore(flat: AssemblyOutSchema, childCount: number)
     customer_id: flat.customer_id,
     customer_name: null,
     parent_customer_name: null,
-    customer_path: null,
+    // 后端下发的必填键（第 20 字段）：直接透传。空串是合法值（客户已软删 / 父链成环），
+    // enrichAssemblyItem 用 `||` 把它兜成本地算出的路径。
+    customer_path: flat.customer_path,
     request_date: flat.request_date,
     planned_delivery_date: flat.planned_delivery_date,
     is_urgent: flat.is_urgent,
@@ -121,18 +126,22 @@ function parseAssemblyOutToItemCore(flat: AssemblyOutSchema, childCount: number)
  *
  * 语义：
  * - customers 中按 item.customer_id 找匹配客户：
- *   - 找到 → customer_name = name, parent_customer_name = parent_name（⚠️ 无限层级后
- *     该字段的**语义**由后端改成「根 L1 名」，见 `types/assembly.ts`）,
- *     customer_path = 「父 / 子」或「name」
+ *   - 找到 → customer_name = name, parent_customer_name = 客户行的 parent_name
+ *     （⚠️ 无限层级后该字段的**语义**由后端改成「根 L1 名」，见 `types/assembly.ts`；
+ *     本函数仍按客户行自身的直接父名填，装配件 VO 不返根名，需要时由调用方换源）,
+ *     customer_path = 后端 VO 的值优先，其次本地 customers 算出的路径
  *   - 找不到 → 三字段全置 null（保持 mapper 兜底）
  *
  * 2026-10-17 客户无限层级：`customer_path` 改成「**优先取后端 VO 的值，其次用本地
- *  customers 列表里那份 `Customer.customer_path` 算**」。
+ * customers 列表里那份 `Customer.customer_path` 算**」。后端 `AssemblyOut` 已把这个
+ * 列为必填键（`vo/assembly.rs` 的第 20 个字段，详情 / 建单回读 / 更新 / 取消 /
+ * start / force-complete 六个调用点都填），mapper 已在 `parseAssemblyOutToItemCore`
+ * 里透传 ⇒ 上面第一分支是**正常路径**，本地 customers 分支只兜「客户列表还没到达」
+ * 与「后端落空串」两种情况。
  *
- * ⚠️ **对后端新契约的依赖**：`AssemblyOut` / `AssemblyListItem` 目前**仍不返**
- * `customer_path`（`parseAssemblyOutToItemCore` 把三字段一律置 null，本函数是唯一的
- * 补全点）。后端补齐该列之后，本行的 `item.customer_path ?? …` 分支会自动接管，
- * 前端零改动 —— 在那之前走本地 customers 分支，**不构成阻塞**。
+ * ⚠️ **部署顺序：后端必须先上** —— 旧版本不返 `customer_path` ⇒
+ * `assemblyOutSchema` / `assemblyDetailFlatSchema` 的 `required` 抛 ZodError，
+ * 装配件详情页 / PartAssemblyLinkCard 空白（不是降级，是白屏）。
  *
  * 为什么用 `customer.customer_path` 而不是自己拼：客户已是任意深度（集团 / 分厂 / 车间 /
  * 班组…），「父 / 子」拼法必然缺层（第 3 层往下的中间节点整片消失）。拼接的真源在后端
@@ -158,7 +167,7 @@ export function enrichAssemblyItem(item: AssemblyItem, customers: Customer[]): A
     ...item,
     customer_name: customer.name,
     parent_customer_name: customer.parent_name,
-    // `||` 而不是 `??`：要兜「后端补齐后该列落**空串**」（客户软删 / 父链成环）—— 那一行
+    // `||` 而不是 `??`：要兜后端该列落**空串**的情形（客户软删 / 父链成环）—— 那一行
     // 用本地 customers 算出的串仍是一条完整可读路径，比显示空白好。与三个批次卡片适配层
     // 及 utils/elTableCell.ts 的规则 1 同口径。
     customer_path: item.customer_path || customer.customer_path,

@@ -63,7 +63,7 @@ describe('PDF 批量上传 Tab：行内客户列选的候选与 label', () => {
     expect(
       optionUses.length,
       '两处客户列（独立零件表 / 装配件表）的 option 来源不是 props.leafCustomerOptions：' +
-        '行内列选又退回「所选根的直接子」，深度 ≥ 3 时中间层会被选中并被后端 20302 拒',
+        '行内列选又退回「所选根的直接子」，深度 ≥ 3 时中间层会被选中并被后端 20104 拒',
     ).toBe(2);
     expect(PDF_TAB_SRC).toMatch(/label: c\.path \|\| c\.name/);
     expect(
@@ -83,7 +83,7 @@ describe('「单据只能挂叶子」的闸放在哪一层', () => {
     expect(
       manualSrc,
       'onAddConfirm 不再校验「客户必须是叶子」：中间层节点会被放进待新增列表，' +
-        '提交时被后端 20302 拒',
+        '提交时被后端 20104 拒',
     ).toMatch(/parent_id === matched\.id/);
     expect(manualSrc).toContain('还有下级部门');
   });
@@ -97,8 +97,8 @@ describe('「单据只能挂叶子」的闸放在哪一层', () => {
   });
 });
 
-describe('装配件编辑弹窗：客户 option label（K4）', () => {
-  it('label 用 customer_path，且不再走 useAssemblyDetail 的 formatCustomerOptionLabel', () => {
+describe('装配件编辑弹窗：客户 option label', () => {
+  it('label 走共享的 formatCustomerOptionLabel（客户下拉与 enrich 同一口径）', () => {
     const dlg = stripComments(
       readFileSync(join(ROOT, 'src/views/assemblies/components/AssemblyEditDialog.vue'), 'utf8'),
     );
@@ -106,12 +106,12 @@ describe('装配件编辑弹窗：客户 option label（K4）', () => {
       dlg,
       '装配件编辑弹窗的 option label 又退回「直接父名 / 本级名」了：深度 ≥ 3 时只给出' +
         '最后一段祖先，跨分支同名仍分不清',
-    ).toMatch(/:label="c\.customer_path \|\| c\.name"/);
+    ).toMatch(/:label="formatCustomerOptionLabel\(c\)"/);
     expect(
       dlg,
-      '本组件不得再 import formatCustomerOptionLabel —— 该文件由并行任务独占，' +
-        '本任务只在组件内联 customer_path',
-    ).not.toContain('formatCustomerOptionLabel');
+      '本组件不得再内联 `c.customer_path || c.name`：那条拼法与装配体域的 ' +
+        'formatCustomerOptionLabel 是同一件事的第二份实现，空串兜底 / 根节点口径迟早分叉',
+    ).not.toMatch(/:label="c\.customer_path/);
     expect(dlg).toContain('选择末级客户');
   });
 });

@@ -7,10 +7,15 @@
 //     customerId 定位客户，不再按 `parent_name / name` 反查；
 //   - `listCustomers()` 今天的唯一调用点是 `useCustomersQuery` 的 queryFn
 //     （守门 schema 在那里 parse），其余读点都从 query 缓存派生。
-// 保留的是「刻意不传参」这条约定：客户树拼装需要全量，而**不传 limit 才是全量**
-// 是无限层级改造（2026-10-17 起）锁定的后端口径 —— 今天后端缺省 limit 是 50
-// （上限 500，见 backend-rust `src/modules/com/customer/service/crud.rs`），
-// 客户数一旦超过就会缺层。⚠️ 部署顺序：后端必须先上。
+// 保留的是「刻意不传参」这条约定：客户树拼装需要全量，而**不传 limit 才是全量**。
+// 跨版本口径（2026-10-17 核对后端 `service/crud.rs`）：
+//   - 2026-10-17 起的后端：`None` = 不限（旧的 `DEFAULT_LIMIT = 50` 已删除），不传参
+//     拿到的就是全量；
+//   - **更早的**后端：缺省 limit 是 50、上限 500 ⇒ 客户数一旦超过就会**缺层**
+//     （第 3 层往下的节点从树上消失，且不报错）。
+// ⇒ `listCustomers()` 不传参在**新旧两个版本下都返回全量**，本仓不需要为跨版本部署
+// 加任何分支；上面第二条只在「后端尚未升级就发前端」的那段窗口里成立，见
+// CLAUDE.md「客户无限层级（2026-10-17）」一节的部署顺序登记。
 
 import { api, normalizeListResult } from '@/api/http';
 

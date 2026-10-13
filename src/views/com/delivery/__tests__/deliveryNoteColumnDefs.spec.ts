@@ -81,7 +81,7 @@ describe('列 key 与顺序（改了就让老用户列设置失效）', () => {
     expect(keys).toEqual([
       'index',
       'order_no',
-      // 「分厂」列的 key 是老快照里的 customer_name（行数据字段叫 l2_customer，渲染取它）
+      // 客户列的 key 是老快照里的 customer_name（行数据字段叫 l2_customer，渲染取它）
       'customer_name',
       'applicant_name',
       'drawing_no',

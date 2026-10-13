@@ -47,7 +47,7 @@ const { default: PrintGroupTable } = await import('../PrintGroupTable.vue');
 const DEFS: ColumnDef[] = [
   { key: 'index', label: '序号' },
   { key: 'order_no', label: '订单号' },
-  { key: 'customer_name', label: '分厂' },
+  { key: 'customer_name', label: '客户' },
 ];
 
 /** 桩 el-table 把 data 摊到模块级 holder，列桩据此逐行渲染「操作」列的默认插槽 ——
@@ -153,7 +153,7 @@ describe('PrintGroupTable 列顺序拖动接线', () => {
     const w = await mountTable();
     // 前 3 项来自 orderedDefs；「数量 / 操作」两列是 defs 之外的固定列，永远在最后。
     expect(w.findAll('.mock-col').map((e) => e.attributes('data-label'))).toEqual([
-      '分厂',
+      '客户',
       '序号',
       '订单号',
       '数量',
@@ -176,7 +176,7 @@ describe('PrintGroupTable 固定列', () => {
     expect(w.findAll('.mock-col').map((e) => e.attributes('data-label'))).toEqual([
       '序号',
       '订单号',
-      '分厂',
+      '客户',
       '数量',
       '操作',
     ]);

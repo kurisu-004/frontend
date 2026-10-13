@@ -458,7 +458,7 @@ describe('usePartBatchManual', () => {
 //
 // 改前口径：customerTree 是本 composable 内联拼的**硬编码两层**树（第 3 层往下的客户
 // 选不到），且提交只校验「客户存在」⇒ 选中间层（下面还有车间）也能进待新增列表，
-// 后端会以 20302 拒掉。
+// 后端会以 20104 拒掉。
 // ============================================================================
 
 /** 任意深度客户树（customer_path = 第 2 层到叶子 ` / ` 拼接、不含 L1）。 */
@@ -517,7 +517,7 @@ describe('usePartBatchManual：客户任意深度（cascader + 落叶子）', ()
     w.unmount();
   });
 
-  it('选中**中间层**客户 → 拒绝入队 + formErrors.customerId 提示挂末级（后端 20302）', async () => {
+  it('选中**中间层**客户 → 拒绝入队 + formErrors.customerId 提示挂末级（后端 20104）', async () => {
     const w = harnessMount();
     await flushPromises();
     if (!captured) throw new Error('not captured');

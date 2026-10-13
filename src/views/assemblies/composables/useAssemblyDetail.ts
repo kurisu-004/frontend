@@ -35,9 +35,10 @@ import {
 import { api } from '@/api/http';
 import type { Customer } from '@/api/customer';
 // 2026-09-26：客户全集改走共享 query useCustomersQuery（CustomerList 写后失效自动 refetch）。
-// 原 listCustomers() + ref + loadLeafCustomers() 改走 query 派生：leafCustomers 由
-// allCustomers 过滤 parent_id !== null；loadLeafCustomers 保留 API 兼容（→ query.refetch）。
+// 原 listCustomers() + ref + loadLeafCustomers() 改走 query 派生；loadLeafCustomers
+// 保留 API 兼容（→ query.refetch）。leafCustomers 的「叶子」判据见下方注释。
 import { useCustomersQuery } from '@/composables/queries/useCustomersQuery';
+import { leafCustomersOf } from '@/api/customer.tree';
 import type { PartFileItem } from '@/types/part_file';
 import type { Applicant } from '@/types/applicant';
 import { useApplicantSearch } from '@/composables/useApplicantSearch';
@@ -180,7 +181,7 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
   const loading = ref(false);
 
   // ============ 客户全集（2026-09-29 修复：提到 enrichAssemblyCustomer 之前）
-  // 2026-09-26：客户全集改走共享 query；leafCustomers = 二级客户（parent_id !== null）。
+  // 2026-09-26：客户全集改走共享 query；leafCustomers 的判据（真叶子）见上方注释。
   // useQuery 自动 fetch + 缓存会话级，写操作完成后 useCustomersQuery 失效自动 refetch；
   // 错误状态走 query.error 暴露，原 try/catch ElMessage 行为保留。
   const {
@@ -189,8 +190,15 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
     error: customersError,
     refetch: refetchCustomers,
   } = useCustomersQuery();
+  // 2026-10-17 客户无限层级：候选必须是**真叶子**（没有任何子节点），判据与后端
+  // `assembly/service/crud.rs` → `shared/customer::require_leaf_customer` 同口径
+  // （`has_children == false`；拒时回 `20104 BIZ_INVALID_VALUE`，文案「装配件只能挂在
+  // 叶子客户上：… 下还有 N 个子节点」）。
+  // 旧写法 `parent_id !== null` 在两层树上恰好等价于「叶子」，客户放开任意深度后它
+  // 等价于「**除根以外的一切**」—— 第 3 层分厂 / 第 4 层车间都会进下拉，选中即被后端拒。
+  // 改用 `api/customer.tree.ts::leafCustomersOf`（按「谁的 parent_id 指向我」反查）。
   const leafCustomers = computed<Customer[]>(() =>
-    (customersData.value?.items ?? []).filter((c) => c.parent_id !== null),
+    leafCustomersOf(customersData.value?.items ?? []),
   );
   // 2026-09-26：保留对外 API 兼容 → 派生 isFetching（编辑 dialog 视觉 loading）。
   const loadingCustomers: ComputedRef<boolean> = computed<boolean>(() => isFetching.value);
@@ -340,11 +348,12 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
       });
       // 就地 mutate：detail.value.assembly 替换字段 + children / files 沿用。
       // child_count 用现有 children 数量（响应不带），customer_* 由 enrich 派生。
+      // ⚠️ `customer_path` **不置 null**：响应里就有（mapper 已透传），置 null 会把
+      // 后端值抹掉、逼 enrich 走本地 customers 分支；`||` 兜底留给「响应落空串」。
       Object.assign(detail.value.assembly, updated, {
         child_count: detail.value.children.length,
         customer_name: null,
         parent_customer_name: null,
-        customer_path: null,
       });
       enrichAssemblyCustomer(detail.value);
       ElMessage.success('已保存');
@@ -375,11 +384,11 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
     }
     try {
       const updated = await cancelAssembly(a.id);
+      // `customer_path` 不置 null（同 update：响应里有，置 null 反而丢掉后端值）。
       Object.assign(detail.value.assembly, updated, {
         child_count: detail.value.children.length,
         customer_name: null,
         parent_customer_name: null,
-        customer_path: null,
       });
       enrichAssemblyCustomer(detail.value);
       ElMessage.success('已取消装配件');

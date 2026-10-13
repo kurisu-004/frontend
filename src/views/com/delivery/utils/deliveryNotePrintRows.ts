@@ -32,8 +32,8 @@ export interface PrintRow {
    * 在导出时整列留空。**改的只是「单元格里写什么值」**：从「叶子客户单段名」改成
    * 「第 2 层到叶子的 ` / ` 路径」（`toPrintRow` 里取 `li.customer_path`）。
    *
-   * 为什么不带 L1：Excel 单元格是单行文本，塞不进主行 + 次行两段；且模板表头那一列写的是
-   * 「分厂」（一个中间层级的叫法），不承诺显示集团名。L1 在预览表的次行里看得到。
+   * 为什么不带 L1：Excel 单元格是单行文本，塞不进主行 + 次行两段。L1 在列表页与
+   * 预览表的次行里看得到（打印预览表刻意保持单行，见 deliveryNotePrintColumnDefs.ts）。
    */
   l2_customer: string;
   applicant_name: string;

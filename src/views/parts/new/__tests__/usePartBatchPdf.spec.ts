@@ -1139,7 +1139,7 @@ describe('usePartBatchPdf：客户任意深度（反查部门名 + 叶子候选�
     w.unmount();
   });
 
-  it('Excel 部门名命中的是**中间层** ⇒ 留空（单据只能挂叶子，后端会拒 20302）', async () => {
+  it('Excel 部门名命中的是**中间层** ⇒ 留空（单据只能挂叶子，后端会拒 20104）', async () => {
     useCustomerTree(deepTreeWithDumuAsBranch());
     const w = harnessMount();
     await flushPromises();

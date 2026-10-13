@@ -2,20 +2,25 @@
 //
 // 客户单元格共享渲染器（`src/utils/elTableCell.ts`，2026-10-17 客户无限层级改造新增）的
 // 契约守卫。**被测的是三条兜底规则 + 三种 DOM 形态**，不是「某页渲染成什么样」——
-// 8 个列定义跨 6 个域共用这一个函数，所以规则只有这一份、也只有这一处该被钉住。
+// 7 个列定义跨 5 个域共用这一个函数，所以规则只有这一份、也只有这一处该被钉住。
 //
 // C 组（纯函数 `customerCellText`）守规则本身：空串退回单段名 / L1 与主行相同不重复 /
 // 只有 L1 时顶主行。
 // R 组（`renderCustomerCell`）守产物形态：单行 / 两行 / 空占位三种，且两行时行高会涨
 // （断言 class 结构，不依赖具体 CSS —— CSS 在 styles/index.scss，无头环境量不到）。
+// S 组读 `styles/index.scss` 源码，守单行形态依赖的那条 `display:block`（盒类型错了
+// ellipsis 静默失效，见该组注释）。
 //
 // **非零信号核对**（改实现后本文件必须变红）：
 //   - 删掉 `path || name` 的 fallback（C1 变红）；
 //   - 删掉 `sub === main` 的去重（C2 变红）；
 //   - 删掉「只有 L1 时顶主行」（C3 变红）；
-//   - 把两行容器从 `.customer-cell` 换成别的 class（R2 变红）。
+//   - 把两行容器从 `.customer-cell` 换成别的 class（R2 变红）；
+//   - 删掉 `.customer-cell__main` 的 `display:block`（S1 变红）。
 
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { VNode } from 'vue';
 import {
   CUSTOMER_CELL_EMPTY,
@@ -143,5 +148,40 @@ describe('R 组：renderCustomerCell 的三种产物形态', () => {
     expect(textOf(asParent)).toBe(textOf(asL1));
     const input: CustomerCellInput = { path: '手机部', l1: '华强' };
     expect(textOf(renderCustomerCell(input))).toBe('手机部华强');
+  });
+});
+
+// S 组：单行形态的 ellipsis 依赖一条 CSS，本组把那条 CSS 钉住。
+//
+// 为什么单列一组：R3 守的「单行形态」只看 class 结构，而**省略号能不能生效取决于盒
+// 类型**——`max-width` / `overflow` / `text-overflow` 只对块级盒生效，`display:inline`
+// 的 span 一律无视。单行分支返回的正是**裸** `<span class="customer-cell__main">`，
+// 没有 `display:block` 时 ellipsis 静默失效、长路径被 EP 的 `.cell{overflow:hidden}`
+// 从中间硬裁（看不出被截断，只看到少了半截字）。无头环境量不到 CSS，只能读源码断言。
+describe('S 组：单行形态的省略号所依赖的 CSS', () => {
+  // happy-dom 环境下 import.meta.url 不保证是 file: 协议（见 usePartBatchPdf.spec.ts
+  // 的同类注释），用 cwd 拼路径更稳。
+  const SCSS = readFileSync(join(process.cwd(), 'src/styles/index.scss'), 'utf8');
+
+  /** 取某条选择器的声明体（按第一条匹配的选择器切分）。 */
+  function declsOf(selector: string): string {
+    const idx = SCSS.indexOf(`${selector} {`);
+    expect(idx, `styles/index.scss 里找不到 ${selector} 这条规则`).toBeGreaterThan(-1);
+    return SCSS.slice(idx + selector.length + 2, SCSS.indexOf('}', idx));
+  }
+
+  it('S1：`.customer-cell__main` / `__sub` 必须 display:block（inline 盒不遵守 ellipsis）', () => {
+    const decls = declsOf('.customer-cell__main,\n.customer-cell__sub');
+    expect(decls).toMatch(/display:\s*block\s*;/);
+    // 同一组里 ellipsis 四件套必须齐全，缺一条截断就少一条语义
+    expect(decls).toMatch(/max-width:\s*100%\s*;/);
+    expect(decls).toMatch(/overflow:\s*hidden\s*;/);
+    expect(decls).toMatch(/white-space:\s*nowrap\s*;/);
+    expect(decls).toMatch(/text-overflow:\s*ellipsis\s*;/);
+  });
+
+  it('S2：单行形态消费的正是 `.customer-cell__main` 这一个 class（不是只写在两行分支里）', () => {
+    const single = renderCustomerCell({ path: '终端BG / 手机部 / 影像组' });
+    expect(classesOf(single)).toEqual(['customer-cell__main']);
   });
 });

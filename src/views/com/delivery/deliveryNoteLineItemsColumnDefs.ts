@@ -119,7 +119,11 @@ export function buildDeliveryNoteLineItemsColumnDefs(): ColumnDef[] {
     },
     {
       key: 'customer',
-      label: '客户（二级）',
+      // 2026-10-17 客户无限层级：label 从「客户（二级）」改成深度无关的「客户」。
+      // 「二级」在任意深度树上直接说谎（客户可能是第 4 层班组，也可能是孤立的
+      // 一层根）。**改的只有 label**：`key` 仍是老快照里的 `customer`（列可见性 /
+      // 列顺序快照契约，见文件头的改名义务登记），改 key 会让老用户的列设置作废。
+      label: '客户',
       prop: 'customer_name',
       minWidth: 160,
       showOverflowTooltip: true,
@@ -127,11 +131,8 @@ export function buildDeliveryNoteLineItemsColumnDefs(): ColumnDef[] {
       align: 'center',
       cellRender: (ctx) => {
         const r = row(ctx);
-        // 2026-10-17 客户无限层级：主行 `customer_path`（第 2 层到叶子、不含 L1），
-        // 次行 `parent_customer_name`（无限层级后语义 = **根 L1 名**）。
-        // ⚠️ 列 label「客户（二级）」**刻意不改**：无限层级下「二级」这个说法不准，
-        // 但它是既有用户词汇、且改 label 不属于本轮「收敛展示位」的范围（key 更是老快照
-        // 契约，见文件头的改名义务登记）。要改随展示口径的产品改名一起走。
+        // 主行 `customer_path`（第 2 层到叶子、不含 L1），次行 `parent_customer_name`
+        // （无限层级后语义 = **根 L1 名**）。
         return renderCustomerCell({
           path: r.customer_path,
           name: r.customer_name,

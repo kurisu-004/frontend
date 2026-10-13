@@ -35,9 +35,9 @@ import { z } from 'zod';
 import { ORDER_STATUSES } from '@/types/parts';
 
 /** 2026-09-26 新增：客户实体。字段对齐 backend-rust `CustomerOut`
- * （契约载体：`backend-rust/src/modules/com/customer/vo/customer.rs` —— com 域没有
- * `docs/api/` 整域文档，此前注释引的 `backend-rust/docs/api/customers.md:142-153`
- * 是失效路径）：雪花 id / name / parent_id / parent_name / serial_prefix / version /
+ * （整域契约文档：`backend-rust/docs/api/customers.md`，2026-10-17 随客户无限层级
+ * 改造上线；字段级真源仍是 `backend-rust/src/modules/com/customer/vo/customer.rs`）：
+ * 雪花 id / name / parent_id / parent_name / serial_prefix / customer_path / version /
  * created_at / updated_at。
  * serial_prefix 与 parent_name 一级客户必为 null，前端仅消费 nullable 不强制 None
  * 语义。version 是乐观锁 i32（每次写操作 +1）；created_at / updated_at 是
@@ -155,6 +155,10 @@ export type ProcessListResultSchema = z.infer<typeof processListResultSchema>;
 //   - 删 customer_path（前端派生 l1 + customer_name，schema 不声明）；
 //   - 删 next_process_id / next_process_name（列表响应不返，schema 不声明）；
 //   - unit_price / total_price：z.number() → z.string()（rust_decimal string）。
+//
+// 2026-10-17 客户无限层级改造：上面那条「删 customer_path」**已被推翻** —— 后端给
+// `PartListItem` 补了同名列（必填、值非 null），前端必须声明否则 strip 掉；顺带
+// `l1_customer_name` 的**语义**也变了（不再「直接父名」而是「根 L1 名」，见字段注释）。
 export const partSchema = z.object({
   id: z.string(),
   version: z.number(),
@@ -181,6 +185,16 @@ export const partSchema = z.object({
   note: z.string().nullable(),
   customer_name: z.string().nullable(),
   l1_customer_name: z.string().nullable(),
+  /** 2026-10-17 新增（客户无限层级改造）：第 2 层到叶子的名称用 ` / ` 拼接、
+   *  **不含 L1**；本节点即 L1 时等于自己的 `name`。必填、**值非 null** ——
+   *  客户行解析不出（软删 / 父链成环）时后端落**空串**。
+   *
+   *  此前本 schema **不声明**该字段，Zod 默认 strip 会把后端下发的值静默丢掉 ⇒
+   *  `partsListColumnDefs.ts` 客户列主行恒 `undefined`，永远退回「单段名 + L1 次行」。
+   *  （strip 陷阱的又一次实例：漏声明不报错，只让展示位静默降级。）
+   *  ⚠️ **部署顺序：后端必须先上** —— 旧版本不返该键 ⇒ `required` 抛 ZodError ⇒
+   *  零件一览（`GET /com/union-list`，`usePartsListQuery` 的 queryFn）整页数据恒空。 */
+  customer_path: z.string(),
   location: z.string().nullable(),
   holder_name: z.string().nullable().optional(),
   process_chain_id: z.string().nullable().optional(),
@@ -391,18 +405,25 @@ export type PartBatchListResultSchema = z.infer<typeof partBatchListResultSchema
 // canUploadTotalPdf/canAddChild computed 抛 TypeError → v-loading watcher 停摆。
 //
 // 本 commit 在 schema 层把后端真实 wire 形态锁死：
-//   - assemblyOutSchema: AssemblyOut 19 字段
+//   - assemblyOutSchema: AssemblyOut 20 字段（2026-10-17 补 `customer_path`）
 //   - assemblyChildOutSchema: AssemblyChildOut 13 字段
 //   - assemblyFileRefSchema: AssemblyFileRef 3 字段
-//   - assemblyDetailFlatSchema: 19 字段平铺 + children + files（实际 wire 形态）
+//   - assemblyDetailFlatSchema: 20 字段平铺 + children + files（实际 wire 形态）
 //
 // 注意：assemblyDetailFlatSchema 用 `.strict()` 而非默认 strip ——
 // 若后端意外把 assembly 改回嵌套键（regression），Zod parse 会立刻抛错，
 // 守门到位（M-1 同源问题：缺字段静默 strip = 校验形同虚设）。
+// ⚠️ strict 的对称代价见该 schema 自己的注释：后端每加一个键都必须同步补声明。
 // ============================================================
 
 /** 装配件实体。字段集对齐 backend-rust `AssemblyOut`
- * （backend-rust src/modules/assembly/vo/assembly.rs:17-39），19 字段。 */
+ * （backend-rust src/modules/assembly/vo/assembly.rs 的 `AssemblyOut`），**20 字段**。
+ *
+ * 2026-10-17 新增（客户无限层级改造）：`customer_path`（必填、非 nullable）—— 第 2 层到
+ * 叶子的 ` / ` 拼接、不含 L1，本节点即根时等于自己的 `name`；客户行解析不出（软删 /
+ * `parent_id` 链成环）时后端落**空串**而非 null，口径与 `customerSchema` 同一条。
+ * ⚠️ **部署顺序：后端必须先上**（旧版本不返这个键 ⇒ 本 schema 与下方 strict 的
+ * `assemblyDetailFlatSchema` 同时抛 ZodError，装配件详情页 / PartAssemblyLinkCard 空白）。 */
 export const assemblyOutSchema = z.object({
   id: z.string(),
   version: z.number(),
@@ -431,6 +452,7 @@ export const assemblyOutSchema = z.object({
   note: z.string().nullable(),
   created_at: z.string(),
   updated_at: z.string(),
+  customer_path: z.string(),
 });
 
 export type AssemblyOutSchema = z.infer<typeof assemblyOutSchema>;
@@ -482,15 +504,25 @@ export type AssemblyFileRefSchema = z.infer<typeof assemblyFileRefSchema>;
 
 /** 装配件详情（实际 wire 形态）。
  *
- * 后端用 `#[serde(flatten)]` 把 AssemblyOut 19 字段平铺到顶层 + children + files。
- * 这里**显式展开 19 字段**（不用 `.shape` spread，类型不安全），
+ * 后端用 `#[serde(flatten)]` 把 AssemblyOut 20 字段平铺到顶层 + children + files。
+ * 这里**显式展开 20 字段**（不用 `.shape` spread，类型不安全），
  * 后续 mapper（api/assembly.ts::parseAssemblyDetail）把平铺转回嵌套。
  *
  * 用 `.strict()` 而非默认 strip：若后端意外把 assembly 改回嵌套键，parse 立刻抛错；
- * 守门到位（M-1 regression guard 同形态）。 */
+ * 守门到位（M-1 regression guard 同形态）。
+ *
+ * ⚠️ **strict 的代价（2026-10-17 客户无限层级改造实测踩到）**：后端给 `AssemblyOut`
+ * 补了第 20 个键 `customer_path`（`AssemblyDetail` 把它平铺到顶层）而本段还写 19 个时，
+ * `.strict()` 直接抛 `unrecognized_keys` ⇒ **整条装配件详情链路白屏**（详情页与
+ * `PartAssemblyLinkCard` 共用 `parseAssemblyDetail`）。同一批的
+ * `partDetailSchema` / `inspectionSchema` / `pendingProgrammingSchema` 都跟进了，
+ * 唯独这条漏了。⇒ 凡是 `.strict()` 的行 VO，**后端每加一个键都必须同步补声明**，
+ * 这是 strict 换来的守门要付的对称代价。
+ * ⚠️ **部署顺序：后端必须先上** —— 反序时 `GET /assemblies/{id}` 的响应缺这个键 ⇒
+ * `required` 而非 `unrecognized_keys`，同样抛 ZodError。 */
 export const assemblyDetailFlatSchema = z
   .object({
-    // —— AssemblyOut 19 字段（字段集对齐 vo/assembly.rs:17-39）——
+    // —— AssemblyOut 20 字段（字段集对齐 vo/assembly.rs 的 AssemblyOut）——
     id: z.string(),
     version: z.number(),
     serial_no: z.string().nullable(),
@@ -518,6 +550,8 @@ export const assemblyDetailFlatSchema = z
     note: z.string().nullable(),
     created_at: z.string(),
     updated_at: z.string(),
+    // 第 20 键（2026-10-17）：客户路径，必填非空串（查不到客户行时落空串）。
+    customer_path: z.string(),
     // —— 平铺之外的 children / files ——
     children: z.array(assemblyChildOutSchema),
     files: z.array(assemblyFileRefSchema),

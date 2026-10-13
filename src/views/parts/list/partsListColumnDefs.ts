@@ -365,8 +365,9 @@ export function buildPartsListColumnDefs(deps: {
         // 2026-10-17 客户无限层级：主行读后端下发的 `customer_path`（第 2 层到叶子的
         // ` / ` 拼接、不含 L1），L1 退成次行小字。空串 / 缺字段时由渲染器退回
         // `customer_name` 单段名 ⇒ 三条兜底规则只有一份实现（`utils/elTableCell.ts`）。
-        // ⚠️ `customer_path` 是后端新字段，上线前本列退化成「单段名 + L1 次行」——
-        // 与改造前的「L1 / L2」不同，但信息不丢，且后端上线后零改动自愈。
+        // ⚠️ 本列能读到路径的前提是 `partSchema` **声明**了 `customer_path`：zod 默认
+        // strip，schema 漏声明时 parse 全绿、主行恒 `undefined`，页面无声退回
+        // 「单段名 + L1 次行」。新增必填列务必 schema / TS 类型 / 展示层三处同批改。
         return renderCustomerCell({
           path: r.customer_path,
           name: r.customer_name,

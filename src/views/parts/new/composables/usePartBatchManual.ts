@@ -618,7 +618,7 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
     }
 
     // 2.1) 2026-10-17（客户无限层级改造）：**必须是叶子**。业务单据（零件 / 装配件 /
-    // 送货单）只能挂末级部门，中间层只能用来筛选，挂上去会被后端拒（20302）。
+    // 送货单）只能挂末级部门，中间层只能用来筛选，挂上去会被后端拒（20104）。
     // 为什么不放进 partEntrySchema：schema 是纯字段校验，那层拿不到客户树结构，
     // 「有没有子节点」只能在持有 customers 的调用点判定（与「客户存在性」同款，
     // schema 文件头的口径：依赖动态状态的检查不进 schema）。
