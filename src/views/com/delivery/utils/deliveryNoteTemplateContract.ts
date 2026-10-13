@@ -9,8 +9,13 @@
 // 仓库里有**两套版式**（判别位 `kind`）：
 //   · `kind: 'part'` —— 零件版，模板 `templates/delivery_note_fala.xlsx`（法拉），10 列。
 //   · `kind: 'gauge'` —— 检具版，模板 `templates/delivery_note_gauge_bailuda.xlsx`（百路达）
-//     与 `templates/delivery_note_gauge_xingnan.xlsx`（杏南）。两份**版式完全一致**，只有
-//     列宽与 sheet 名不同 ⇒ 一份契约同时管这两份模板。
+//     与 `templates/delivery_note_gauge_xingnan.xlsx`（杏南）。
+//
+// ⚠️ 两份检具模板**不是逐字节同构**，一份契约管两份的依据是「契约关心的那几项经实测一致」：
+//   · 一致（`assertTemplateMatches` 逐格实测 + spec 里同款用例）：数据行区间（row 5..29）、
+//     列位与占位符、页脚锚点 I2、9 处合并区清单。
+//   · 不一致（同一批实测）：列宽、sheet 名、**样式覆盖**（带样式 cell 数 372 / 363）、
+//     尾部空行数（百路达 30 行 / 杏南 31 行，「填写说明」在杏南是两行）。
 //
 // 零件版模板结构（已实测，见 assertTemplateMatches）：
 //   单 sheet `Sheet1`，打印区 A1:J17，8 处合并：
@@ -24,7 +29,8 @@
 //   row 13-17 页脚：收货单位 / 地址电话 / 收货人 / 送货单位 / 地址电话 /
 //             「送货人：{{driver_name}}」（F15:J16）/ 「送货日期：{{year}}年{{month}}月{{date}}日」（A17:J17）
 //
-// 检具版模板结构（2026-10-16 实测）：
+// 检具版模板结构（2026-10-16 实测；两份模板逐项对过；下面的占位符清单由
+// deliveryNoteTemplate.spec 逐格验，合并区清单由 deliveryNoteWorkbook.spec 验，两份模板都跑）：
 //   单 sheet（sheet 名随客户而异：百路达 / 杏南），9 处合并：
 //     A1:I1（标题）/ G3:H3（检具状态）/ A3:A4 · B3:B4 · C3:C4 · D3:D4 · E3:E4 ·
 //     F3:F4 / I3:I4
@@ -34,7 +40,7 @@
 //   row 5-29  25 个数据行：A5:A29 全是 `{{no}}`；**只有首行 row 5** 带
 //             {{order_no}}(B5) / {{drawing_no}}(D5) / {{name}}(E5) /
 //             {{quantity}}(F5) / {{system_delivery_date}}(I5)
-//   row 30-31 「填写说明」，不参与
+//   row 30-31 「填写说明」，不参与（杏南占两行，百路达只有 row 30 一行）
 //   C 列（申请部门/人）、G 列（新制/返修）、H 列（NG/OK/校验备注）**故意没有占位符**
 //   —— 按客户约定由送货厂家手填，渲染时清空成带边框的空列（清空范围覆盖 A..I，
 //   见 `dataColumns`，模板里可能残留样例值）。
@@ -82,7 +88,12 @@ export const GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT = {
   dataRowCount: 25,
   /** 整块清空 A..I：含故意留给手写的 C / G / H 三列（客户样例里这几列可能有残留值）。 */
   dataColumns: { first: 'A', last: 'I' },
-  /** 只有 6 个列有数据来源；C / G / H 三列不在此列（渲染时留空供手写）。 */
+  /** 只有 6 个列有数据来源；C / G / H 三列不在此列（渲染时留空供手写）。
+   *
+   *  ⚠️ 客户版式**没有单位列**（这不是漏写，2026-10-16 实测两份模板都是这样）⇒ 数量列 F 写的是
+   *  **裸数字**。`PrintSheetRow` 仍强制 `l2Customer` / `applicant` / `unit` / `note` 四个字段，
+   *  它们在检具版**没有消费方**（列位不在本表里，渲染层按 `columns` 反查，压根不会被读到）。
+   *  将来客户要显示单位，必须先改客户版式（加列）再改本表，不是渲染层能补的。 */
   columns: {
     no: 'A',
     order_no: 'B',

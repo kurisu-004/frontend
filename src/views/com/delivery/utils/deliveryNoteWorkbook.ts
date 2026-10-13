@@ -41,7 +41,11 @@ import type {
 } from './deliveryNoteTemplateContract';
 import { colIndexOf } from './deliveryNoteTemplate';
 
-/** 打印表头行（与模板 row 2 的表头一一对应；字段名沿用 line item 的 snake_case）。 */
+/** 打印表头行（与模板 row 2 的表头一一对应；字段名沿用 line item 的 snake_case）。
+ *
+ *  ⚠️ 本接口是**两套版式的并集**，不是每套都用得上：检具版客户版式没有单位列 / 分厂列 /
+ *  申请人列 / 备注列（见 GAUGE 契约的 `columns` 与那里的说明），渲染层按契约列反查驱动，
+ *  检具版压根不会读到 `l2Customer` / `applicant` / `unit` / `note` —— 不是漏写，是版式如此。 */
 export interface PrintSheetRow {
   orderNo: string;
   l2Customer: string;
@@ -185,35 +189,62 @@ const COLUMN_FIELD: Readonly<Record<string, keyof PrintSheetRow>> = {
   note: 'note',
 };
 
-/** 页脚实参与契约版式必须配套，否则抛中文错误（**不静默渲染半成品**，2026-10-16 新增）。
+/** 页脚实参必须与契约版式配套、且该版式的必填键都齐，否则抛中文错误
+ *  （**不静默渲染半成品**，2026-10-16 新增）。
  *
- * 判据是**判别位** `kind`（零件版页脚省略该键时按 `'part'` 记）：检具版模板只有 I2 的
- * `{{delivery_date}}` 一个占位符，缺了它就会原样输出字面量；反过来零件版模板里没有
- * 这个占位符，页面却传了检具版页脚，说明传错了页脚对象、打印人 / 日期会一起丢。
+ * 两道判据，缺一不可：
+ *   ① **判别位** `kind`（零件版页脚省略该键时按 `'part'` 记）—— 检具版模板只有 I2 的
+ *      `{{delivery_date}}` 一个占位符，不配套就会原样输出字面量；反过来零件版模板里没有这个
+ *      占位符，页面却传了检具版页脚，说明传错了页脚对象、打印人 / 日期会一起丢。
+ *   ② 配套之后逐个验必填键**是字符串** —— 判别位对了不代表字段齐，JS 调用方漏一个键就会让
+ *      fillTemplate 走 `String(replacement)` 把「undefined」原样印到页脚上。
  *
- * ⚠️ 这条断言是**运行时兜底**、不是主要防线：页脚形参类型是 `FooterFor<C>`，不配套的组合
- * 在编译期就报类型不兼容（见 FooterFor）。它挡的是 JS 调用方，以及将来泛型被拆掉的退化。
+ * ⚠️ 这道断言是**运行时兜底**、不是主要防线：页脚形参类型是 `FooterFor<C>`，①那条不配套的
+ * 组合在编译期就报类型不兼容（见 FooterFor）。它挡的是 JS 调用方（②只有运行时能挡），
+ * 以及将来泛型被拆掉后的退化。
  */
 function assertFooterMatchesContract(
   footer: PrintFooterSpec,
   contract: DeliveryNoteTemplateContract,
 ): void {
   const given = footer.kind ?? 'part';
-  if (given === contract.kind) return;
-  if (contract.kind === 'gauge') {
+  if (given !== contract.kind) {
+    if (contract.kind === 'gauge') {
+      throw new Error(
+        `检具版模板（契约 ${contract.footer.delivery_date} 需要送货日期）必须传检具版页脚实参 ` +
+          '{ kind: "gauge", deliveryDate } —— 少判别位 / 少送货日期，该格会原样输出 ' +
+          '{{delivery_date}} 字面量',
+      );
+    }
     throw new Error(
-      `检具版模板（契约 ${contract.footer.delivery_date} 需要送货日期）必须传检具版页脚实参 ` +
-        '{ kind: "gauge", deliveryDate } —— 少判别位 / 少送货日期，该格会原样输出 ' +
-        '{{delivery_date}} 字面量',
+      '零件版模板页脚不含送货日期占位符，却传了检具版页脚实参 —— 请改传 ' +
+        '{ kind: "part", driverName, year, month, date }（送货人 / 年月日由模板内嵌文案拼装）',
     );
   }
-  throw new Error(
-    '零件版模板页脚不含送货日期占位符，却传了检具版页脚实参 —— 请改传 ' +
-      '{ kind: "part", driverName, year, month, date }（送货人 / 年月日由模板内嵌文案拼装）',
-  );
+  // 配套之后**再**验必填键（2026-10-16）：判别位对了不代表字段齐，JS 调用方漏传一个键时
+  // fillTemplate 会走 `String(replacement)` 把「undefined」原样印到送货单页脚上 —— 比留空
+  // 更坏（空白页脚至少看得出没填，印个 undefined 像是送货人真叫 undefined）。
+  const bag = footer as unknown as Record<string, unknown>;
+  const label = contract.kind === 'gauge' ? '检具版' : '零件版';
+  for (const key of FOOTER_KEYS[contract.kind]) {
+    const value = bag[key];
+    if (typeof value !== 'string') {
+      throw new Error(
+        `${label}页脚实参 ${key} 不是字符串（收到 ${String(value)}）—— fillTemplate 对内嵌占位符` +
+          '走 String(replacement)，缺字段会把「undefined」原样印到单据上，请补齐页脚实参',
+      );
+    }
+  }
 }
 
-/** 按契约版式取 `fillTemplate` 实参（调用点已过 assertFooterMatchesContract ⇒ 实参必配套）。
+/** 各版式页脚的必填键（守卫按 `contract.kind` 取）。 */
+const FOOTER_KEYS: Readonly<Record<DeliveryNoteTemplateContract['kind'], readonly string[]>> = {
+  part: ['driverName', 'year', 'month', 'date'],
+  gauge: ['deliveryDate'],
+};
+
+/** 按契约版式取 `fillTemplate` 实参（调用点已过 assertFooterMatchesContract ⇒ 实参必配套
+ *  且该版式的必填键都是字符串，所以这里不需要再兜一层 `?? ''`）。
  *
  *  ⚠️ 这里写不成纯类型推导：判别位在 `footer` 上、版式判别在 `contract` 上，TS 不做两个
  *  独立变量的关联收窄。断言已保证两者配套，所以按契约分支后各断言一次页脚形态。 */
@@ -301,7 +332,8 @@ export async function renderDeliveryNoteWorkbook<
   const firstCol = colIndexOf(c.dataColumns.first);
   const width = colIndexOf(c.dataColumns.last) - firstCol + 1;
   /** 契约列 → （列下标 + 该列绑的打印行字段）。`no` 特判成行序号故 rowField 为 null。
-   *  字段名对不上就在动工作簿**之前**抛错，别渲染到一半才炸。 */
+   *  字段名对不上就在**写第一格值之前**抛错，别渲染到一半才炸（工作簿此时已打开、sheet 也
+   *  已按分组克隆好，但一格都还没动）。 */
   const colWrites = Object.entries(c.columns).map(([field, letter]) => {
     const col = colIndexOf(letter);
     if (field === 'no') return { col, rowField: null, letter };
@@ -311,7 +343,8 @@ export async function renderDeliveryNoteWorkbook<
   });
   // 「数据列必须被整块清空范围覆盖」的守卫（2026-10-16）：清空按 `dataColumns` 走、写入按
   // `columns` 走，两者**互不参照**，所以契约把某列写窄了不会有人发现 —— 未填满的行该列会
-  // 保留模板原值（检具版 `last: 'H'` 时 I 列就是这样漏出客户样例值）。在动工作簿前抛错。
+  // 保留模板原值（检具版 `last: 'H'` 时 I 列就是这样漏出客户样例值）。抛在**写数据行之前**：
+  // 此时已打开工作簿 / 克隆好 sheet，但一格都还没改，调用方拿到的是一次干净的失败。
   const lastCol = firstCol + width - 1;
   for (const { col, letter } of colWrites) {
     if (col < firstCol || col > lastCol) {

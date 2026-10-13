@@ -26,6 +26,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { inflateRawSync } from 'node:zlib';
 import { renderDeliveryNoteWorkbook } from '../deliveryNoteWorkbook';
+import type { GaugeFooterSpec, PartFooterSpec } from '../deliveryNoteWorkbook';
 import {
   DELIVERY_NOTE_TEMPLATE_CONTRACT,
   GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT,
@@ -34,8 +35,15 @@ import {
 // ⚠️ 必须从 Buffer 构造 Uint8Array（不能用 `buf.buffer`：node 的 Buffer 可能落在
 // 8MB 池化 ArrayBuffer 的一段上，`.buffer` 拿到的是**整个池**，字节不是 xlsx）。
 const TEMPLATE = new Uint8Array(readFileSync('templates/delivery_note_fala.xlsx'));
-/** 内置检具模板（百路达；与杏南版式一致，另有同款一条在 deliveryNoteTemplate.spec.ts）。 */
-const GAUGE_TEMPLATE = new Uint8Array(readFileSync('templates/delivery_note_gauge_bailuda.xlsx'));
+/** 内置检具模板**两份**（百路达 / 杏南）。两份的占位符 / 行区间 / 列位 / 合并区一致，
+ *  差别在列宽、sheet 名与样式覆盖（带样式 cell 数 372 / 363）—— 逐格校验另有同款一条在
+ *  deliveryNoteTemplate.spec.ts。 */
+const GAUGE_TEMPLATE_FILES = [
+  'templates/delivery_note_gauge_bailuda.xlsx',
+  'templates/delivery_note_gauge_xingnan.xlsx',
+] as const;
+/** 默认取百路达（其余用例用它当输入）；「两份都验」的用例走 `GAUGE_TEMPLATE_FILES`。 */
+const GAUGE_TEMPLATE = new Uint8Array(readFileSync(GAUGE_TEMPLATE_FILES[0]));
 
 /** 模板原件里带样式索引（`s=`）的 cell 数 —— 渲染产物必须一条不少地对上（2026-10-08 实测）。 */
 const TEMPLATE_STYLED_CELLS = 172;
@@ -111,6 +119,25 @@ function rowXml(sheetXml: string, excelRow: number): string {
   const hit = sheetXml.match(new RegExp(`<row r="${excelRow}"[^>]*>[\\s\\S]*?</row>`));
   if (!hit) throw new Error(`sheet XML 里没有第 ${excelRow} 行`);
   return hit[0];
+}
+
+/** 故意造一个畸形页脚实参（绕过类型去够运行时守卫）。
+ *  断言落在**形参**上而不是对象字面量上 —— lint 的 `consistent-type-assertions` 禁的是后者。 */
+function malformed<T>(value: unknown): T {
+  return value as T;
+}
+
+/** 合并区列表 → A1 记法数组（写死数字前先看清模板里到底有什么，别靠注释里的清单）。
+ *  `merges` 在 hucre 的 Sheet 上是可选的，缺省按「没有合并区」的空清单算。 */
+function mergeList(
+  merges: { startRow: number; startCol: number; endRow: number; endCol: number }[] | undefined,
+): string[] {
+  const cell = (row0: number, col0: number) => `${String.fromCharCode(65 + col0)}${row0 + 1}`;
+  return (merges ?? []).map((m) =>
+    m.startRow === m.endRow && m.startCol === m.endCol
+      ? cell(m.startRow, m.startCol)
+      : `${cell(m.startRow, m.startCol)}:${cell(m.endRow, m.endCol)}`,
+  );
 }
 
 function row(i: number) {
@@ -434,22 +461,43 @@ describe('renderDeliveryNoteWorkbook（检具版）', () => {
     }
   });
 
-  it('round-trip 保留 merges（数量与模板一致；writeXlsx 重建会全丢）', async () => {
+  // 下面两条分别守两件事：**清单**（哪几格合并）与 **round-trip 不丢**（渲染前后不变）。
+  // 契约文件头那份「9 处合并」清单写在注释里没人验，两份模板任一份改了合并区而注释没跟上，
+  // 读代码的人就被带偏 —— 所以把清单做成断言（两份模板都跑），注释与断言同源于此。
+  it.each(GAUGE_TEMPLATE_FILES)('两份内置检具模板的合并区清单一致：%s', async (file) => {
     const { openXlsx } = await import('hucre');
-    const tpl = await openXlsx(GAUGE_TEMPLATE);
-    const templateMerges = tpl.sheets[0]!.merges?.length ?? 0;
-    const out = await renderDeliveryNoteWorkbook(
-      GAUGE_TEMPLATE,
-      [{ sheetName: 'S', rows: [] }],
-      GAUGE_FOOTER,
-      G,
-    );
-    // ⚠️ 本条**只守 round-trip 不丢合并区**（渲染前后数量与模板原件相同），**不锁合并区清单**：
-    // 清单是**模板的事**（客户样例转制出来的固定形态），写死会在模板改版时假红。这里的数量
-    // 不是契约 —— 合并区以 `templates/delivery_note_gauge_*.xlsx` 原件为准。
-    expect((await readBack(out)).sheets[0]!.merges).toHaveLength(templateMerges);
-    expect(templateMerges).toBeGreaterThan(0);
+    const tpl = await openXlsx(new Uint8Array(readFileSync(file)));
+    // A1:I1 / G3:H3 / A3:A4 · B3:B4 · C3:C4 · D3:D4 · E3:E4 · F3:F4 / I3:I4
+    expect(mergeList(tpl.sheets[0]!.merges)).toEqual([
+      'A1:I1',
+      'G3:H3',
+      'A3:A4',
+      'B3:B4',
+      'C3:C4',
+      'D3:D4',
+      'E3:E4',
+      'F3:F4',
+      'I3:I4',
+    ]);
   });
+
+  it.each(GAUGE_TEMPLATE_FILES)(
+    'round-trip 保留 merges 且清单逐条不变（两份都验；writeXlsx 重建会全丢）：%s',
+    async (file) => {
+      const { openXlsx } = await import('hucre');
+      const template = new Uint8Array(readFileSync(file));
+      const tpl = await openXlsx(template);
+      const out = await renderDeliveryNoteWorkbook(
+        template,
+        [{ sheetName: 'S', rows: [] }],
+        GAUGE_FOOTER,
+        G,
+      );
+      expect(mergeList((await readBack(out)).sheets[0]!.merges)).toEqual(
+        mergeList(tpl.sheets[0]!.merges),
+      );
+    },
+  );
 
   it('数据列越出整块清空范围 ⇒ 抛中文错误（守卫在动工作簿之前）', async () => {
     // 把清空范围写窄成 A..H：I 列（系统交期）不再被清空 ⇒ 未填满的行会漏出模板原值。
@@ -506,6 +554,26 @@ describe('renderDeliveryNoteWorkbook（检具版）', () => {
       renderDeliveryNoteWorkbook(TEMPLATE, sheetsArg, GAUGE_FOOTER);
     };
     expect(typeof _neverCalled).toBe('function');
+  });
+
+  it('页脚缺字段（判别位对、字段是 undefined）⇒ 抛中文错误，不把 undefined 印到单据上', async () => {
+    // fillTemplate 对内嵌占位符走 String(replacement)：漏一个键就会印出「送货人：undefined」。
+    // 守卫在配套判据之后**再**验必填键，这里绕开类型去够那条运行时断言。
+    await expect(
+      renderDeliveryNoteWorkbook(
+        TEMPLATE,
+        [{ sheetName: 'S', rows: [] }],
+        malformed<PartFooterSpec>({ driverName: undefined, year: '2026', month: '10', date: '08' }),
+      ),
+    ).rejects.toThrow(/driverName 不是字符串（收到 undefined）/);
+    await expect(
+      renderDeliveryNoteWorkbook(
+        GAUGE_TEMPLATE,
+        [{ sheetName: 'S', rows: [] }],
+        malformed<GaugeFooterSpec>({ kind: 'gauge', deliveryDate: undefined }),
+        G,
+      ),
+    ).rejects.toThrow(/deliveryDate 不是字符串（收到 undefined）/);
   });
 
   it('契约与页脚不配套（绕过类型后）⇒ 抛中文错误，不静默渲染半成品', async () => {
