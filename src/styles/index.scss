@@ -107,7 +107,7 @@ a {
 /* 2026-10-17 新增：客户单元格的**两行形态** —— 主行 `customer_path`（后端下发的
    第 2 层到叶子的 ` / ` 拼接）+ 次行 muted 小字 `l1_customer_name`。
 
-   渲染函数在 `src/utils/elTableCell.ts::renderCustomerCell`，被 7 个列定义跨 5 个域共用，
+   渲染函数在 `src/utils/elTableCell.ts::renderCustomerCell`，被多个列定义跨 5 个域共用，
    产出的 VNode 是**纯字符串 class、不带 scoped 标记** ⇒ 样式必须走全局，不能塞进某个
    消费方组件的 scoped CSS（那样其余 6 处会拿到无样式的裸 class）。
 

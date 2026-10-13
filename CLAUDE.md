@@ -109,8 +109,11 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 
 - **`customer_path` 的口径**：第 2 层到叶子的名称用 `" / "` 拼接，**不含 L1**；节点自身即 L1 时等于它自己的 `name`。**必填键、值非 null** —— 客户行解析不出（软删 / `parent_id` 链成环）时后端落**空串**，展示层必须兜底退回单段名。
 - **`parent_customer_name` / `l1_customer_name` 的语义变了（破坏性）**：不再是「直接父名」，而是「**根（L1）客户名**」。字段名还叫 `parent`，读代码时别按名字理解。`api/assembly.ts::enrichAssemblyItem` 仍按客户行的 `parent_name` 填装配件的 `parent_customer_name`（装配件 VO 不返根名），这是已知的不对称。
-- **单据只能挂叶子**：中间层不能当业务单据的客户。**判据是「有没有子节点」，不是「`parent_id !== null`」** —— 后端 `require_leaf_customer` 与前端都统一到这一条（旧口径是两层树的等价写法，深度 ≥ 3 时会把第 3/4 层全放进候选、选中即被拒）。前端的三个纯函数收口在 `src/api/customer.tree.ts`（`buildCustomerTree` / `rootCustomerIdOf` / `leafCustomersOf`），**任何「根客户 / 叶子客户」判定都走它们**，不要就地写 `parent_id !== null` 或「只上溯一层」。
-- **展示位统一走 `src/utils/elTableCell.ts::renderCustomerCell`**（主行 `customer_path` + 次行 L1，7 个调用点跨 5 个域）。送货单**打印预览表刻意不共用**（保持单行并自己渲染 `PrintRow.l2_customer`）—— 它必须与导出到 xlsx 的单格文本逐字一致。
+- **返修域是「值承载变了、键名没变」的那一类特例**：返修行 VO（`prod::batch::vo::RepairBatchListItem`，前端镜像 `api/parts/batch.ts::RepairBatchListItem`）**没有**新增 `customer_path` 键 —— 后端让**已有的 `customer_name` 承载路径**（第 2 层到叶子的 ` / ` 拼接、不含根），`l1_customer_name` 承载根名。**键集没变 ⇒ `.strict()` 不受影响**（不会像别的域那样一改就白屏），但**任何按「`customer_name` 是单段名」写的代码都错了**：`views/repair/RepairReceive.vue` 的「客户」列按 `l1 + " / " + customer_name` 组合，得到的就是全路径（两层树时与旧值逐字相同，深度 ≥ 3 才显出差别）。判据落在「字段的值」而不是「字段名」上，别照别的域去给它补一个 `customer_path` 键 —— 那才会触发 `unrecognized_keys`。
+- **单据只能挂叶子**：中间层不能当业务单据的客户。**判据是「有没有子节点」，不是「`parent_id !== null`」** —— 后端 `require_leaf_customer` 与前端都统一到这一条（旧口径是两层树的等价写法，深度 ≥ 3 时会把第 3/4 层全放进候选、选中即被拒）。前端的四个纯函数收口在 `src/api/customer.tree.ts`（`buildCustomerTree` / `rootCustomerIdOf` / `leafCustomersOf` / `leafCustomersUnder`），**任何「根客户 / 叶子客户」判定都走它们**，不要就地写 `parent_id !== null` 或「只上溯一层」。
+  - **`leafCustomersOf` 与 `leafCustomersUnder` 只差一个作用域**：前者给**全树**的叶子，后者给「所选根那一支子树内」的叶子（入参带 `rootId`，与前者同一份「parent_id → children 索引 + 显式栈 + `seen` 断环 + 按 id 去重」口径）。**「先选一个根、再从它下面选」的下拉一律用后者** —— 写完再按 `root_id` 过滤前者的结果要先拼整棵树（`buildCustomerTree`），贵一个量级，且脏数据口径要多一处同步。现有两处消费方：零件 PDF 批量上传的行内客户列（`usePartBatchPdf.ts::leafCustomerOptions`）、送货单扫码台的**送货分组成员候选**（`views/com/delivery/DeliveryNoteScan.vue::leafCustomerOptions`）。守卫见 `api/__tests__/customerTree.spec.ts` 的 C10 组 + `views/com/delivery/components/__tests__/DeliveryGroupEditor.leafCandidates.spec.ts`。
+  - ⚠️ **送货分组成员候选必须是叶子、不是「L1 的全部后代」**：后端 `validate_group_members` 放宽到「L1 的任意后代」，但零件只挂在叶子上（入单叶子闸门 20104）⇒ 候选里放中间层只会让扫码 GROUP 路由永不命中，**静默**落进默认草稿。
+- **展示位统一走 `src/utils/elTableCell.ts::renderCustomerCell`**（主行 `customer_path` + 次行 L1；消费方跨 5 个域，调用点数随新列定义增长，**别在注释里数它**）。送货单**打印预览表刻意不共用**（保持单行并自己渲染 `PrintRow.l2_customer`）—— 它必须与导出到 xlsx 的单格文本逐字一致。
 - ⚠️ **部署顺序：后端必须先上。** 本批把多个 `customer_path` 加成守门 schema 的**必填键**，反序发布时 `parse` 当场抛 ZodError ⇒ 对应页面数据恒空 / 白屏。**失败发生在 Zod 契约层而不是网络层**，现场常常只看到一句「加载失败」甚至零红色报错。点名的必填键：
 
   | schema | 影响面 |
@@ -125,6 +128,7 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
   | `views/com/delivery/composables/deliveryNoteSchema.ts` | 送货单域 |
   | `views/production/queue/composables/productionQueueSchema.ts` | 生产队列域：`queuePoolItemSchema` / `queueHeldBatchSchema` / `queuePendingBatchSchema` 三条 ⇒ 工序板（候选池 + 工人列）与待下发面板全空 |
   | `views/outsource/composables/outsourceQueueSchema.ts` | 外协看板：`outsourceQueueCandidateSchema` / `outsourceQueueHeldBatchSchema` 两条 ⇒ 单工序看板（候选池 + 公司列）全空 |
+  | `composables/queries/schemas.ts::quotablePartSchema`（`GET /outsource-quotes/quotable-parts`） | 报价一览的**可报价零件 picker 恒空** ——⚠️ 这条的守门点在 **api 层**（`api/outsource.ts` 的 `outsourceQuotablePartListResultSchema.parse`，该端点由 shell 的 `loadLookups()` 裸调、**没有 queryFn 承载**），不按 schema 所在文件找会以为它走 queryFn |
 
   ⚠️ **「反着来」（漏声明）同样是事故，只是没有任何报错**：本批第一轮就把上表最后两行的
   `customer_path` 漏在了 schema 之外 —— Zod 默认 strip 把它静默丢掉、parse 全绿，
@@ -155,12 +159,15 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 | `views/customers/CustomerList.vue` 新建/编辑弹窗「父客户」行 | 可编辑 `el-select`，placeholder `不选 = 一级客户；选了一个一级客户 = 二级`（编辑模式下能改父客户） | 只读 `el-input` + hint `客户层级不可移动；如需调整请删除后在目标父节点下重建。`（编辑模式不再能改父层级，newChild 模式显示完整祖先路径） |
 | `views/customers/CustomerList.vue` 删除确认框后代计数 | `（一级客户「X」仍有 N 个二级子节点，删除将一起拒绝）` | `（客户「X」下仍有 N 个子节点，删除将被拒绝）` |
 | `views/parts/new/composables/usePartBatchPdf.ts` 三处报错 | `以下 N 行未指定分厂（二级客户），请补全后再提交：` / `第 i-j 行（分厂 xxx）：` / `N 个分厂组请求失败` | `以下 N 行未指定客户（单据只能挂在末级部门），请补全后再提交：` / `第 i-j 行（客户 xxx）：` / `N 个客户组请求失败` |
+| `views/com/delivery/components/DeliveryGroupEditor.vue` label / placeholder / hint | `L2 成员` / `选择该一级客户下的 L2 客户（可空）` / `扫码时如果工件的 L2 客户命中这里任一成员，将按 GROUP 路由到本分组对应草稿。` | `分组成员` / `选择该一级客户下的末级部门（可空）` / `扫码时如果工件的末级部门命中这里任一成员，将按 GROUP 路由到本分组对应草稿。` |
+| `views/com/delivery/components/DeliveryGroupPanel.vue` 空态 / 未分组行标题 | `该一级客户下还没有 L2 客户` / `未分组 L2` | `该一级客户下还没有末级部门` / `未分组` |
 
 **本批新增、改前无对应字符串的用户可见文案**（回退它们等于回退行为，不在上面的「改文案」表里，单列在此免得漏看）：
 
 | 位置 | 文案 | 为什么是新增 |
 |---|---|---|
 | `views/parts/new/composables/usePartBatchManual.ts` 提交校验 | `「X」还有下级部门，单据只能挂在末级部门` | 改前**没有**前端这道闸：中间层客户能选中、能提交，由后端返 20104 拒收。回退 = 删掉这段校验（连带 `leafCustomersOf` 那一次判定），不是换个说法。 |
+| `views/com/delivery/DeliveryNoteScan.vue` 送货分组成员候选 `leafCustomerOptions` | 候选 = 所选 L1 **子树内的叶子**（`leafCustomersUnder`） | 这不是文案，是**行为**：改前是「所选 L1 的**直接子**」。后端两条契约都放宽到任意深度了（`list_for_l1` 的成员名 / `ungrouped_customers` 走 `subtree_ids` + `paths_of`；入单侧新增叶子闸门 20104），前端停在「直接子」就是功能死结 —— 零件挂在 L3 叶子上、候选只有 L2（中间层）⇒ ① 面板「未分组」tag 里看得见的 L3 叶子在编辑器里**选不到**；② 扫码入单的 GROUP 路由按「零件所属客户 ∈ 分组成员」判，**永不命中**、静默落进默认草稿。回退 = 把候选换回 `c.parent_id === l1`，那会把这两条一起带回来。 |
 
 ⚠️ **有一处 hint 刻意没跟**：外协发出零件的表头 hint 仍是「只判零件直属客户等值」—— 那个端点的筛选语义确实是等值，不是子树，跟着展示一起改会把筛选语义讲错。
 

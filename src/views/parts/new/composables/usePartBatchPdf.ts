@@ -50,6 +50,7 @@ import {
   type SerializedStandalonePartRow,
 } from '@/views/parts/new/composables/usePartsNewDraft';
 import type { Customer } from '@/api/customer';
+import { leafCustomersUnder } from '@/api/customer.tree';
 import { isPartFileDuplicateError, type PartFileKind } from '@/types/part_file';
 import { parseBidExcel, type BidRow, type ParseResult } from '@/utils/bidExcelParser';
 import { parseHistoricalPriceExcel } from '@/utils/historicalPriceExcelParser';
@@ -357,47 +358,20 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
    * 单据不能挂中间层**（零件 / 装配件只能挂叶子）⇒ 只列直接子会让下拉里能选的值全部
    * 被后端拒（20104），而真正的末级部门一个都选不到。
    *
-   * 遍历用「parent_id → children」索引 + 显式栈，深度不可控也不递归（与
-   * `api/customer.tree.ts::buildCustomerTree` 同一份脏数据口径：成环靠 `seen` 断开，
-   * 不静默丢节点）。「叶子」= 没有子节点的节点，孤儿节点（父不在集合里）走不到本栈
-   * 上（它不在所选根的子树内），与「按子树筛」的口径一致。
-   *
-   * ⚠️ **刻意不复用 `api/customer.tree.ts::leafCustomersOf`**：那个函数给的是**全树**
-   * 的叶子，本处要的是「**所选根的子树内**的叶子」—— 本函数入参就是 `rootId`，作用域
-   * 收窄是它的职责；套 `leafCustomersOf` 之后再按 `root_id` 过滤要先把整棵树拼出来
-   * （`buildCustomerTree`），比直接走一遍栈贵一个量级，而两者产出在这条链路上等价。
-   * 脏数据口径因此是**各写一份**：`seen` 断环只在这里、`buildCustomerTree` 里也有一份，
-   * 两处都要保住「成环不无限循环、不静默丢节点」这个性质（改一处记得看另一处）。
+   * 叶子口径走 `api/customer.tree.ts::leafCustomersUnder`：**「所选根的子树内的叶子」
+   * 这个需求有第二个消费方**（送货单扫码台的分组编辑器成员候选，零件只会挂在 L3/L4
+   * 叶子而分组原先只能选 L2 ⇒ 扫码 GROUP 路由永远不命中），两处各写一遍「parent_id →
+   * children 索引 + 显式栈」的话，重复 id 去重 / `parent_id` 成环这两条脏数据口径迟早
+   * 分叉。`path` 是 `customer_path`（第 2 层到叶子的 ` / ` 拼接、不含 L1 —— L1 已由页面
+   * 顶部的下拉承载），空串兜底退回单段名。
    */
-  const leafCustomerOptions = computed(() => {
-    const rootId = pdfForm.customerL1Id;
-    if (!rootId) return [];
-    const childrenByParent = new Map<string, Customer[]>();
-    const byId = new Map(customers.value.map((c) => [c.id, c]));
-    for (const c of customers.value) {
-      if (c.parent_id === null) continue;
-      const bucket = childrenByParent.get(c.parent_id);
-      if (bucket) bucket.push(c);
-      else childrenByParent.set(c.parent_id, [c]);
-    }
-    const out: Array<{ id: string; name: string; path: string }> = [];
-    const stack: string[] = [rootId];
-    const seen = new Set<string>();
-    while (stack.length > 0) {
-      const id = stack.pop() as string;
-      if (seen.has(id)) continue;
-      seen.add(id);
-      const kids = childrenByParent.get(id);
-      if (!kids || kids.length === 0) {
-        // 「没有子节点」= 叶子。所选根自己就是叶子（该 L1 下没建任何下级）时同样合法。
-        const leaf = byId.get(id);
-        if (leaf) out.push({ id: leaf.id, name: leaf.name, path: leaf.customer_path || leaf.name });
-        continue;
-      }
-      for (const kid of kids) stack.push(kid.id);
-    }
-    return out;
-  });
+  const leafCustomerOptions = computed(() =>
+    leafCustomersUnder(customers.value, pdfForm.customerL1Id).map((c) => ({
+      id: c.id,
+      name: c.name,
+      path: c.customer_path || c.name,
+    })),
+  );
 
   // PDF / Excel 文件列表（el-upload 控件绑定）
   const pdfFiles = ref<UploadFile[]>([]);

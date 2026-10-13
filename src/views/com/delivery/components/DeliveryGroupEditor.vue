@@ -4,7 +4,8 @@
 // props:
 //   - l1Id: 当前选中的一级客户 id（用于编辑器标题 + 提交时的 customer_id）
 //   - initial: 编辑模式下回填的分组；null/undefined 表示新建
-//   - allL2Customers: 当前 L1 下的全部 L2 客户（用于成员多选）
+//   - leafCustomerOptions: 当前 L1 子树内的**叶子**客户（用于成员多选；2026-10-17
+//     客户无限层级改造前是「L1 的直接子 / L2」，见同批次的 DeliveryGroupPanel 注释）
 //
 // emits:
 //   - submit(payload): 用户点确认后触发；payload =
@@ -12,6 +13,8 @@
 //   - cancel(): 用户点取消 / 点 × / 点遮罩时触发
 //
 // 父组件负责调 createDeliveryGroup / updateDeliveryGroup 并处理 ApiError。
+// ⚠️ 成员候选**只可能是叶子**：零件只挂在叶子客户上（后端入单叶子闸门 20104），
+// 中间层进了分组只会让扫码 GROUP 路由永不命中。
 
 import { computed, ref, watch } from 'vue';
 import { ElMessage, ElForm, type FormInstance } from 'element-plus';
@@ -22,7 +25,7 @@ import type { DeliveryGroupData } from '../composables/deliveryGroupSchema';
 const props = defineProps<{
   l1Id: string;
   initial: DeliveryGroupData | null;
-  allL2Customers: Customer[];
+  leafCustomerOptions: Customer[];
 }>();
 
 const emit = defineEmits<{
@@ -114,18 +117,18 @@ function onClosed(): void {
           show-word-limit
         />
       </el-form-item>
-      <el-form-item label="L2 成员" prop="member_customer_ids">
+      <el-form-item label="分组成员" prop="member_customer_ids">
         <el-select
           v-model="form.member_customer_ids"
           multiple
           filterable
-          placeholder="选择该一级客户下的 L2 客户（可空）"
+          placeholder="选择该一级客户下的末级部门（可空）"
           style="width: 100%"
         >
-          <el-option v-for="c in allL2Customers" :key="c.id" :label="c.name" :value="c.id" />
+          <el-option v-for="c in leafCustomerOptions" :key="c.id" :label="c.name" :value="c.id" />
         </el-select>
         <p class="form-hint">
-          扫码时如果工件的 L2 客户命中这里任一成员，将按 GROUP 路由到本分组对应草稿。
+          扫码时如果工件的末级部门命中这里任一成员，将按 GROUP 路由到本分组对应草稿。
         </p>
       </el-form-item>
     </el-form>

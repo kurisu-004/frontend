@@ -47,12 +47,15 @@ export interface InspectionQueueItem {
   /** 2026-10-17 新增（客户无限层级改造）：第 2 层到叶子的名称用 ` / ` 拼接，**不含 L1**；
    *  零件所属客户自身即 L1 时等于它自己的名字。客户软删 / 父链成环时后端落**空串**
    *  （不是 null），展示层必须兜底（`utils/elTableCell.ts::renderCustomerCell`）。
-   *  **键必填**（少键 parse 抛 —— 本行 schema 是 `.strict()` 的 14 键白名单）、值可空：
-   *  后端 `InspectionQueueItemOut.customer_path` 是必填 `String`（解析不出客户行时落
-   *  空串），本行类型与 `inspectionQueueListItemSchema` 逐字保持「键必填 / 值 nullable」
-   *  这个组合 —— 可空那一档是给「未升级的后端在这条 VO 上仍是 `Option<String>`」留的，
-   *  收窄会让部署窗口内的真实响应整页炸掉。行类型与 schema 是**双声明**，两处都要改
-   *  （见下方分页信封注释）。 */
+   *  **键必填**（少键 parse 抛 —— 本行 schema 是 `.strict()` 的 14 键白名单）：后端
+   *  `InspectionQueueItemOut.customer_path` 是 `String`（**本批新增的键**，旧后端整个
+   *  不返它），解析不出客户行时落空串 ⇒ 值恒非 null。
+   *
+   *  ⚠️ 声明成 `| null` / `.nullable()` **不提供任何部署窗口保护**，别把它当成保护读：
+   *  `.nullable()` 只放宽「值可以是 null」，不宽容「键不存在」—— 挡住旧后端的是**键必填**
+   *  这一条（两种声明在缺键时都抛）。留着 nullable 纯粹是为了与同 VO 其它
+   *  `string | null` 字段的形状对齐，代价为零；真要收紧成 `z.string()` 也不会更安全。
+   *  行类型与 schema 是**双声明**，两处都要改（见下方分页信封注释）。 */
   customer_path: string | null;
 }
 

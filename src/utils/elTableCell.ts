@@ -13,9 +13,10 @@
 //     不 import 任何 `views/` 或 `api/` 的类型**。客户域的字段名映射（`l1_customer_name`
 //     vs `parent_customer_name` vs 送货单的 L1 挂在 `customer_name` 上）由各列定义在自己
 //     那边做 —— 那些映射是真的逐域不同，硬塞进本函数反而会造出 `utils/ → views/` 反向依赖；
-//   - **多域复用**：零件一览 / 待品检 / 待编程 / 外协报价一览 / 外协发出零件 /
-//     送货单一览 / 送货单详情行项，共 **7 个调用点、跨 5 个域**（cnc / inspection /
-//     outsource / parts / com-delivery），渲染规则逐字同一份。
+//   - **多域复用**：零件一览 / 待品检（队列 + 扫码树）/ 待编程 / 外协报价一览 /
+//     外协发出零件 / 送货单一览 / 送货单详情行项，**跨 5 个域**（cnc / inspection /
+//     outsource / parts / com-delivery），渲染规则逐字同一份。调用点数会随新列定义增长，
+//     这里刻意不写数字（写了就一定会在某次加列定义后过期）。
 //     ⚠️ **送货单打印预览不在其中**：那张表是「打印成品长什么样」的预览，必须与导出到
 //     xlsx 的单格文本逐字一致，所以刻意保持单行并自己渲染 `PrintRow.l2_customer`
 //     （见 `deliveryNotePrintColumnDefs.ts`），不共用本渲染器。

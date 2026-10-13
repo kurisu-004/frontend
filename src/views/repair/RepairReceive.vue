@@ -115,8 +115,15 @@ const columnDefs: ColumnDef[] = [
       const l1 = r.l1_customer_name?.trim() ?? '';
       const l2 = r.customer_name?.trim() ?? '';
       // 2026-10-10：本列原先读 `PartItem.customer_path`，那是后端从未返过的字段 ⇒
-      // 「客户」列在现场恒显示「—」。返修两个端点的行 VO（`RepairBatchListItem`）
-      // 真的带客户两级名，改按 `一级 / 二级` 组合展示（两者相等时只显示一个）。
+      // 「客户」列在现场恒显示「—」。改读返修两条端点的行 VO（`RepairBatchListItem`）
+      // 真的带客户这两个键，改按「根名 + 路径」组合展示（两者相等时只显示一个）。
+      //
+      // 2026-10-17（客户无限层级改造）：⚠️ **`customer_name` 的值承载变了、键名没变** ——
+      // 后端没有给这条 VO 新增 `customer_path` 键，而是让 `customer_name` 承载
+      // `customer_path`（第 2 层到叶子、不含 L1），`l1_customer_name` 承载根名 ⇒ 本列
+      // 组合出来就是全路径（两层树时与旧值逐字相同，深度 ≥ 3 才显出差别）。键集未变
+      // ⇒ 本行 schema 的 `.strict()` 不受影响，但也**别照别的域给它补一个
+      // `customer_path` 键** —— 那才会触发 `unrecognized_keys` 让整页白屏。
       const text = l1 && l2 ? (l1 === l2 ? l1 : `${l1} / ${l2}`) : l1 || l2;
       return text ? h('span', null, text) : h('span', { class: 'muted' }, '—');
     },

@@ -9,7 +9,7 @@
 // 字段集一律以 backend-rust 的 VO 为准（`src/modules/part/vo/part.rs`、
 // `src/modules/prod/process_chain/vo/process_chain.rs`），不是以「前端以前声明了什么」
 // 为准 —— 前端那份 `PartItem` 曾经是三个不同后端 VO 的联合类型，声明了十几个后端
-// 一个都不返的字段（customer_path / current_holder_display / location / batch_no …），
+// 一个都不返的字段（current_holder_display / location / batch_no …），
 // 消费侧据此渲染出的界面恒为空或恒为兜底文案。这类「字段是假的」只能靠
 // 「以 VO 为准的 schema」当场炸出来，靠人工读类型看不出来。
 //
@@ -115,7 +115,7 @@ export const partDetailSchema = z
     /** 2026-10-17 新增（客户无限层级改造）：第 2 层到叶子的名称用 ` / ` 拼接、**不含 L1**；
      *  工单所属客户自身即 L1 时等于它自己的名字。
      *
-     *  ⚠️ **部署顺序：后端必须先上。** 本 schema 是 `.strict()` 且键集合恰为 28 个 ——
+     *  ⚠️ **部署顺序：后端必须先上。** 本 schema 是 `.strict()` 且键集合恰为 29 个 ——
      *  把这个键声明成必填（值可空）之后，后端旧版本不返它 ⇒ parse 抛「缺 key」⇒ **本页
      *  详情 query 整条进 error**（主卡空白 + 一条 ElMessage.error），与「后端加字段触发
      *  `unrecognized_keys`」是同一个失败模式、同一条注意事项（见文件头「部署顺序」段）。

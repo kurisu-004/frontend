@@ -12,7 +12,7 @@
 // 之后两层拼法必然缺层 —— 第 3 层往下的节点会**从树上消失**（既不在 roots 也不在
 // 任何 root 的 children 里），表现为「按某个车间筛客户时筛选器里选不到它」。
 //
-// 三个函数都是纯函数、无状态、可单测；脏数据（孤儿 / 环 / 重复 id）一律
+// 四个函数都是纯函数、无状态、可单测；脏数据（孤儿 / 环 / 重复 id）一律
 // **不静默丢弃**：能挂上树的挂虚拟根，挂了两次的按首条去重。
 
 import type { Customer } from './customer';
@@ -162,4 +162,54 @@ export function leafCustomersOf(items: readonly Customer[]): Customer[] {
   const unique = dedupeById(items);
   const parentIds = new Set(unique.map((c) => c.parent_id).filter((p): p is string => p !== null));
   return unique.filter((c) => !parentIds.has(c.id));
+}
+
+/** `rootId` 这一支子树内的**叶子**节点（`leafCustomersOf` 的作用域收窄版）。
+ *
+ *  与 `leafCustomersOf` 的区别只有一条：后者给的是**全树**的叶子，本函数只给
+ *  「所选根往下」那一支。两个消费方的作用域都天生是这一支 ——
+ *  零件 PDF 批量上传的行内客户列（`views/parts/new/composables/usePartBatchPdf.ts`
+ *  的 `leafCustomerOptions`）、送货单扫码台的分组编辑器候选
+ *  （`views/com/delivery/DeliveryNoteScan.vue` 的 `leafCustomerOptions`）。套
+ *  `leafCustomersOf` 再按 `root_id` 过滤要先把整棵树拼出来（`buildCustomerTree`），
+ *  比直接走一遍栈贵一个量级；而**两处各写一份遍历**更糟 —— 脏数据口径（重复 id、
+ *  `parent_id` 成环）迟早分叉，所以统一收口在这里。
+ *
+ *  「叶子」= 没有子节点的节点；**所选根自己**若是叶子同样算（该 L1 下没建任何下级时，
+ *  单据挂它合法）。遍历是「parent_id → children」索引 + 显式栈，与 `buildCustomerTree`
+ *  同一份脏数据口径：先按 id 去重（`dedupeById`，保留首条）、成环靠 `seen` 断开、
+ *  不静默丢节点。**孤儿**（父 id 不在集合里）不会出现在输出里 —— 它不是所选根的后代，
+ *  这与「按子树筛」的口径一致（`buildCustomerTree` 里它是虚拟根下的另一棵树）。
+ *
+ *  输出**顺序**是显式栈的出栈序（同分支配 LIFO），不是 wire 顺序 —— 调用方要么按 id
+ *  排序、要么只当「候选集合」用，别拿它当稳定排序的契约。 */
+export function leafCustomersUnder(items: readonly Customer[], rootId: string | null): Customer[] {
+  if (!rootId) return [];
+  const unique = dedupeById(items);
+  const byId = new Map(unique.map((c) => [c.id, c]));
+  // rootId 不在集合里（未选客户 / 客户已软删）⇒ 没有子树可言，返回空候选
+  if (!byId.has(rootId)) return [];
+  const childrenByParent = new Map<string, Customer[]>();
+  for (const c of unique) {
+    if (c.parent_id === null) continue;
+    const bucket = childrenByParent.get(c.parent_id);
+    if (bucket) bucket.push(c);
+    else childrenByParent.set(c.parent_id, [c]);
+  }
+  const out: Customer[] = [];
+  const stack: string[] = [rootId];
+  const seen = new Set<string>();
+  while (stack.length > 0) {
+    const id = stack.pop() as string;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const kids = childrenByParent.get(id);
+    if (!kids || kids.length === 0) {
+      const leaf = byId.get(id);
+      if (leaf) out.push(leaf);
+      continue;
+    }
+    for (const kid of kids) stack.push(kid.id);
+  }
+  return out;
 }

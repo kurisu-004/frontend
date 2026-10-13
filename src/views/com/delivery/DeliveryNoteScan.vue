@@ -27,6 +27,7 @@ import { ElMessage, ElTable } from 'element-plus';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
 import { useDeliveryScanState } from './composables/useDeliveryScanState';
 import type { Customer } from '@/api/customer';
+import { leafCustomersUnder } from '@/api/customer.tree';
 // 客户全集走共享 query（CustomerList 写后失效自动 refetch）。
 import { useCustomersQuery } from '@/composables/queries/useCustomersQuery';
 import {
@@ -71,11 +72,29 @@ const allCustomers = computed<Customer[]>(() => customersData.value?.items ?? []
 const rootCustomers = computed<Customer[]>(() =>
   allCustomers.value.filter((c) => c.parent_id === null),
 );
-/** 当前 L1 下的 L2 客户全集（分组编辑器用）。 */
-const allL2Customers = computed<Customer[]>(() => {
-  if (!scanState.l1CustomerId.value) return [];
-  return allCustomers.value.filter((c) => c.parent_id === scanState.l1CustomerId.value);
-});
+/**
+ * 当前 L1 子树内的**叶子客户**全集（送货分组编辑器的成员候选）。
+ *
+ * 2026-10-17（客户无限层级改造）：改前是「该 L1 的**直接**子」（`parent_id ===
+ * l1CustomerId`）。两处后端契约都跟着放宽到任意深度了 ——
+ *   1. `GET /com/delivery/group?customer_id=` 的成员显示名与 `ungrouped_customers`
+ *      候选集由「取直接子」改成 `subtree_ids` + `paths_of`，`member_customer_ids` 的
+ *      校验放宽成「L1 的**任意后代**」；
+ *   2. 入单侧新增**叶子闸门**（20104，共享 `require_leaf_customer`）⇒ 零件只可能挂在
+ *      叶子客户上。
+ * 前端停在「直接子」就是一个功能死结：面板按后端回的 `ungrouped_customers` 渲染
+ * 「未分组」tag，里面会出现 L3/L4 叶子，但点「编辑」进 `DeliveryGroupEditor` 时
+ * `el-option` 只列得到 L2（中间层）⇒ **看得到的成员加不进分组**；同时 GROUP 路由按
+ * 「零件所属客户 ∈ 分组成员」判，零件在 L3、分组里只有 L2 ⇒ 永远不命中，静默落进默认
+ * 草稿。两层树（当前生产数据）无感，一旦按本功能建出 L3 就是死路。
+ *
+ * 口径与零件 PDF 批量上传的行内客户列（`usePartBatchPdf.ts::leafCustomerOptions`）
+ * 共用 `api/customer.tree.ts::leafCustomersUnder`（同一份「所选根子树内的叶子」实现、
+ * 同一份脏数据处置）。
+ */
+const leafCustomerOptions = computed<Customer[]>(() =>
+  leafCustomersUnder(allCustomers.value, scanState.l1CustomerId.value),
+);
 // query 错误状态 → ElMessage（沿 useCustomerTree 同款 watch 桥接）。
 watch(
   () => customersError.value,
@@ -296,7 +315,7 @@ onBeforeUnmount(() => {
       :loading="groupsLoading"
       :can-create="!!scanState.l1CustomerId.value"
       :l1-id="scanState.l1CustomerId.value"
-      :all-l2-customers="allL2Customers"
+      :leaf-customer-options="leafCustomerOptions"
       @create="onGroupCreate"
       @update="onGroupUpdate"
       @delete="onGroupDelete"

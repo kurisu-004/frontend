@@ -19,11 +19,13 @@
 //   - C7：rootCustomerIdOf 多级上溯 / 未知 id / null 入参
 //   - C8：leafCustomersOf —— 没有子节点的节点；孤儿若无人引用即算叶子
 //   - C9：customer_path 逐字透传（工具不改写 wire 字段）
+//   - C10：leafCustomersUnder —— 所选根子树内的叶子（三层树是主场景：零件只挂叶子）
 
 import { describe, expect, it } from 'vitest';
 import {
   buildCustomerTree,
   leafCustomersOf,
+  leafCustomersUnder,
   rootCustomerIdOf,
   type CustomerTreeNode,
 } from '../customer.tree';
@@ -242,5 +244,77 @@ describe('leafCustomersOf（2026-10-17）', () => {
 
   it('C8c：空数组 → []', () => {
     expect(leafCustomersOf([])).toEqual([]);
+  });
+});
+
+describe('leafCustomersUnder（2026-10-17：所选根子树内的叶子）', () => {
+  /** 三层树（另加一个同级根，用来守「不泄漏别的根的子树」）：
+   *  华强 / 终端BG / 手机部 / 影像组、华强 / 终端BG / 手机部 / 光学组、
+   *  华强 / 传真BG / 冲压组、以及另一个根 民信 / 分厂A / 车间A1。 */
+  const threeLevels = [
+    c('l1', '华强', null),
+    c('l2a', '终端BG', 'l1'),
+    c('l3a1', '手机部', 'l2a'),
+    c('l4a', '影像组', 'l3a1'),
+    c('l4b', '光学组', 'l3a1'),
+    c('l2b', '传真BG', 'l1'),
+    c('l3b', '冲压组', 'l2b'),
+    c('x1', '民信', null),
+    c('x2', '分厂A', 'x1'),
+    c('x3', '车间A1', 'x2'),
+  ];
+
+  it('C10：只返回该根子树内的叶子 —— 中间层与根本身都不在（单据只能挂叶子）', () => {
+    const leaves = leafCustomersUnder(threeLevels, 'l1');
+    expect(leaves.map((x) => x.id).sort()).toEqual(['l3b', 'l4a', 'l4b']);
+    // 根 l1 / 中间层 l2a / 中间层 l3a / 另一个根的整条分支一个都不在
+    for (const mid of ['l1', 'l2a', 'l3a', 'l2b', 'x1', 'x2', 'x3']) {
+      expect(leaves.some((x) => x.id === mid)).toBe(false);
+    }
+  });
+
+  it('C10b：选更深的一层当根时，候选收窄到它自己的子树（作用域按 root 过滤）', () => {
+    expect(
+      leafCustomersUnder(threeLevels, 'l2a')
+        .map((x) => x.id)
+        .sort(),
+    ).toEqual(['l4a', 'l4b']);
+    expect(
+      leafCustomersUnder(threeLevels, 'l3a1')
+        .map((x) => x.id)
+        .sort(),
+    ).toEqual(['l4a', 'l4b']);
+    // 叶子自己当根（该节点下没建任何下级）⇒ 它自己就是候选
+    expect(leafCustomersUnder(threeLevels, 'l4a').map((x) => x.id)).toEqual(['l4a']);
+  });
+
+  it('C10c：null / 未知 rootId → []（没选客户时不泄漏上一次所选根的子树）', () => {
+    expect(leafCustomersUnder(threeLevels, null)).toEqual([]);
+    expect(leafCustomersUnder(threeLevels, 'nope')).toEqual([]);
+    expect(leafCustomersUnder([], 'l1')).toEqual([]);
+  });
+
+  it('C10d：脏数据 —— 重复 id 去重、孤儿不混进候选、成环靠 seen 断开不死循环', () => {
+    const dirty = [
+      c('r', '根', null),
+      c('a', 'A', 'r'),
+      c('b', 'B', 'a'),
+      c('kid', '挂在 A 下', 'a'),
+      c('dup', '第一个名字', 'r'),
+      c('dup', '第二个名字', 'r'),
+      c('orphan', '孤儿', '不存在的父'),
+    ];
+    const leaves = leafCustomersUnder(dirty, 'r');
+    // 叶子判据是「有没有子节点」：`a` 有子节点（b / kid）所以不是叶子；`b` 下面什么都没有
+    // ⇒ 它是叶子；`dup` 去重后保留首条；孤儿不在 r 的子树内。
+    expect(leaves.map((x) => x.id).sort()).toEqual(['b', 'dup', 'kid']);
+    expect(leaves.find((x) => x.id === 'dup')?.name).toBe('第一个名字');
+    // 孤儿不是 r 的后代（它在整棵树上是另一个虚拟根下的顶层）
+    expect(leaves.some((x) => x.id === 'orphan')).toBe(false);
+
+    // 成环：a2 ⇄ b2，且 a2 下面还挂了一个叶子。选 a2 当根时向下走会回到 a2，
+    // `seen` 在这里断开 —— 没有它就是一次死循环（测试直接挂死）。
+    const cyclic = [c('a2', 'A2', 'b2'), c('b2', 'B2', 'a2'), c('kid2', '挂 A2 下', 'a2')];
+    expect(leafCustomersUnder(cyclic, 'a2').map((x) => x.id)).toEqual(['kid2']);
   });
 });

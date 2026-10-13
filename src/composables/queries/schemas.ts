@@ -758,7 +758,12 @@ export const repairBatchListItemSchema = z
     updated_at: z.string(),
     // 客户解析段
     customer_id: z.string(),
+    /** ⚠️ 2026-10-17 客户无限层级改造后**值的承载变了、键名没变**：这里装的是
+     *  `customer_path`（第 2 层到叶子、不含 L1），不是单段名 —— 后端没有给这条 VO 新增
+     *  独立的 `customer_path` 键（新增会撞本 schema 的 `.strict()` ⇒ 整页白屏）。
+     *  展示侧 `views/repair/RepairReceive.vue` 按「根名 + 本值」组合成全路径。 */
     customer_name: z.string().nullable(),
+    /** 根（L1）客户名；⚠️ 同样由「直接父名」改成「**根名**」。 */
     l1_customer_name: z.string().nullable(),
   })
   .strict();
