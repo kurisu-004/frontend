@@ -195,9 +195,12 @@ export async function recallNote(noteId: string, payload: DeliveryNoteVersionPay
 
 /** 一键送货（`SUBMITTED → PICKED_UP`）。
  *
- *  ⚠️ 入参**只剩 version**：司机改由 `POST /{id}/driver` 预先指定，服务端从单据上读
- *  `driver_worker_id`；为 None 返 21409，并**重跑 `validate_driver`**（司机可能在
- *  打印到送货之间被停用 / 改工种）。 */
+ *  ⚠️ 入参**只剩 version**：司机由服务端从单据上读 `driver_worker_id`（本端不知道
+ *  driver_worker_id，VO 只给名字），为 None 返 21409，并**重跑 `validate_driver`**
+ *  （司机可能在打印到送货之间被停用 / 改工种）。
+ *
+ *  ⚠️ **调用方往往紧邻着先发一条 `setNoteDriver`**（送货确认框里现选司机）：那条**推进
+ *  version**，所以本端必须吃它响应里返回的新 `version`，沿用开框时那份必 409。 */
 export async function pickup(noteId: string, payload: DeliveryNoteVersionPayload) {
   const resp = await api.post<DeliveryNoteItemData>(
     `/com/delivery/note/${encodeURIComponent(noteId)}/pickup`,

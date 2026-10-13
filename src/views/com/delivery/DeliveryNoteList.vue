@@ -208,13 +208,16 @@ onBeforeUnmount(() => {
     </el-card>
 
     <!-- 行内「送货」的落点：确认 + 指定司机合并在这一个对话框里（2026-10-16）。
-         对话框态在 store.actions（局部 import，不进 main.ts 全局注册）。 -->
+         对话框态在 store.actions（局部 import，不进 main.ts 全局注册）。
+         ⚠️ 清单据快照挂 `:closed`（关闭过渡结束后）而不是 `@update:model-value`：leave
+         过渡期间内容仍可见，此刻清会让标题闪成「一键送货 — 」（见 store 的同名注释）。 -->
     <DeliveryDriverPickerDialog
       :model-value="store.actions.deliverDialogOpen"
       :note-no="store.actions.deliverTarget?.delivery_note_no ?? ''"
       :part-count="store.actions.deliverTarget?.part_count ?? 0"
       :driver-worker-name="store.actions.deliverTarget?.driver_worker_name ?? null"
       @update:model-value="store.actions.onDeliverDialogClose"
+      @closed="store.actions.onDeliverDialogClosed"
       @confirm="store.actions.onDeliverConfirm"
     />
   </div>

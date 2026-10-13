@@ -10,7 +10,9 @@
 //   - 输入态 / 生效态拆分（打字 0 请求，onSearch 才提交且 page 归 1）；
 //   - 前缀失效（写后一把刷掉本域全部键）；
 //   - 一键送货的司机流程（2026-10-16）：选司机 ⇒ driver POST 先、pickup 后且用 driver
-//     响应里的**新** version；沿用本单司机 ⇒ 只发 pickup 一条；零 ElMessageBox。
+//     响应里的**新** version；沿用本单司机 ⇒ 只发 pickup 一条；零 ElMessageBox；
+//     失败路径也失效本域（driver 成功 + pickup 失败 ⇒ 本端 version / 司机名已过期）。
+//   - 对话框快照的清理时机：关闭那一刻**不清**（leave 过渡期间回显还在用），等 `closed`。
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { createApp, nextTick } from 'vue';
@@ -324,6 +326,8 @@ describe('onDeliver 一键送货：司机流程', () => {
     // ⚠️ 这里是整条链最容易写错的一格：4 来自 driver 响应，不是行上的 3。
     expect(apiPostMock.mock.calls[1]![1]).toEqual({ version: 4 });
     expect(store.actions.deliverDialogOpen).toBe(false);
+    // 目标快照已清：onDeliverConfirm 后面紧跟一次 closed（视图挂 `:closed`）。
+    store.actions.onDeliverDialogClosed();
     expect(store.actions.deliverTarget).toBeNull();
     expect(store.actions.isDelivering('N1')).toBe(false);
     expect(ElMessage.error).not.toHaveBeenCalled();
@@ -360,12 +364,69 @@ describe('onDeliver 一键送货：司机流程', () => {
     expect(store.actions.isDelivering('N1')).toBe(false);
   });
 
-  it('关闭对话框即丢掉 target 快照（下次 onDeliver 重新取行上的 version）', async () => {
+  // ⚠️ 「两条 POST 串一步」独有的失败态：driver 已落库（version 3→4、司机已改绑）而
+  // pickup 失败。此时列表缓存里的 version 3 与旧司机名**都是过期的**，而本页没有 WS
+  // 失效通道、又是 refetchOnWindowFocus:false ⇒ 不失效的话用户再点一次「送货」必然
+  // 再吃一次 409。把 onError 里的失效删掉时本条会红。
+  it('driver 成功 + pickup 失败 → 失效本域（本端 version 已陈旧，否则重试必 409）', async () => {
+    const store = boot();
+    store.query.restoreState();
+    await settle();
+    apiPostMock.mockImplementation(async (url: string) => {
+      if (String(url).endsWith('/driver')) return { data: noteRow({ version: 4 }) };
+      throw new Error('版本已过期，请刷新');
+    });
+    const invalidations: unknown[] = [];
+    const spy = vi
+      .spyOn(queryClient, 'invalidateQueries')
+      .mockImplementation(async (filters: unknown) => {
+        invalidations.push(filters);
+        return Promise.resolve();
+      });
+
+    store.actions.onDeliver(noteRow());
+    await store.actions.onDeliverConfirm('W2');
+    await settle();
+
+    expect(deliverPostUrls()).toEqual([
+      '/com/delivery/note/N1/driver',
+      '/com/delivery/note/N1/pickup',
+    ]);
+    expect(invalidations).toContainEqual({ queryKey: qk.deliveryNotesPrefix });
+    expect(ElMessage.error).toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('关闭过渡结束（closed）之前 target 快照仍在（否则回显闪成「一键送货 — 」/「0 条」）', async () => {
+    const store = boot();
+    store.query.restoreState();
+    await settle();
+    apiPostMock.mockImplementation(async (url: string) => {
+      if (String(url).endsWith('/driver')) return { data: noteRow({ version: 4 }) };
+      return { data: null };
+    });
+
+    store.actions.onDeliver(noteRow());
+    // 不 await：confirm 第一行就把对话框置为关闭，而 close 走 leave 过渡（内容仍在
+    // DOM 里可见约 300ms）⇒ 此刻 target 必须还在，否则标题 / 正文闪成空值。
+    void store.actions.onDeliverConfirm('W2');
+    expect(store.actions.deliverDialogOpen).toBe(false);
+    expect(store.actions.deliverTarget?.delivery_note_no).toBe('DN-001');
+    expect(store.actions.deliverTarget?.part_count).toBe(2);
+
+    store.actions.onDeliverDialogClosed();
+    expect(store.actions.deliverTarget).toBeNull();
+  });
+
+  it('关闭对话框（视图的 :closed 回调）才丢 target 快照，下次 onDeliver 重新取行上的 version', async () => {
     const store = boot();
     store.query.restoreState();
     await settle();
     store.actions.onDeliver(noteRow());
     store.actions.onDeliverDialogClose(false);
+    // 关闭那一刻只是开始 leave 过渡，快照仍在（上面那条用例守的就是这个窗口）。
+    expect(store.actions.deliverTarget).not.toBeNull();
+    store.actions.onDeliverDialogClosed();
     expect(store.actions.deliverTarget).toBeNull();
     // 对话框关着时 confirm 是空操作（不会对着上一张单子发请求）
     apiPostMock.mockClear();

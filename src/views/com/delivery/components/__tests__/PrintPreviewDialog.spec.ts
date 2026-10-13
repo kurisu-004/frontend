@@ -15,8 +15,9 @@
 // `deliveryNotePartRows.spec.ts`），所以本文件不再有标签模式的用例。
 //
 // ⚠️ 两条「导出」闸门用例守的是**对话框内**的闸门，与入口可见性无关：详情页 / 草稿卡
-// 的按钮一律可见（canPrint 只看角色 + 行项数）。司机**不再**由本对话框兜底 ——
-// 那是「一键送货」确认对话框（`DeliveryDriverPickerDialog`）的职责，见该组件的 spec。
+// 的按钮一律可见（canPrint 只看权限点 `delivery_note.print` + 行项数，司机已不参与）。
+// 指定司机**不由本对话框兜底** —— 那是「一键送货」确认对话框（`DeliveryDriverPickerDialog`）
+// 的职责，见该组件的 spec。
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { mount, type VueWrapper } from '@vue/test-utils';
@@ -494,7 +495,8 @@ describe('PrintPreviewDialog 司机绑定时机', () => {
     await uploadFile(w, builtinFile());
     await selectDriver(w, 'W2');
     expect(driverPosts()).toHaveLength(0);
-    // 选完之后「导出」可点（司机闸门在对话框内被满足）
+    // 「导出」只 gate 模板与行项，与司机无关（2026-10-16 司机闸门已摘）——选不选司机都
+    // 可点，这条只顺带确认「选完不影响导出可用性」。
     expect(exportDisabled(w)).toBe(false);
   });
 

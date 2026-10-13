@@ -94,9 +94,9 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 
 ### 送货单打印模板：两套版式与司机流程（2026-10-16 新增检具版）
 
-- **模板契约**在 `views/com/delivery/utils/deliveryNoteTemplateContract.ts`，两套契约用 `kind` 判别（`'part'` 零件版 / `'gauge'` 检具版）；`assertTemplateMatches` / `renderDeliveryNoteWorkbook` 分别以第 2 / 第 4 参吃契约，**默认零件版** ⇒ 打印对话框当前零改动。列位 / 行区间 / 页脚占位符位置全部写死，**不做列位自适应**。
+- **模板契约**在 `views/com/delivery/utils/deliveryNoteTemplateContract.ts`，两套契约用 `kind` 判别（`'part'` 零件版 / `'gauge'` 检具版）；`assertTemplateMatches` / `renderDeliveryNoteWorkbook` 分别以第 2 / 第 4 参吃契约，**默认参数是零件版** ⇒ 既有的三参 / 单参调用点（打印对话框）无需为检具版改动任何一行，本轮在对话框里只摘掉了导出按钮的司机闸门。列位 / 行区间 / 页脚占位符位置全部写死，**不做列位自适应**。
 - **检具版**（`templates/delivery_note_gauge_bailuda.xlsx` / `templates/delivery_note_gauge_xingnan.xlsx`，百路达 / 杏南各一份）：两行表头 row3-4、数据区 **row5..29（25 行）× A..I**、右上 I2 `{{delivery_date}}`（导出当天，`YYYY年M月D日`）；I 列 `{{system_delivery_date}}` 渲染成 `M月D日`。C「申请部门/人」（客户结构改造后再定）、G「新制/返修」、H「NG/OK/校验备注」（客户约定送货厂家手填）**不写占位符**，渲染时清空留白。
-- **司机**：打印**不再强制**指定司机（导出只 gate 模板与行项；对话框里的司机下拉保留，选了仍随导出落库）。指定司机的强制点是**一键送货** —— 在送货确认对话框里选；选了先 `POST /{id}/driver` 再 `POST /{id}/pickup`（driver POST 推进 version，pickup **必须**用返回体里的新 version，否则 409）；单据上已有司机时可沿用、不重发 driver。
+- **司机**：打印**不再强制**指定司机（导出只 gate 模板与行项；对话框里的司机下拉保留，选了仍随导出落库）。指定司机的强制点是**一键送货** —— 在送货确认对话框里选；选了先 `POST /{id}/driver` 再 `POST /{id}/pickup`（driver POST 推进 version，pickup **必须**用返回体里的新 version，否则 409）；单据上已有司机时可沿用、不重发 driver。**失败路径也失效本域** —— 「两条 POST 串一步」会出现 driver 成功而 pickup 失败（409 OCC / 21409 / 网络），此时本端缓存里的 version 与司机名都已过期，不刷就必然再吃一次 409（同「TanStack Query」一节报工台那两条 mutation 的 `onError` 失效）。
 
 ### 目录归位
 

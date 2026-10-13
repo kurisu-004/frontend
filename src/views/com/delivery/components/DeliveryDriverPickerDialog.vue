@@ -15,6 +15,9 @@
   本组件只负责「选不选、选谁」，不碰任何写端点。
 
   司机候选取域内 `useDeliveryDriversQuery`（常量键，跨弹窗复用同一份缓存）。
+
+  `closed`（el-dialog 关闭过渡**结束后**才有的那一个）转抛给调用方清单据快照：leave 过渡
+  期间对话框内容仍在 DOM 里可见，此刻清掉单号 / 条数会让标题闪成「一键送货 — 」。
 -->
 <template>
   <el-dialog
@@ -24,6 +27,7 @@
     :close-on-click-modal="false"
     append-to-body
     @update:model-value="(v: boolean) => emit('update:modelValue', v)"
+    @closed="emit('closed')"
   >
     <div class="deliver-hint">
       一键送货 {{ noteNo }}（{{ partCount }} 条）？批次将全部置为已送货。
@@ -83,6 +87,9 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:modelValue': [v: boolean];
+  /** 关闭过渡**结束**后才发（el-dialog 的 closed）：调用方用它清单据快照 ——
+   *  在 leave 过渡期间对话框内容仍在 DOM 里可见，此刻清快照会让标题闪成「一键送货 — 」。 */
+  closed: [];
   /** 确认送货：driverId 非空 = 本次要改绑的司机；**空串 = 沿用本单司机**。 */
   confirm: [driverId: string];
 }>();

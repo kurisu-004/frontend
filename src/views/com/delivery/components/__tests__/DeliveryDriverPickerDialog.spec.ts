@@ -9,6 +9,8 @@
 //   2. 单据**已有**司机名 → 回显「本单已指定：X」且允许不选直接确认；
 //   3. confirm emit 的 driverId 语义：非空 = 本次要改绑的司机 id；**空串 = 沿用本单司机**
 //      （调用方据此决定要不要先发 POST /{id}/driver）。
+// 另钉两条关闭语义：「取消」与右上角 × 都不发 confirm 且清掉本地选中态；el-dialog 的
+// `closed` 透传给调用方（单据快照在那之后才清，见 store 的 onDeliverDialogClosed）。
 //
 // 组件自身零写端点：两条 POST 的编排在 store（见 useDeliveryNoteListStore.spec.ts）。
 //
@@ -52,6 +54,9 @@ const stubs = {
   'el-dialog': {
     name: 'ElDialogStub',
     props: ['modelValue', 'title'],
+    // `closed` 由用例显式 $emit（模拟真实 el-dialog「leave 过渡结束后」那一刻）：
+    // 桩里若跟着 modelValue 一起发，就测不出「关闭开始但过渡未结束」的窗口。
+    emits: ['update:modelValue', 'closed'],
     template:
       '<div class="mock-el-dialog" :data-title="title"><slot /><slot name="footer" /></div>',
   },
@@ -178,7 +183,7 @@ describe('DeliveryDriverPickerDialog', () => {
     expect(w.emitted('confirm')).toEqual([['W2']]);
   });
 
-  it('取消 / 右上角 × → 只关对话框，不发 confirm（零请求）', async () => {
+  it('点「取消」→ 只关对话框，不发 confirm（零请求）', async () => {
     withDriverOptions();
     const w = await mountDialog();
     await selectDriver(w, 'W2');
@@ -186,6 +191,37 @@ describe('DeliveryDriverPickerDialog', () => {
     expect(w.emitted('confirm')).toBeUndefined();
     expect(w.emitted('update:modelValue')?.at(-1)).toEqual([false]);
     expect(apiPostMock).not.toHaveBeenCalled();
+  });
+
+  // 右上角 × 由 el-dialog 自己 emit update:modelValue（不经组件的取消按钮），这里钉它的
+  // 两条行为：同样只关不发 confirm；且本地选中态由 props.modelValue 的 watch 清掉
+  // （不回显一个从未落库的幽灵选中项）。
+  it('右上角 ×（el-dialog 自己 emit update:modelValue）→ 同样只关不发 confirm，本地选中态清掉', async () => {
+    withDriverOptions();
+    const w = await mountDialog();
+    await selectDriver(w, 'W2');
+    w.findComponent({ name: 'ElDialogStub' }).vm.$emit('update:modelValue', false);
+    await flush();
+    expect(w.emitted('update:modelValue')?.at(-1)).toEqual([false]);
+    expect(w.emitted('confirm')).toBeUndefined();
+    expect(apiPostMock).not.toHaveBeenCalled();
+    // 父组件把 modelValue 落到 false（真实场景就是这样跟着 × 走的）⇒ 选中态复位
+    await w.setProps({ modelValue: false });
+    await flush();
+    expect(w.findComponent({ name: 'ElSelectStub' }).props('modelValue')).toBe('');
+  });
+
+  // 单据快照由调用方在 `closed` 才清：close 是带 leave 过渡的，关闭开始到过渡结束之间
+  // 对话框内容仍在 DOM 里可见，此刻清快照会让标题闪成「一键送货 — 」。这一条钉的是本
+  // 组件把 el-dialog 的 closed 透传出去（调用方拿它挂清单据快照）。
+  it('透传 el-dialog 的 closed（调用方在关闭过渡结束后才清单据快照）', async () => {
+    withDriverOptions();
+    const w = await mountDialog();
+    await w.find('button[data-role="confirm"]').trigger('click');
+    await flush();
+    w.findComponent({ name: 'ElDialogStub' }).vm.$emit('closed');
+    await flush();
+    expect(w.emitted('closed')).toHaveLength(1);
   });
 
   it('关掉再打开 → 选中态复位（不留从未落库的幽灵选中项）', async () => {

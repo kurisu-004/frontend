@@ -277,7 +277,14 @@ export const useDeliveryNoteListStore = defineStore('delivery-note-list', () => 
    *
    *  失败语义：`POST /{id}/pickup` 也会**重跑**司机校验（在职 + 工种 code == '送货司机'），
    *  单据没司机返 21409；这两类失败都走 onError 的 `ElMessage.error`，行内 loading 由
-   *  `onDeliverConfirm` 的 finally 清。 */
+   *  `onDeliverConfirm` 的 finally 清。
+   *
+   *  ⚠️ **onError 也失效本域**（2026-10-16）：本 mutation 是「两条 POST 串一步」，于是
+   *  存在「服务端已变更、本端缓存没失效」的失败态 —— driver POST 成功（version 3→4、
+   *  司机已改绑）而 pickup 失败（409 OCC / 21409 司机被停用 / 网络）。此时列表缓存仍
+   *  持有 `version: 3` + 旧司机名，本页既无 WS 失效通道又是 `refetchOnWindowFocus: false`
+   *  ⇒ 用户再点一次「送货」必然再吃一次 409，且表上司机与服务端已不一致。
+   *  driver POST 自己失败的那一支服务端没动，失效只是白刷一次列表，无副作用。 */
   const deliverMutation = useMutation({
     mutationKey: ['delivery', 'pickup'],
     mutationFn: async ({
@@ -301,7 +308,12 @@ export const useDeliveryNoteListStore = defineStore('delivery-note-list', () => 
       await invalidateDeliveryNotesQuery(qc);
       ElMessage.success('已送货');
     },
-    onError: (e: Error) => ElMessage.error(e.message ?? '送货失败'),
+    // 失败也失效：见上面「onError 也失效本域」的注释（driver 成功 + pickup 失败 ⇒ 本端
+    // 副本的 version / 司机名已过期，不刷就必然再吃一次 409）。
+    onError: async (e: Error) => {
+      await invalidateDeliveryNotesQuery(qc);
+      ElMessage.error(e.message ?? '送货失败');
+    },
   });
 
   /** 行内「送货」按钮：只打开确认对话框（零请求），司机与确认都在对话框里做。 */
@@ -316,18 +328,33 @@ export const useDeliveryNoteListStore = defineStore('delivery-note-list', () => 
     deliverDialogOpen.value = true;
   }
 
-  /** 对话框显隐（右上角 × / 取消 / 确认后关闭都汇到这里）；关掉即丢掉 target 快照。 */
+  /** 对话框显隐（右上角 × / 取消 / 确认后关闭都汇到这里）。
+   *
+   *  ⚠️ **这里只改显隐，不清 target**：el-dialog 的 close 是**带 leave 过渡**的，关闭开始
+   *  到过渡结束（`closed`）之间对话框内容仍在 DOM 里可见约 300ms —— 此刻把 target 置 null
+   *  会让成功送货的主路径上肉眼看见标题闪成「一键送货 — 」、正文闪成「0 条」。
+   *  清快照收在 `onDeliverDialogClosed`（视图挂 `:closed` 那一处）。 */
   function onDeliverDialogClose(open: boolean): void {
     deliverDialogOpen.value = open;
-    if (!open) deliverTarget.value = null;
   }
 
-  /** 确认送货：`driverId` 空串 = 沿用本单司机（见 deliverMutation 的注释）。 */
+  /** 关闭过渡结束（el-dialog 的 `closed`）⇒ 丢掉 target 快照，下次 `onDeliver` 重新取
+   *  行上的 version。`onDeliver` 每次打开都整体覆写 target，所以即便这一次 closed 丢了
+   *  （例如组件被卸载），也不会有脏快照被下一次提交读到。 */
+  function onDeliverDialogClosed(): void {
+    deliverDialogOpen.value = false;
+    deliverTarget.value = null;
+  }
+
+  /** 确认送货：`driverId` 空串 = 沿用本单司机（见 deliverMutation 的注释）。
+   *
+   *  ⚠️ **不在这里清 `deliverTarget`**：本函数第一行把对话框置为关闭，而关闭是带 leave
+   *  过渡的 —— 同 tick 把 target 清掉会让还可见的那 300ms 里标题闪成「一键送货 — 」。
+   *  快照的清理由 `onDeliverDialogClosed`（挂在 el-dialog 的 `closed`）负责。 */
   async function onDeliverConfirm(driverId: string): Promise<void> {
     const target = deliverTarget.value;
     if (!target) return;
     deliverDialogOpen.value = false;
-    deliverTarget.value = null;
     deliveringMap[target.id] = true;
     try {
       await deliverMutation.mutateAsync({ target, driverId });
@@ -418,10 +445,13 @@ export const useDeliveryNoteListStore = defineStore('delivery-note-list', () => 
       navigateToDetail,
       onDeliver,
       /** 送货确认对话框（视图挂 `DeliveryDriverPickerDialog` 用）：
-       *  显隐 + 单据快照（回显 / OCC 锚）都放这里，`target` 为 null 时对话框无内容可显。 */
+       *  显隐 + 单据快照（回显 / OCC 锚）都放这里，`target` 为 null 时对话框无内容可显。
+       *  清快照走 `onDeliverDialogClosed`（`:closed`），不在关闭那一刻清。 */
       deliverDialogOpen,
       deliverTarget,
       onDeliverDialogClose,
+      /** 关闭过渡结束 ⇒ 丢掉 target 快照（视图挂 `:closed`） */
+      onDeliverDialogClosed,
       /** 确认：driverId 空串 = 沿用本单司机 */
       onDeliverConfirm,
       onSoftDelete,

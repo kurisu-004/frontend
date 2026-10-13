@@ -38,7 +38,7 @@ export interface RoleMapLike {
   INSPECTOR?: boolean;
 }
 
-/** 最小形态：打印判据只读状态 / 件数 / 司机名，不需要整个单据对象。 */
+/** 最小形态：打印判据只读状态 / 件数，不需要整个单据对象。 */
 export interface PrintableNoteLike {
   status: string;
   /** 行项条数；0 = 空单，打不出东西。 */
@@ -46,7 +46,10 @@ export interface PrintableNoteLike {
   /**
    * 司机名；null / 空串 = 还没指定司机。
    *
-   * ⚠️ **只**用于打印对话框内「导出」按钮的闸门，不参与入口可见性判据（见 `canPrint`）。
+   * ⚠️ **不参与 `canPrint` 判定**（2026-10-16：打印不再强制指定司机，导出只 gate 模板与
+   * 行项）。留着是因为送货单列表 / 详情的行对象按同款字段投影，删字段会让映射层多一处
+   * 特判；司机名在打印路径上现在的用途只有「页脚送货人回显」与「沿用已有司机」判据，
+   * 那两处都在对话框内部（`PrintPreviewDialog` / `DeliveryDriverPickerDialog`）。
    */
   driver_worker_name: string | null;
 }
@@ -82,11 +85,10 @@ export function canSoftDelete(status: string, role: RoleMapLike): boolean {
  *  **status 不设闸门**：已送货（PICKED_UP / ARCHIVED）的单允许补打 —— 收货方丢了这张单子
  *  时补打是真实场景，把它挡在门外没有收益。
  *
- *  ⚠️ **司机不是入口判据**（2026-10-08 修死锁）：唯一能指定司机的地方是打印对话框内的
- *  下拉，而进那个对话框的唯一入口就是被 `canPrint` 挡住的按钮 ⇒ 把「已指定司机」写进
- *  本函数等于让按钮与下拉互相等待，谁也进不去。司机闸门只保留在**对话框内部**的
- *  「导出」按钮上（送货单页脚「送货人：{{driver_name}}」必须有值，`POST /{id}/pickup`
- *  也要从单据上读 `driver_worker_id`），那里能看到用户在选什么。
+ *  ⚠️ **司机不参与判定**（2026-10-16）：打印只是拿一张纸，页脚「送货人」没有司机名时留白
+ *  即可，不该把人挡在对话框里。指定司机的强制点在**一键送货** —— 在那条路的确认对话框
+ *  `DeliveryDriverPickerDialog` 里选（`POST /{id}/pickup` 入参只有 version、司机由服务端从
+ *  单据上读，没司机返 21409）。
  *
  *  ⚠️ 形参 `role` **保留但不再参与判定**（2026-10-14）：三个消费方
  *  `DeliveryNoteLineItemsTable.vue` / `DeliveryNoteScan.vue` /
@@ -100,8 +102,10 @@ export function canPrint(note: PrintableNoteLike, role: RoleMapLike): boolean {
 }
 
 /** 一键送货：`SUBMITTED` + 至少 1 个行项 + 管理角色。
- *  司机由 `POST /{id}/driver` 预先指定，本入口只带 version —— 服务端重跑
- *  `validate_driver`，司机被停用 / 改工种时返 21409。 */
+ *  司机在**这个入口的确认对话框里**当场指定（`DeliveryDriverPickerDialog`）：选了先
+ *  `POST /{id}/driver` 再 `POST /{id}/pickup`（driver 推进 version，pickup 吃新 version），
+ *  单据上已有司机则可沿用、不重发。服务端重跑 `validate_driver`，司机被停用 / 改工种时
+ *  返 21409。 */
 export function canDeliver(status: string, role: RoleMapLike, partCount: number): boolean {
   return hasManageNoteRole(role) && status === 'SUBMITTED' && partCount > 0;
 }
