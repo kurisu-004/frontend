@@ -2,9 +2,10 @@
 //
 // 收纳三类东西，三者的共同点是**都不是业务 VO**：
 //   - WS 协议层类型：DashboardEvent / DashboardEventType / DashboardEventPayload /
-//     WsSnapshotMsg / WsHeartbeatMsg / DashboardServerMessage / ConnectionStatus。
-//     它们描述消息壳（消息形态而非业务 VO），被 api/dashboard.ts（onMessage 分发）
-//     + NotificationBanner.vue（event 消费） + useDashboardInvalidation.ts
+//     WsSnapshotMsg / WsHeartbeatMsg / DashboardServerMessage / ConnectionStatus /
+//     DashboardConnectionState。它们描述消息壳（消息形态而非业务 VO），被
+//     api/dashboard.ts（onMessage 分发）+ ScanBanner.vue（SCAN_BANNER 事件消费） +
+//     WsConnectionIndicator.vue（连接状态消费）+ useDashboardInvalidation.ts
 //     （AFFECTS_DASHBOARD 类型签名）引用。
 //   - 请求参数类型：DeliveryBasis（见下）。
 //   - 视图内结构：PartPreviewTarget（工单预览弹窗入参的最小公共结构，见文件末）。
@@ -16,16 +17,13 @@
 import type { OrderStatus } from '@/types/parts';
 
 export type DashboardEventType =
-  // —— 前端 NotificationBanner 展示用（旧 v1 事件集）——
-  | 'PICKED_UP'
-  | 'RELEASED'
-  | 'PLACED_ON_SHELF'
-  | 'RETURNED'
-  | 'INSPECTED'
-  | 'ASSEMBLY_CANCELLED'
-  | 'ASSEMBLY_DELETED'
-  | 'RECALLED' // 2026-08-05 召回：ON_SHELF/PROGRAMMING → PENDING/PROGRAMMING
-  // —— 后端 v2 ws_hub 实际下发的写入事件（2026-09-28 dashboard invalidate 用）——
+  // —— 纯展示事件：payload 带展示字段，不改任何 dashboard 切片 ——
+  // 2026-10-13：报工台（`views/production/scan/`）的一次扫码提交成功后由后端推送，
+  // 承载 6 个展示字段（守门 schema 在 views/dashboard/composables/bannerSchema.ts）。
+  // **不进 AFFECTS_DASHBOARD 白名单** —— 它只是把「刚刚发生了什么」讲给人听，
+  // dashboard 三张报表的数据事实由同一次提交产生的既有状态翻转事件承载。
+  | 'SCAN_BANNER'
+  // —— 后端 v2 ws_hub 实际下发的写入事件（dashboard invalidate 用）——
   | 'PART_TO_SHIP'
   | 'PART_TO_INSPECTION'
   | 'PART_TO_PROCESS'
@@ -51,6 +49,10 @@ export type DashboardEventType =
   | 'WORKER_POOL_ADMIN_REMOVED'
   | 'WORKER_POOL_AUTO_ALLOCATE_DONE'
   | 'ASSEMBLY_CREATED'
+  // ASSEMBLY_CANCELLED / ASSEMBLY_DELETED 同属 v2 产出（dashboard 会展示装配体状态，
+  // 故两者都在 AFFECTS_DASHBOARD 白名单里）。
+  | 'ASSEMBLY_CANCELLED'
+  | 'ASSEMBLY_DELETED'
   | 'ASSEMBLY_UPDATED'
   // 2026-10-11：强制完成端点专用。零件侧 `POST /parts/{id}/force-complete`、装配件侧
   // `POST /prod/assemblies/{id}/force-complete`，两者都绕过状态机直接写 COMPLETED，
@@ -58,16 +60,13 @@ export type DashboardEventType =
   | 'PART_FORCE_COMPLETED'
   | 'ASSEMBLY_FORCE_COMPLETED';
 
+// 2026-10-13：`DashboardEventPayload` **只剩 id 类键**。
+// 旧版在这里声明过 serial_no / drawing_no / name / customer_path / is_urgent /
+// planned_delivery_date / worker_name / shelf_code 八个展示字段 —— 那是 v1 遗留事件
+// （旧横幅支持的 8 个 kind）的契约，v2 后端零产出方，且约 40 个 v2 事件的 payload 里
+// 一个展示字段都不带。带展示字段的唯一事件是 SCAN_BANNER，而它的 payload 由域内
+// `bannerSchema.ts` 单独守门、单独派生类型，不在本壳里声明。
 export interface DashboardEventPayload {
-  // 零件事件携带的字段（ASSEMBLY_* 不带这些）
-  serial_no?: string | null;
-  drawing_no?: string | null;
-  name?: string | null;
-  customer_path?: string | null;
-  is_urgent?: boolean | null;
-  planned_delivery_date?: string | null;
-  worker_name?: string | null;
-  shelf_code?: string | null;
   /** PART_FORCE_COMPLETED 携带的被强推工单 id（雪花 ID 字符串）。该事件绕过状态机
    *  直写 COMPLETED，不带任何展示字段 —— 消费方要按行定位只能靠这个 id。 */
   part_id?: string | null;
@@ -91,8 +90,9 @@ export interface DashboardEvent {
 
 // WS 协议层消息壳三件套，让 DashboardServerMessage union 是真正的判别联合
 // （discriminated union）—— dispatch 函数里三个 type 分支靠 TS narrowing 收窄。
-//   - WsSnapshotMsg：后端首帧 snapshot，本仓架构（HTTP 全量首取 + WS 事件 invalidate）
-//     下仅作「连接就绪信号」，不再消费 data 业务字段。
+//   - WsSnapshotMsg：后端**每次连接（含重连）**的首帧 snapshot。`data` 的业务字段不消费
+//     （HTTP 全量首取已替代），但重连后的那一帧承担断线期丢事件的补偿职责（派
+//     `dashboard:full-refetch`）—— 详见 `api/dashboard.ts::dispatch` 的 snapshot 分支。
 //   - WsHeartbeatMsg：后端 30s 保活 text 帧，前端无消费者。
 // 字段对齐 backend-rust `src/modules/ws/hub.rs`。
 
@@ -109,6 +109,24 @@ export interface WsHeartbeatMsg {
 
 export type DashboardServerMessage = DashboardEvent | WsSnapshotMsg | WsHeartbeatMsg;
 export type ConnectionStatus = 'connecting' | 'open' | 'closed';
+
+/** 连接状态订阅推送的四字段快照（api/dashboard.ts 的 onDashboardConnection）。
+ *
+ *  为什么不只给 `ConnectionStatus` 三态字符串：三态表达不了「closed 是不是断线」。
+ *  主动关闭（登出、token 刷新换连接）与真实断开落在同一个 `'closed'` 上，对 UI 含义
+ *  恰好相反 —— 前者不该 alarming，后者必须让人看见（大屏三个 query 都是
+ *  `gcTime: POSITIVE_INFINITY` + 无 `refetchInterval`，断了会静默停更）。 */
+export interface DashboardConnectionState {
+  status: ConnectionStatus;
+  /** 本次关闭是否**主动发起**（登出 / token 刷新换连接）。判据绑在 WS 层「待关闭的
+   *  socket 实例」这一等值比较上，不是按 close code 猜 —— code 1000 也可能由服务端
+   *  / 中间层主动发出，那是真实断开。 */
+  expected: boolean;
+  /** 连续失败次数（连上后归零）。退避不封顶，这个数会一直涨。 */
+  retries: number;
+  /** 最近一次关闭的诊断信息；从未失败过则为 null。 */
+  lastError: { code: number; reason: string | null } | null;
+}
 
 // ============================================================
 // 交期统计口径。

@@ -14,9 +14,11 @@
 //     （deliveryOrders 只在抽屉打开时才有观察者，但 invalidate 仍走同一套）。
 //   - tryOnScopeDispose 捕获 off 函数（onDashboardEvent 返回），组件卸载时
 //     释放 eventSubs 订阅，避免「多次 mount / unmount 累加永不清理的 handler」。
-//   - 2026-10-02 新增第二条失效触发源：window 事件 'dashboard:full-refetch'
-//     （WS 层收到后端关闭码 4003 慢消费方 → 丢了 n 条事件且重连补不回来）。
-//     走**不防抖**的立即 invalidate，与事件路径的 500ms debounce 分开。
+//   - 第二条失效触发源：window 事件 'dashboard:full-refetch'（WS 层派发，走**不防抖**
+//     的立即 invalidate，与事件路径的 500ms debounce 分开）。该信号有**两个派发源**：
+//     后端关闭码 4003（慢消费方丢了 n 条事件）与**重连后的首帧 snapshot**（断线期丢的
+//     增量事件）—— 缺口性质相同：服务端不重发，只能靠 HTTP 重取。派发点见
+//     `api/dashboard.ts` 的 `dispatchFullRefetch`。
 
 import { tryOnScopeDispose, useDebounceFn } from '@vueuse/core';
 import { useQueryClient, type QueryKey } from '@tanstack/vue-query';
@@ -125,26 +127,31 @@ export function useDashboardInvalidation(
   });
   tryOnScopeDispose(offDashboardEvent);
 
-  // 第二条失效触发源：接收 WS 层派发的 'dashboard:full-refetch'（后端关闭码 4003
-  // 慢消费方，广播队列溢出丢了 n 条事件）。
+  // 第二条失效触发源：接收 WS 层派发的 'dashboard:full-refetch'。**两个派发源共用这一个
+  // 信号与这一个接收方**（派发点见 api/dashboard.ts 的 dispatchFullRefetch）：
+  //   - 后端关闭码 4003：慢消费方，广播队列溢出**永久**丢了 n 条事件 ⇒ 关闭那一刻就派，
+  //     不等重连完成，免得这段时间一直展示已知过期的数据；
+  //   - 重连后的首帧 snapshot：断线期间丢的增量事件 ⇒ 补偿点在重连完成、首帧到达时
+  //     （首次连接那一帧在 dispatch() 里被显式排除，它与首屏 HTTP 全量首取重复）。
   //
-  // 为什么必须由本 composable 接：丢掉的 n 条事件**重连补不回来** —— 新连接的订阅
-  // 集合从重连那一刻起算，而本仓 dashboard 域是「HTTP 全量首取 + WS 事件 invalidate
-  // 重取」，重连后的首帧 snapshot 在 api/dashboard.ts 的 dispatch() 里被显式 no-op
-  // 丢弃，TanStack Query 也没有轮询（staleTime 30s 只管「下次取数是否放行」）。
-  // ⇒ 不补这一次 invalidate，「丢 1 个事件 = 对应区块永不刷新」且页面静默无提示。
+  // 为什么必须由本 composable 接：两个源都是**服务端不会重发**的缺口 —— 慢消费方丢的
+  // n 条事件与断连期丢的增量事件都不在重连后的推送里（新连接的订阅集合从那一刻起算）。
+  // 而本仓 dashboard 域是「HTTP 全量首取 + WS 事件 invalidate 重取」，TanStack Query
+  // 也没有轮询（staleTime 30s 只管「下次取数是否放行」）⇒ 不补这一次 invalidate，
+  // 「丢 1 个事件 = 对应区块永不刷新」且页面静默无提示。
   //
   // 走**不防抖**的立即路径（与上面的 debouncedInvalidate 并存）：防抖是为「单次扫码
-  // 连续触发 3 个事件」防雪崩，而 4003 是「已经确定丢了数据」，每多等 500ms 都是
-  // 在展示已知过期的数据。
+  // 连续触发 3 个事件」防雪崩，而这两个源都意味着「已经确定丢了数据」，每多等 500ms
+  // 都是在展示已知过期的数据。
   //
   // 与 'auth:session-lost' 的区别：那个是「会话已死，终止会话」（接收方在 router
   // 模块），本事件是「会话没死、数据可能缺了，补一次全量重取」（接收方在本文件）。
   //
   // 本 composable 有 4 个注册点（dashboard 域 3 个 query + `PartPreviewDialog`）。其中
-  // `PartPreviewDialog` 传的是 `qk.partBatchesPrefix`（不是 dashboard 域键）。4003 到达时
-  // 弹窗若开着，`partBatchesPrefix` 也会被立即 invalidate —— **这是有意的、不是误伤**：
-  // 该弹窗本就复用了同一套 WS 失效管道，其数据同样暴露在「后端宣告丢事件」的丢数风险下。
+  // `PartPreviewDialog` 传的是 `qk.partBatchesPrefix`（不是 dashboard 域键）。全量重取
+  // 信号到达时弹窗若开着，`partBatchesPrefix` 也会被立即 invalidate —— **这是有意的、
+  // 不是误伤**：该弹窗本就复用了同一套 WS 失效管道，其数据同样暴露在「后端宣告丢
+  // 事件」与「断线期丢事件」的丢数风险下。
   if (typeof window !== 'undefined') {
     const onFullRefetch = () => {
       for (const k of keyList) {
