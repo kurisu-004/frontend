@@ -1,9 +1,11 @@
 // 交期汇总邮件域的 **入参** wire 类型（2026-10-13 新增）。
 //
 // ⚠️ **本文件只有入参，没有出参镜像**：六个端点的出参 wire 契约的**唯一真源**是
-// `src/views/mail/digest/mailDigestSchema.ts` 的 `mailDigestConfigSchema` /
-// `mailDigestMetaSchema` / `mailDigestPreviewSchema` / `mailDigestSendResultSchema` /
-// `mailDigestLogListSchema`，消费侧一律用 `z.infer` 派生的 `*Data` 类型（api 层
+// `src/views/mail/digest/mailDigestSchema.ts` 的 `mailDigestConfigSchema`（含
+// `mailDigestConfigDefaultsSchema` / `mailDigestFrequencyOptionSchema` /
+// `mailDigestColumnOptionSchema`）/ `mailDigestMetaSchema` / `mailDigestPreviewSchema` /
+// `mailDigestSendResultSchema`（**含其别名 `mailDigestLogSchema`**）/ `mailDigestLogListSchema`，
+// 消费侧一律用 `z.infer` 派生的 `*Data` 类型（api 层
 // `import type` 标注返回类型、组件与 store 直接 import 域内路径）。这里再抄一份手写
 // interface 就是同一份契约的第二个真源：schema 加字段时它不会报错，只会静默腐烂。
 //
@@ -18,7 +20,10 @@ export const MAIL_DIGEST_FREQUENCIES = ['DAILY', 'WEEKLY', 'MONTHLY', 'MANUAL_ON
 
 export type MailDigestFrequency = (typeof MAIL_DIGEST_FREQUENCIES)[number];
 
-/** 邮件触发来源（`LogItem.trigger_source`）：定时任务触发 vs 管理员手动触发。 */
+/** 邮件触发来源（`SendResultOut.trigger_source`）：定时任务触发 vs 管理员手动触发。
+ *  ⚠️ 这个字段所在的结构体**后端已改名**：日志行与 `/send` 响应同体（`SendResultOut`），
+ *  `LogItem` 是更早一版的叫法，全仓已无同名类型 —— 查契约时按 `SendResultOut` 去
+ *  `mail_digest/dto.rs` 找。 */
 export type MailDigestTriggerSource = 'SCHEDULED' | 'MANUAL';
 
 /** 单次发送的结果状态。失败也会落一条日志行（`POST /send` 抛错，但服务端已记账）。 */

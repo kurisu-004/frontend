@@ -12,7 +12,12 @@
 //   - `useMailDigestMetaQuery`：**常量键**（频率选项 / 列候选 / 默认值 / 天数范围 /
 //     SMTP 状态，后端不接受任何入参）。meta 到达后 store 用它覆盖表单校验的兜底判据。
 //   - `useMailDigestLogsQuery`：**参数键**（端点接 limit / offset，翻页换键）。
-//     `params` 允许 `null` ⇒ 占位键 + `enabled` 闸门 + queryFn 二次守卫。
+//     `params` 允许 `null` ⇒ 占位键 + `enabled` 闸门 + queryFn 二次守卫。这三层在本域是
+//     **防御性**的、没有 CLAUDE.md 里那两处 `⇒` 带的那种理由（报工台 / 统计域的过滤键后端
+//     必填、漏传是 400 纯文本；本域 `ListMailDigestLogsParams` 的 `limit?` / `offset?` 都
+//     可选，唯一调用方 store 的 `logsParams` 也恒返回对象）⇒ 这三层在生产上无触发点，**但
+//     它可测**（`params` 传 `null` 在测试里构造得出来），别当成死代码清掉，也别被误判成
+//     「不可测」而删掉 `??` / 闸门时无人补断言。
 //
 // 三条都不设 `refetchInterval`：本域不是看板，没有任何「自己会变的读数」——配置与 meta
 // 只在有人写时变（日志例外，但那由后端 cron 触发，见 keys.ts 的说明，靠页面自带的

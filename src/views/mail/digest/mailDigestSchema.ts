@@ -2,8 +2,10 @@
 //
 // 2026-10-13 新建：交期汇总邮件域的 Zod schema，两组用途（形态照 `views/users/usersSchema.ts`）：
 //
-//   1. **守门**：`mailDigestConfigSchema` / `mailDigestMetaSchema` /
-//      `mailDigestPreviewSchema` / `mailDigestSendResultSchema` / `mailDigestLogListSchema`。
+//   1. **守门**：`mailDigestConfigSchema` / `mailDigestConfigDefaultsSchema` /
+//      `mailDigestFrequencyOptionSchema` / `mailDigestColumnOptionSchema` /
+//      `mailDigestMetaSchema` / `mailDigestPreviewSchema` / `mailDigestSendResultSchema`
+//      （**含其别名 `mailDigestLogSchema`**）/ `mailDigestLogListSchema`。
 //      三条读端点（config / meta / logs）的守门点在 queryFn
 //      （`composables/useMailDigestQuery.ts`）；两条「跑一次」的端点（preview / send）
 //      走 useMutation、没有 queryFn 承载，**守门留在 api 层**（CLAUDE.md 为「没有
@@ -198,17 +200,43 @@ export type MailDigestPreviewData = z.infer<typeof mailDigestPreviewSchema>;
 
 // ============================================================
 // POST /api/v2/mail-digest/send 与 GET /api/v2/mail-digest/logs
+//
+// ⚠️ **两条端点共用同一个出参结构体**：后端 `LogListOut.items` 的元素类型**就是**
+// `SendResultOut`（`/send` 返它本身、`/logs` 返它构成的 `items`）⇒ wire 上两者没有任何
+// 可区分之处。因此这里**只维护一份 schema**，`mailDigestLogSchema` 是它的别名。
+//
+// 拆成两份声明的代价是不对称的：漏声明的那份在单测里很难被发现（fixture 若是照着错形状
+// 手写的，那条用例就是自证式的），而 `.strict()` 会把漏声明变成**线上当场抛** —— 挂在
+// `send` 的守门上尤其贵（后端已发完邮件才返响应 ⇒ 假失败 ⇒ 用户重发 ⇒ 重复邮件）。
 // ============================================================
 
-/** 单次发送结果（`POST /send` 成功时的返回；也是 `LogItem` 的基础形状）。 */
+/** 单次发送结果 / 发送日志行（后端 `mail_digest/dto.rs::SendResultOut`，**12 个字段逐字
+ *  对齐**，字段顺序也照后端 struct 的声明顺序排）。
+ *
+ *  `POST /send` 与 `GET /logs` 是**同一个结构体**：`/send` 返它本身，`/logs` 返它构成的
+ *  `items`（见本节头注释）⇒ wire 上两者没有任何可区分之处，`trigger_source` 在 `/send`
+ *  的响应里恒为 `MANUAL`、在 `/logs` 里才可能是 `SCHEDULED`。
+ *
+ *  ⚠️ **12 个键一个都不能少**：`.strict()` 对「后端多发的键」当场抛，而这条 schema 是
+ *  `send` 的守门点（api 层直接 `parse` —— 它走 useMutation、没有 queryFn 承载，理由见
+ *  文件头）。那里抛错的后果特别贵：后端**已经把邮件发出去了**才返响应，前端解析失败
+ *  ⇒ 弹「发送失败」⇒ 用户重发 ⇒ 重复邮件。
+ *
+ *  键集清单与守卫见 `__tests__/mailDigestKeySet.spec.ts`。 */
 export const mailDigestSendResultSchema = z
   .object({
     /** 该次发送日志行的 id（雪花 ID ⇒ JSON string）。 */
     log_id: z.string(),
+    /** 发这封时配置表的 version（回溯「用的是哪版配置」的锚）。 */
+    config_version: z.number(),
+    /** 触发来源：定时任务 / 手动。`/send` 恒为 `MANUAL`。 */
+    trigger_source: mailDigestTriggerSourceSchema,
     status: mailDigestSendStatusSchema,
     subject: z.string(),
     /** 实际投递的 TO（落库时的快照，不是当前配置）。 */
     to_recipients: z.array(z.string()),
+    /** 当时的 CC 快照。 */
+    cc_recipients: z.array(z.string()),
     overdue_count: z.number(),
     upcoming_count: z.number(),
     /** 正文字节数（便于事后核对大小）。 */
@@ -222,17 +250,13 @@ export const mailDigestSendResultSchema = z
 
 export type MailDigestSendResultData = z.infer<typeof mailDigestSendResultSchema>;
 
-/** 发送日志行 = 发送结果 + 三个「当时」的快照字段。 */
-export const mailDigestLogSchema = mailDigestSendResultSchema
-  .extend({
-    /** 发这封时配置表的 version（回溯「用的是哪版配置」的锚）。 */
-    config_version: z.number(),
-    /** 当时的 CC 快照。 */
-    cc_recipients: z.array(z.string()),
-    /** 触发来源：定时任务 / 手动。 */
-    trigger_source: mailDigestTriggerSourceSchema,
-  })
-  .strict();
+/** 发送日志行 —— **`mailDigestSendResultSchema` 的别名，不是它的子集**（理由见本节头注释）。
+ *
+ *  保留独立导出名是给消费侧按端点读起来顺（`mailDigestLogListSchema` 的 `items`、
+ *  `MailLogTable.vue` 的行类型），它**不承载任何形状差异**：两者是同一个对象引用。
+ *  `MailDigestLogData` / `MailDigestSendResultData` 两个类型导出也一并保留
+ *  （`z.infer` 之下二者本就相同，对消费侧零破坏）。 */
+export const mailDigestLogSchema = mailDigestSendResultSchema;
 
 export type MailDigestLogData = z.infer<typeof mailDigestLogSchema>;
 
