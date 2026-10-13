@@ -16,16 +16,24 @@
 //
 // 覆盖：数据行写入 / 未填满的行整行清空（不漏出 {{order_no}} 字面量）/ 多 sheet /
 // 数量 null 写空 / 每 sheet 行数 / 占位符零残留 / 单元格样式与空行边框字节级保真。
+//
+// 2026-10-16 新增检具版一批：6 列落位 / C·G·H 手写列清空 / I2 拿送货日期 / 25 行满载
+// 拆 sheet / 零残留 / merges 保真，以及「页脚与契约不配套必须抛错」。
 
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { inflateRawSync } from 'node:zlib';
 import { renderDeliveryNoteWorkbook } from '../deliveryNoteWorkbook';
-import { DELIVERY_NOTE_TEMPLATE_CONTRACT } from '../deliveryNoteTemplateContract';
+import {
+  DELIVERY_NOTE_TEMPLATE_CONTRACT,
+  GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT,
+} from '../deliveryNoteTemplateContract';
 
 // ⚠️ 必须从 Buffer 构造 Uint8Array（不能用 `buf.buffer`：node 的 Buffer 可能落在
 // 8MB 池化 ArrayBuffer 的一段上，`.buffer` 拿到的是**整个池**，字节不是 xlsx）。
 const TEMPLATE = new Uint8Array(readFileSync('templates/delivery_note_fala.xlsx'));
+/** 内置检具模板（百路达；与杏南版式一致，另有同款一条在 deliveryNoteTemplate.spec.ts）。 */
+const GAUGE_TEMPLATE = new Uint8Array(readFileSync('templates/delivery_note_gauge_bailuda.xlsx'));
 
 /** 模板原件里带样式索引（`s=`）的 cell 数 —— 渲染产物必须一条不少地对上（2026-10-08 实测）。 */
 const TEMPLATE_STYLED_CELLS = 172;
@@ -117,6 +125,15 @@ function row(i: number) {
   };
 }
 
+/** 检具版页脚实参：只有 `deliveryDate` 被检具版消费，四个零件版字段是占位（必填字段）。 */
+const GAUGE_FOOTER = {
+  driverName: '',
+  year: '',
+  month: '',
+  date: '',
+  deliveryDate: '2026-10-16',
+};
+
 async function readBack(bytes: Uint8Array) {
   const { readXlsx } = await import('hucre');
   return readXlsx(bytes);
@@ -124,7 +141,14 @@ async function readBack(bytes: Uint8Array) {
 
 /** 数据行条数（A 列非空计数；模板的数据行 A 列是 {{no}}，渲染后是序号）。 */
 function dataRowCount(sheet: { rows: unknown[][] }): number {
-  const c = DELIVERY_NOTE_TEMPLATE_CONTRACT;
+  return countDataRows(sheet, DELIVERY_NOTE_TEMPLATE_CONTRACT);
+}
+
+/** 同上，契约可传（检具版区间是 row 5..29、容量 25）。序号列两套版式都在 A 列。 */
+function countDataRows(
+  sheet: { rows: unknown[][] },
+  c: { dataStartRow: number; dataRowCount: number },
+): number {
   return sheet.rows
     .slice(c.dataStartRow, c.dataStartRow + c.dataRowCount)
     .filter((r) => String(r[0] ?? '') !== '').length;
@@ -271,5 +295,151 @@ describe('renderDeliveryNoteWorkbook', () => {
     }
     // 全表一条不少：清空不该让任何一格掉出 cell 列表。
     expect(styledCellCount(sheetXml)).toBe(TEMPLATE_STYLED_CELLS);
+  });
+});
+
+// ============================================================
+// 检具版（2026-10-16 新增）
+// ============================================================
+describe('renderDeliveryNoteWorkbook（检具版）', () => {
+  const G = GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT;
+
+  it('6 列按 PrintSheetRow 落位、C/G/H 三列留空、I2 拿到送货日期', async () => {
+    const out = await renderDeliveryNoteWorkbook(
+      GAUGE_TEMPLATE,
+      [{ sheetName: '百路达', rows: [row(0), row(1)] }],
+      GAUGE_FOOTER,
+      G,
+    );
+    const s = (await readBack(out)).sheets[0]!;
+    // row 5（0-based 4）：A 序号 / B 订单号 / D 图号 / E 名称 / F 数量 / I 交货日期
+    expect(s.rows[4]).toEqual([1, 'SO-0', '', 'C-1000', '铝电解电容', 1, '', '', '11月1日']);
+    // row 6 同形，序号续排（清空后逐格覆写，不会漏出模板里 row5 才有的占位符）
+    expect(s.rows[5]).toEqual([2, 'SO-1', '', 'C-1001', '铝电解电容', 2, '', '', '11月1日']);
+    // 第 7..29 行未填 ⇒ 整行清空（含 A 列序号占位符）
+    expect(s.rows[6]!.every((v) => String(v ?? '') === '')).toBe(true);
+    // 送货日期在 I2（表头右侧），不是页脚区
+    expect(s.rows[1]![8]).toBe('2026-10-16');
+    // H2 的标签是模板原文，不被动过
+    expect(s.rows[1]![7]).toBe('送货日期');
+  });
+
+  it('quantity / etd 为 null ⇒ 写空而不是 0 或 "null"', async () => {
+    const out = await renderDeliveryNoteWorkbook(
+      GAUGE_TEMPLATE,
+      [{ sheetName: 'S', rows: [{ ...row(0), quantity: null, etd: null }] }],
+      GAUGE_FOOTER,
+      G,
+    );
+    const s = (await readBack(out)).sheets[0]!;
+    expect(String(s.rows[4]![5] ?? '')).toBe('');
+    expect(String(s.rows[4]![8] ?? '')).toBe('');
+  });
+
+  it('模板样例残留值不会被打出去（C / G / H 三列按客户约定清空、边框留着手写）', async () => {
+    // 造一份「客户样例残留」的模板：数据区 C / G / H 三列塞上样例值。
+    const { openXlsx, saveXlsx } = await import('hucre');
+    const wb = await openXlsx(GAUGE_TEMPLATE);
+    const sh = wb.sheets[0]!;
+    sh.rows[4]![2] = '采购部/张三';
+    sh.rows[4]![6] = '新制';
+    sh.rows[7]![7] = 'OK';
+    sh.rows[8]![2] = '质量部';
+    sh.rows[8]![7] = 'NG';
+    const dirty = await saveXlsx(wb);
+
+    const out = await renderDeliveryNoteWorkbook(
+      dirty,
+      [{ sheetName: 'S', rows: [row(0)] }],
+      GAUGE_FOOTER,
+      G,
+    );
+    const s = (await readBack(out)).sheets[0]!;
+    // 三列整列扫一遍：25 行数据区里 C / G / H 全部空
+    for (const colIdx of [2, 6, 7]) {
+      for (let k = 0; k < G.dataRowCount; k += 1) {
+        expect(String(s.rows[G.dataStartRow + k]![colIdx] ?? ''), `第 ${k + 1} 行第 ${colIdx} 列`).toBe(
+          '',
+        );
+      }
+    }
+    // 清空范围不得越界到 row 30 的「填写说明」
+    expect(String(s.rows[29]![1] ?? '')).toContain('备注主要填写');
+  });
+
+  it('26 条按检具容量切成两组 ⇒ 第一张填满 25 行、第二张承接第 26 条', async () => {
+    // ⚠️ 切分这一步在本文件里按检具容量（25）显式做，不走 `groupIntoSheets`：
+    // 它的 `capacity` 形参类型是从 `as const` 默认值推断出的**字面量 `10`**（见
+    // deliveryNotePrintRows::groupIntoSheets），传不进 25；把该形参放开成 `number`
+    // 属于并行子任务 #2 的改动范围，本子任务不越界改。
+    // 本条守的是渲染层：满载 25 行不丢第 26 条、换 sheet 后序号从 1 重排。
+    const specs = [
+      { sheetName: '百路达-1', rows: Array.from({ length: 25 }, (_, i) => row(i)) },
+      { sheetName: '百路达-2', rows: [row(25)] },
+    ];
+    expect(G.dataRowCount).toBe(25);
+
+    const out = await renderDeliveryNoteWorkbook(GAUGE_TEMPLATE, specs, GAUGE_FOOTER, G);
+    const wb = await readBack(out);
+    expect(wb.sheets.map((s) => s.name)).toEqual(['百路达-1', '百路达-2']);
+    expect(wb.sheets.map((s) => countDataRows(s, G))).toEqual([25, 1]);
+    // 首行取实参、第一张最后一行是第 25 条（0-based row 28）
+    expect(wb.sheets[0]!.rows[4]![1]).toBe('SO-0');
+    expect(wb.sheets[0]!.rows[28]![1]).toBe('SO-24');
+    expect(wb.sheets[0]!.rows[28]![0]).toBe(25);
+    // 第 26 条落在第二张的第 1 个数据行，序号从头排
+    expect(wb.sheets[1]!.rows[4]).toEqual([
+      1, 'SO-25', '', 'C-10025', '铝电解电容', 26, '', '', '11月1日',
+    ]);
+  });
+
+  it('零残留占位符（每个 sheet 都扫：6 类 placeholder 共 31 处全被替换或清空）', async () => {
+    const out = await renderDeliveryNoteWorkbook(
+      GAUGE_TEMPLATE,
+      [
+        { sheetName: 'A', rows: [row(0)] },
+        { sheetName: 'B', rows: [row(1)] },
+      ],
+      GAUGE_FOOTER,
+      G,
+    );
+    for (const s of (await readBack(out)).sheets) {
+      expect(s.rows.flat().filter((v) => typeof v === 'string' && v.includes('{{'))).toEqual([]);
+    }
+  });
+
+  it('round-trip 保留 merges（数量与模板一致；writeXlsx 重建会全丢）', async () => {
+    const { openXlsx } = await import('hucre');
+    const tpl = await openXlsx(GAUGE_TEMPLATE);
+    const templateMerges = tpl.sheets[0]!.merges?.length ?? 0;
+    const out = await renderDeliveryNoteWorkbook(
+      GAUGE_TEMPLATE,
+      [{ sheetName: 'S', rows: [] }],
+      GAUGE_FOOTER,
+      G,
+    );
+    // 与模板**比**而不是写死数字：模板换版增删合并区时这条用例不该假红。
+    expect((await readBack(out)).sheets[0]!.merges).toHaveLength(templateMerges);
+    expect(templateMerges).toBeGreaterThan(0);
+  });
+
+  it('页脚与契约不配套 ⇒ 抛中文错误，不静默渲染半成品', async () => {
+    // 检具契约配零件版页脚（没有 deliveryDate）⇒ I2 会原样输出 {{delivery_date}}
+    await expect(
+      renderDeliveryNoteWorkbook(
+        GAUGE_TEMPLATE,
+        [{ sheetName: 'S', rows: [] }],
+        { driverName: '李四', year: '2026', month: '10', date: '16' },
+        G,
+      ),
+    ).rejects.toThrow(/deliveryDate/);
+    // 反之：零件契约配检具版页脚 ⇒ 送货人 / 年月日会一起丢
+    await expect(
+      renderDeliveryNoteWorkbook(
+        TEMPLATE,
+        [{ sheetName: 'S', rows: [] }],
+        { driverName: '', year: '', month: '', date: '', deliveryDate: '2026-10-16' },
+      ),
+    ).rejects.toThrow(/deliveryDate/);
   });
 });
