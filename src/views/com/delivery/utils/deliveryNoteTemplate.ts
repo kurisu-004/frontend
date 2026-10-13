@@ -66,9 +66,14 @@ function excelRef(row: number, col: number): string {
   return `${String.fromCharCode(65 + col)}${row + 1}`;
 }
 
-/** 一格比对不通过的统一文案（两套版式逐格差异共用同一条格式）。 */
-function diffText(ref: string, expected: string, actual: string): string {
-  return `${ref} 期望 ${expected}，实际为${actual === '' ? '「空」' : `「${actual}」`}`;
+/** 一格比对不通过的统一文案（两套版式逐格差异共用同一条格式）。
+ *
+ *  `note` 是可选的**补充说明**：检具版用它把「契约声明的哪一列该写什么」摊开 —— 用户看到的
+ *  要么是「模板那格被改坏了」，要么是「契约说这一列该有占位符而模板里没有」，两类问题不该
+ *  报出同一条差异。 */
+function diffText(ref: string, expected: string, actual: string, note?: string): string {
+  const head = `${ref} 期望 ${expected}，实际为${actual === '' ? '「空」' : `「${actual}」`}`;
+  return note ? `${head}${note}` : head;
 }
 
 /**
@@ -136,6 +141,19 @@ function assertPartMatches(
   return diffs;
 }
 
+/** 检具版首行数据区（0-based row 4 = Excel row 5）**应写**的占位符，逐列列明。
+ *
+ *  ⚠️ 显式表而不是 `expected = \`{{\${field}}}\` 反推（2026-10-16）：反推让「契约键名写错」
+ *  与「模板那格没有占位符」两类问题报出同一条差异，用户无从判断该改契约还是改模板。键集由
+ *  `satisfies` 与契约 `columns`（除序号列外）**绑死** —— 契约增删列而不改这张表，`tsc` 当场红。 */
+const GAUGE_ROW5_PLACEHOLDERS = {
+  order_no: '{{order_no}}',
+  drawing_no: '{{drawing_no}}',
+  name: '{{name}}',
+  quantity: '{{quantity}}',
+  system_delivery_date: '{{system_delivery_date}}',
+} satisfies Record<Exclude<keyof GaugeDeliveryNoteTemplateContract['columns'], 'no'>, string>;
+
 /**
  * 逐格比对**检具版**模板结构，返回差异清单（**空数组 = 通过**）。
  *
@@ -151,14 +169,23 @@ function assertPartMatches(
 function assertGaugeMatches(sheet: Sheet, c: GaugeDeliveryNoteTemplateContract): string[] {
   const diffs: string[] = [];
 
-  // row 5（0-based 4）的数据列：契约里有数据来源的列（不含序号列，序号列 25 行全查）。
-  for (const [field, letter] of Object.entries(c.columns)) {
-    if (field === 'no') continue;
+  // row 5（0-based 4）的数据列：走显式占位符表（序号列不在表内，25 行单独全查）。
+  for (const field of Object.keys(GAUGE_ROW5_PLACEHOLDERS) as Array<
+    keyof typeof GAUGE_ROW5_PLACEHOLDERS
+  >) {
+    const expected = GAUGE_ROW5_PLACEHOLDERS[field];
+    const letter = c.columns[field];
     const col = colIndexOf(letter);
-    const expected = `{{${field}}}`;
     const actual = cellText(sheet, c.dataStartRow, col);
     if (actual !== expected) {
-      diffs.push(diffText(excelRef(c.dataStartRow, col), expected, actual));
+      diffs.push(
+        diffText(
+          excelRef(c.dataStartRow, col),
+          expected,
+          actual,
+          `（契约声明列 ${field} 在第 ${c.dataStartRow + 1} 行应写占位符 ${expected}，落在 ${letter} 列）`,
+        ),
+      );
     }
   }
 

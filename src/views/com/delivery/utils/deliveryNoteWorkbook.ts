@@ -34,7 +34,11 @@ import {
   DELIVERY_NOTE_TEMPLATE_CONTRACT,
   XLSX_MIME,
 } from './deliveryNoteTemplateContract';
-import type { DeliveryNoteTemplateContract } from './deliveryNoteTemplateContract';
+import type {
+  DeliveryNoteTemplateContract,
+  GaugeDeliveryNoteTemplateContract,
+  PartDeliveryNoteTemplateContract,
+} from './deliveryNoteTemplateContract';
 import { colIndexOf } from './deliveryNoteTemplate';
 
 /** 打印表头行（与模板 row 2 的表头一一对应；字段名沿用 line item 的 snake_case）。 */
@@ -60,21 +64,44 @@ export interface PrintSheetSpec {
   rows: PrintSheetRow[];
 }
 
-/** 送货单页脚实参。**哪几个字段被消费由契约的 `kind` 决定**（2026-10-16 新增检具版）。
+/** 零件版页脚实参（契约 `kind: 'part'`）。
  *
- * ⚠️ 零件版消费 `driverName` / `year` / `month` / `date` 四个；检具版只消费
- * `deliveryDate`（整段日期，不是拆成年月日的三段）。两者**互斥**，渲染层见到「契约与
- * 页脚不配套」会抛错而不是静默渲染 —— 见 `assertFooterMatchesContract`。 */
-export interface PrintFooterSpec {
+ * 判别位 `kind` **可省略**：既有三参调用（打印对话框导出）不传它仍走零件版口径，
+ * 缺省按 `'part'` 处理（见 assertFooterMatchesContract）。检具版那边 `kind` 是必填的 ——
+ * 少一个判别位就无法与本页脚区分，编译期就得住手。 */
+export interface PartFooterSpec {
+  kind?: 'part';
   /** 零件版页脚：送货人。 */
   driverName: string;
   /** 零件版页脚：年 / 月 / 日（各自是「纯数字」串，锚文案里带「年月日」三字）。 */
   year: string;
   month: string;
   date: string;
-  /** 检具版页脚：整段送货日期（写进 I2 的整格里）。2026-10-16 新增。 */
-  deliveryDate?: string;
 }
+
+/** 检具版页脚实参（契约 `kind: 'gauge'`）。只消费 `deliveryDate` 一项（整段日期，不是拆成
+ * 年月日的三段）—— 检具版页脚**不**有送货人 / 年月日，模板那几格是客户手写区。 */
+export interface GaugeFooterSpec {
+  kind: 'gauge';
+  /** 整段送货日期（写进 I2 的整格里）。 */
+  deliveryDate: string;
+}
+
+/** 送货单页脚实参。**哪几个字段被消费由契约的 `kind` 决定**（2026-10-16 新增检具版），
+ * 两者互斥：零件版消费 `driverName` / `year` / `month` / `date` 四个，检具版只消费
+ * `deliveryDate`。渲染层见到「契约与页脚不配套」会抛错而不是静默渲染。
+ *
+ * ⚠️ 判别位是**类型层**的：`renderDeliveryNoteWorkbook` 的页脚形参是 `FooterFor<C>`，
+ * 契约与页脚不配套在编译期就报错（泛型按契约 kind 反查页脚形态），断言只作运行时兜底。 */
+export type PrintFooterSpec = PartFooterSpec | GaugeFooterSpec;
+
+/** 按契约反查该版式配套的页脚形态（编译期把契约与页脚绑死，2026-10-16）。
+ *
+ *  条件类型对 `C` 分配：传检具契约得 `GaugeFooterSpec`、传零件契约（或不传契约、走缺省
+ *  零件版）得 `PartFooterSpec`。不配套的组合（检具契约 + 零件页脚、反之）在编译期报
+ *  「类型不兼容」，不靠运行时才发现。 */
+export type FooterFor<C extends DeliveryNoteTemplateContract> =
+  C extends GaugeDeliveryNoteTemplateContract ? GaugeFooterSpec : PartFooterSpec;
 
 export type { Workbook as HucreWorkbook } from 'hucre/xlsx';
 
@@ -142,8 +169,9 @@ function setCell(sheet: Sheet, y: number, x: number, value: CellValue): void {
  * 反查驱动：渲染层不按「这一版是哪种送货单」分支，只按「这一列绑哪个行字段」写值 —— 版式
  * 的列位差异全在契约里，本表只管两套版式共用的名字对应。
  *
- * 两个例外不在表里：`no` 由行序号特判（不是行字段），见渲染循环；`system_delivery_date`
- * 在行里叫 `etd`（已预格式化成 `M月D日`，口径见 deliveryNotePrintRows::toSheetRows）。
+ * 表外只有一项：`no` 不是打印行字段，由行序号特判（见渲染循环）。
+ * 表内唯一「名字对不上」的是 `system_delivery_date` → 行字段 `etd`（值已预格式化成
+ * `M月D日`，口径见 deliveryNotePrintRows::toSheetRows）。
  */
 const COLUMN_FIELD: Readonly<Record<string, keyof PrintSheetRow>> = {
   order_no: 'orderNo',
@@ -159,27 +187,48 @@ const COLUMN_FIELD: Readonly<Record<string, keyof PrintSheetRow>> = {
 
 /** 页脚实参与契约版式必须配套，否则抛中文错误（**不静默渲染半成品**，2026-10-16 新增）。
  *
- * 判据是「`deliveryDate` 有没有给」：检具版页脚只有 I2 的 `{{delivery_date}}` 一个
- * 占位符，缺了它就会原样输出 `{{delivery_date}}` 字面量；反过来零件版模板里没有这个
- * 占位符，页面却传了检具版页脚，说明传错了页脚对象、打印人 / 日期会一起丢。
+ * 判据是**判别位** `kind`（零件版页脚省略该键时按 `'part'` 记）：检具版模板只有 I2 的
+ * `{{delivery_date}}` 一个占位符，缺了它就会原样输出字面量；反过来零件版模板里没有
+ * 这个占位符，页面却传了检具版页脚，说明传错了页脚对象、打印人 / 日期会一起丢。
+ *
+ * ⚠️ 这条断言是**运行时兜底**、不是主要防线：页脚形参类型是 `FooterFor<C>`，不配套的组合
+ * 在编译期就报类型不兼容（见 FooterFor）。它挡的是 JS 调用方，以及将来泛型被拆掉的退化。
  */
 function assertFooterMatchesContract(
   footer: PrintFooterSpec,
   contract: DeliveryNoteTemplateContract,
 ): void {
-  const given = footer.deliveryDate !== undefined;
-  if (contract.kind === 'gauge' && !given) {
+  const given = footer.kind ?? 'part';
+  if (given === contract.kind) return;
+  if (contract.kind === 'gauge') {
     throw new Error(
-      `检具版模板（契约 ${contract.footer.delivery_date} 需要送货日期）必须传页脚实参 ` +
-        'deliveryDate，缺了它该格会原样输出 {{delivery_date}} 字面量',
+      `检具版模板（契约 ${contract.footer.delivery_date} 需要送货日期）必须传检具版页脚实参 ` +
+        '{ kind: "gauge", deliveryDate } —— 少判别位 / 少送货日期，该格会原样输出 ' +
+        '{{delivery_date}} 字面量',
     );
   }
-  if (contract.kind === 'part' && given) {
-    throw new Error(
-      '零件版模板页脚不含送货日期占位符，却传了检具版页脚实参 deliveryDate —— ' +
-        '请改传 { driverName, year, month, date }（送货人 / 年月日由模板内嵌文案拼装）',
-    );
+  throw new Error(
+    '零件版模板页脚不含送货日期占位符，却传了检具版页脚实参 —— 请改传 ' +
+      '{ kind: "part", driverName, year, month, date }（送货人 / 年月日由模板内嵌文案拼装）',
+  );
+}
+
+/** 按契约版式取 `fillTemplate` 实参（调用点已过 assertFooterMatchesContract ⇒ 实参必配套）。
+ *
+ *  ⚠️ 这里写不成纯类型推导：判别位在 `footer` 上、版式判别在 `contract` 上，TS 不做两个
+ *  独立变量的关联收窄。断言已保证两者配套，所以按契约分支后各断言一次页脚形态。 */
+function footerValues(
+  footer: PrintFooterSpec,
+  contract: DeliveryNoteTemplateContract,
+): Record<string, string> {
+  // 键名必须与模板里的 placeholder **逐字一致**，所以这里显式改名而不是直接 spread ——
+  // 页脚实参的驼峰字段只是视图侧读起来顺，写进模板的键是 snake_case。
+  if (contract.kind === 'gauge') {
+    const f = footer as GaugeFooterSpec;
+    return { delivery_date: f.deliveryDate };
   }
+  const f = footer as PartFooterSpec;
+  return { driver_name: f.driverName, year: f.year, month: f.month, date: f.date };
 }
 
 /**
@@ -196,19 +245,26 @@ function assertFooterMatchesContract(
  *
  * `contract` 缺省是零件版 ⇒ 既有三参调用（打印对话框）零改动继续走原口径。
  *
+ * ⚠️ 页脚形参是 `FooterFor<C>`（2026-10-16）：契约与页脚不配套**在编译期**就报类型不兼容
+ * （传检具契约却给零件页脚、反之亦然），assertFooterMatchesContract 只是运行时兜底。
+ * `C` 的缺省是零件契约 —— 三参调用推不出 `C`，由它兜住。
+ *
  * ⚠️ `xl/styles.xml` 由 `saveXlsx` **重建**，只输出**被单元格引用到**的格式（实测
  * 27 cellXfs / 10 fonts / 10 borders）；模板里没人引用的冗余 `numFmt` / `tableStyles`
  * 记录不再输出（33332 B → 约 6.7 KB）。**对打印无影响**，有意接受。
  */
-export async function renderDeliveryNoteWorkbook(
+export async function renderDeliveryNoteWorkbook<
+  C extends DeliveryNoteTemplateContract = PartDeliveryNoteTemplateContract,
+>(
   templateBytes: Uint8Array,
   sheets: PrintSheetSpec[],
-  footer: PrintFooterSpec,
-  contract: DeliveryNoteTemplateContract = DELIVERY_NOTE_TEMPLATE_CONTRACT,
+  footer: FooterFor<C>,
+  contract: C = DELIVERY_NOTE_TEMPLATE_CONTRACT as C,
 ): Promise<Uint8Array> {
   const { openXlsx, saveXlsx, cloneSheet, fillTemplate } = await loadHucre();
-  const c = contract;
-  assertFooterMatchesContract(footer, c);
+  // `C` 推不出具体联合成员时按联合处理：下面的分支只认 `kind`，与具体成员无关。
+  const c: DeliveryNoteTemplateContract = contract;
+  assertFooterMatchesContract(footer as PrintFooterSpec, c);
 
   // ⚠️ `readStyles: true` **必开，不要「优化」掉**（2026-10-08）：hucre 的
   // `ReadOptions.readStyles` 默认 `false`（`hucre/dist/_types.d.mts`），不开时 sheet 模型里
@@ -248,11 +304,24 @@ export async function renderDeliveryNoteWorkbook(
    *  字段名对不上就在动工作簿**之前**抛错，别渲染到一半才炸。 */
   const colWrites = Object.entries(c.columns).map(([field, letter]) => {
     const col = colIndexOf(letter);
-    if (field === 'no') return { col, rowField: null };
+    if (field === 'no') return { col, rowField: null, letter };
     const rowField = COLUMN_FIELD[field];
     if (!rowField) throw new Error(`模板契约的列名没有对应的打印行字段：${field}`);
-    return { col, rowField };
+    return { col, rowField, letter };
   });
+  // 「数据列必须被整块清空范围覆盖」的守卫（2026-10-16）：清空按 `dataColumns` 走、写入按
+  // `columns` 走，两者**互不参照**，所以契约把某列写窄了不会有人发现 —— 未填满的行该列会
+  // 保留模板原值（检具版 `last: 'H'` 时 I 列就是这样漏出客户样例值）。在动工作簿前抛错。
+  const lastCol = firstCol + width - 1;
+  for (const { col, letter } of colWrites) {
+    if (col < firstCol || col > lastCol) {
+      throw new Error(
+        `模板契约声明的列 ${letter}${c.dataStartRow + 1}（列名见 columns）落在整块清空范围 ` +
+          `${c.dataColumns.first}..${c.dataColumns.last} 之外 —— 未填满的行该列会保留模板原值，` +
+          '请把该列纳入 dataColumns 或从 columns 里去掉',
+      );
+    }
+  }
 
   for (const [sheet, spec] of targets.map((t, i) => [t, list[i]] as const)) {
     // 整块数据区先清空（模板首行数据带 placeholder，其余行是空但有样式的格子）
@@ -275,19 +344,7 @@ export async function renderDeliveryNoteWorkbook(
   }
 
   // 页脚占位符嵌在整串文案里（零件版的「送货人：{{driver_name}}」），fillTemplate 正对
-  // 这种场景。键名必须与模板里的 placeholder **逐字一致**，所以这里显式改名而不是直接
-  // spread —— PrintFooterSpec 的驼峰字段只是视图侧读起来顺，写进模板的键是 snake_case。
-  if (c.kind === 'gauge') {
-    // `?? ''` 只是为了过类型（deliveryDate 是可选键）：检具版缺它时上面已经抛过，
-    // 走到这里必然有值。
-    fillTemplate(wb, { delivery_date: footer.deliveryDate ?? '' });
-  } else {
-    fillTemplate(wb, {
-      driver_name: footer.driverName,
-      year: footer.year,
-      month: footer.month,
-      date: footer.date,
-    });
-  }
+  // 这种场景；取哪几个键由契约版式决定（见 footerValues），配套性上面已断言过。
+  fillTemplate(wb, footerValues(footer as PrintFooterSpec, c));
   return await saveXlsx(wb);
 }
