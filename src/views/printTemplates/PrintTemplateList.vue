@@ -60,6 +60,14 @@
           <span>刷新</span>
         </el-button>
 
+        <!-- ⚠️ 本页**刻意不翻页**（后端绑定维度是「一份模板 ↔ 一个一级客户」，`items` 的
+             上界就是一级客户数，200 条到不了），代价是超限时表格会**静默截断**。所以把后端
+             的 `total` 也摆出来：`total > rows.length` 只可能是被 clamp 截断，当场可见，
+             而不是等某个客户抱怨「他的模板不见了」。取舍理由见 store 的 `LIST_PAGE_SIZE`。 -->
+        <span v-if="!store.query.loading" class="toolbar-count">
+          共 {{ store.query.total }} 个一级客户
+        </span>
+
         <span class="toolbar-hint">
           {{
             store.query.customerId
@@ -241,6 +249,11 @@ onBeforeUnmount(() => {
 }
 
 .toolbar-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.toolbar-count {
   font-size: 12px;
   color: var(--text-secondary);
 }

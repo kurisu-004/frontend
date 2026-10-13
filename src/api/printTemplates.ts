@@ -1,7 +1,7 @@
 // 后端 print-templates 域（送货单打印模板）API。走 `@/api/http` 统一 axios 客户端。
 //
 // 2026-10-16 新建。后端契约（冻结版，与本文件逐字对齐）：
-//   POST /print-templates/                    → 上传 xlsx 并绑定一级客户（成功返 HTTP 201）
+//   POST /print-templates                    → 上传 xlsx 并绑定一级客户（成功返 HTTP 201）
 //   GET  /print-templates?customer_id=&limit=&offset= → 列表（分页信封）
 //   GET  /print-templates/resolve?customer_id=      → 打印时按一级客户自动选用
 //   GET  /print-templates/{id}/content              → 取 xlsx 字节（**裸响应体，不是信封**）
@@ -9,9 +9,11 @@
 //
 // ⚠️ **URL 一律不带尾斜杠**（`/print-templates` 而不是 `/print-templates/`）：后端把各域
 // router nest 到 `/print-templates` 之下、域内首条路由注册在 `/`，nest 会把它折叠成 prefix
-// 本身 —— 带尾斜杠会 404。本仓同款形态的既有实证见 `api/files/objects.ts` 的
-// `uploadFileObject`（「URL 无尾斜杠：后端 nest 把内层的 `/` 折叠成 prefix 本身，带尾斜杠会
-// 404」）。**不要**给上传端点补一个尾斜杠。
+// 本身 —— 带尾斜杠会 404。上面那张端点表里 `POST /print-templates` 的准确读法是「后端源码
+// 里注册的是 `.route("/", get(list).post(upload))`，被 nest 折叠后就是 prefix 本身」。
+// 本仓同款形态的既有实证见 `api/files/objects.ts` 的 `uploadFileObject`
+// （「URL 无尾斜杠：后端 nest 把内层的 `/` 折叠成 prefix 本身，带尾斜杠会 404」）。
+// **不要**给上传端点补一个尾斜杠。
 //
 // ⚠️ **后端不渲染 xlsx**：送货单 xlsx 的生成自 2026-10-08 起完全在前端本地完成（hucre），
 // 后端只负责「存模板字节 + 绑一级客户 + 取字节」。本文件因此**没有**任何「渲染 / 转 PDF /
@@ -63,24 +65,29 @@ export interface DeletePrintTemplatePayload {
   version: number;
 }
 
-/** 上传的 content type 归一：按**扩展名**给，绝不用 `file.type`。
+/**
+ * 上传的 content type 归一：**恒为 `XLSX_MIME`，按扩展名判的那一处在别处**。
  *
- *  浏览器给的 `file.type` 对 xlsx 极不稳定（Windows Chrome 常给空串或
- *  `application/octet-stream`，部分环境给 `application/vnd.ms-excel`），后端按
- *  「扩展名 → 允许的 content_type」比对 ⇒ 直传会被 21102 挡回。本域只允许一种扩展名，
- *  所以归一函数没有分支：**不是 `.xlsx` 就是错误**（由调用方在发请求前拦掉，见
- *  `PRINT_TEMPLATE_ACCEPT_EXT`）。
+ * 2026-10-16 review 第 1 轮 NIT-1：本文件原先有一个 `normalizeUploadContentType(file)`
+ * —— 签名承诺「按扩展名给」，实现却是 `void file; return XLSX_MIME`（本域只允许一种扩展名，
+ * 没有分支可写），与同域的 `PRINT_TEMPLATE_ACCEPT_EXT` / `isPrintTemplateXlsxName` 职责重叠：
+ * 「是不是合法的 xlsx」已经由扩展名闸判过一次（还兼着「发请求前就拦掉」的职责），再要一个
+ * 「按扩展名算 MIME」的函数只会让后人以为这两处可以各改一半。故**删掉函数、直接取契约
+ * 常量**，扩展名闸仍是唯一判据。
  *
- *  口径同 `api/files/objects.ts::normalizeUploadContentType`：重包一个 `File` 而不是在
- *  FormData 上设 content-type，是因为 multipart 的每段 content type 是跟着段走的，
- *  改 form 的 header 改不到已经 append 进去的那一段。 */
-function normalizeUploadContentType(file: File): string {
-  void file;
-  return XLSX_MIME;
-}
+ * 为什么必须重包一个 `File` 而不是在 FormData 上设 content-type：multipart 的每段 content
+ * type 是**跟着段走**的，改 form 的 header 改不到已经 append 进去的那一段。
+ * 口径同 `api/files/objects.ts::normalizeUploadContentType`。
 
 /** 扩展名是不是 `.xlsx`（大小写不敏感）。调用方在**发请求之前**用它拦一道：
- *  坏模板不该占一次往返，更不该先落库再报错。 */
+ *  坏模板不该占一次往返，更不该先落库再报错。
+ *
+ *  ⚠️ 这也是「合法扩展名」的**唯一**判据：mime 恒取契约常量 `XLSX_MIME`（见
+ *  `uploadPrintTemplate` 处的说明），两者不再各判一遍。
+ *
+ *  为什么 MIME 不能用 `file.type`：浏览器给的 `file.type` 对 xlsx 极不稳定（Windows Chrome
+ *  常给空串或 `application/octet-stream`，部分环境给 `application/vnd.ms-excel`），后端按
+ *  「扩展名 → 允许的 content_type」比对 ⇒ 直传会被 21102 挡回。 */
 export function isPrintTemplateXlsxName(name: string): boolean {
   return name.toLowerCase().endsWith(PRINT_TEMPLATE_ACCEPT_EXT);
 }
@@ -96,13 +103,16 @@ export function isPrintTemplateXlsxName(name: string): boolean {
  *
  * 守门在本层（没有 queryFn 承载）。
  *
- * 失败抛 `ApiError`：
- * - 40001 空字节 / 字段非法；
- * - 20104 客户不存在**或不是一级客户**（`parent_id != null`）—— ⚠️ 与 21105「客户不存在」
- *   在后端是两条码，前端文案按「不是一级客户或已不存在」统一表述即可，不必区分；
- * - 21102 扩展名非 xlsx 或文件不是 ZIP；
+ * 失败抛 `ApiError`（按后端校验顺序，**逐字对齐后端 handler.rs 的错误码表**）：
+ * - 40300 非 MANAGER（守卫先于 multipart 解析）；
+ * - 40001 空字节 / 缺 `data` / 缺 `file` / 缺文件名 / `customer_id` 非数字；
+ * - 20104 客户不存在 · 已软删 · **不是一级客户** —— ⚠️ 与 21105「owner 不存在」在后端是
+ *   两条码，前端文案按「不是一级客户或已不存在」统一表述即可，不必区分；
+ * - 21102 扩展名非 xlsx / **前 4 字节不是 `PK\x03\x04`**（不是 ZIP）；
  * - 21103 超大小上限；
- * - 40300 非 MANAGER。
+ * - 21105 owner 不存在（`upload_file_for_owner` 内的**兜底**，正常流程走不到 ——
+ *   2026-10-16 review 第 1 轮 NIT-3 由「只在括注里出现」提升为独立列出）；
+ * - 21108 撞 `uk_t_part_file_single`（并发双传同一 L1 的极端形态）。
  */
 export async function uploadPrintTemplate(
   customerId: string,
@@ -110,7 +120,10 @@ export async function uploadPrintTemplate(
 ): Promise<PrintTemplateData> {
   const form = new FormData();
   form.append('data', JSON.stringify({ customer_id: customerId }));
-  form.append('file', new File([file], file.name, { type: normalizeUploadContentType(file) }));
+  // ⚠️ 重包 File 是为了把 file 段的 content-type 钉成 `XLSX_MIME`（见文件头那条归一注释）；
+  // 段名 / 段数（恰好 `data` + `file` 两段）都是契约 —— 多 append 一个、缺字段或换个字段名
+  // 后端都返 40001。
+  form.append('file', new File([file], file.name, { type: XLSX_MIME }));
   const resp = await api.post<PrintTemplateData>('/print-templates', form);
   return printTemplateSchema.parse(resp.data);
 }
@@ -192,7 +205,14 @@ export async function fetchPrintTemplateContent(templateId: string): Promise<Uin
  * ⚠️ **本函数不做 Zod 守门**：后端返 `R<()>`，信封 `data` 是 `null`，`parse(null)` 必抛。
  * 成功与否由 HTTP 状态码 / 业务码表达。
  *
- * 失败抛 `ApiError`：21109 模板已不存在或已软删 / 40901 OCC 版本冲突 / 40300 非 MANAGER。
+ * 失败抛 `ApiError`（2026-10-16 review 第 1 轮 NIT-2 订正错误码）：
+ * - 21101 模板不存在 / 已软删 —— ⚠️ **不是 21109**：软删走 `files::part_file::service
+ *   ::soft_delete_file`（后端 `print_template::service::delete_template` 直接转调它），
+ *   该方法对「查不到活行」返的是 `BIZ_PART_FILE_NOT_FOUND` = **21101**。21109 是
+ *   `GET /resolve`「该 L1 未绑定」的码，与软删不是同一条路径；
+ * - 40901 OCC 版本冲突；
+ * - 40300 非 MANAGER；
+ * - 21102 `kind` 不在可软删白名单内（本域写死的 `DELIVERY_TEMPLATE` 恒在白名单内，属兜底）。
  */
 export async function deletePrintTemplate(
   templateId: string,

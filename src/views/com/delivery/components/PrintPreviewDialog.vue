@@ -95,6 +95,11 @@ const templateSource = ref<TemplateSource | null>(null);
 const templateName = ref('');
 const templateDiffs = ref<string[]>([]);
 const templateLoading = ref(false);
+/** 自动选型失败时的那一句提示（成功 / 未绑定时都是空串 = 不显示）。
+ *  ⚠️ **声明必须排在 `resolveBoundTemplate` 之前**（2026-10-16 review 第 1 轮 MINOR-10）：
+ *  原先它声明在那个函数下面 40 行，今天安全只因为 immediate watch 在 setup 跑完后才 resume；
+ *  `const` 在 TDZ，谁把那条 watch 往上挪就是运行时 `ReferenceError`。 */
+const autoHint = ref('');
 /** 打开对话框时那次 resolve 的进行中（与用户手动选模板的 loading 合并成一个按钮态）。 */
 const boundResolving = ref(false);
 /** 该一级客户**没有**绑定模板（业务码 21109）。与「还没查」区分开：前者要提示用户去
@@ -105,8 +110,20 @@ const boundMissing = ref(false);
  *  ⚠️ 这条不是为了防竞态（resolve 只在打开时跑一次），而是防「自动选用把用户刚选的文件
  *  悄悄换掉」：自动选中的那次字节校验可能比用户点「选择模板」慢（要先过一次
  *  `GET /{id}/content` + 动态 import hucre），晚到的一旦覆盖，用户会看到自己选的模板名字
- *  变了、导出的却是另一份。 */
+ *  变了、导出的却是另一份。
+ *
+ *  ⚠️ **它不是竞态守卫**（那是 `resolveSeq` 的职责）：`DeliveryNoteDetail.vue` 下组件常驻，
+ *  「开 → 关 → 再开」会让两次 resolve 并飞。 */
 const userPickedTemplate = ref(false);
+/** resolve 的自增代次（2026-10-16 review 第 1 轮 MINOR-9）。
+ *
+ *  `userPickedTemplate` 只守「手动 vs 自动」这一条；常驻挂载下「开→关→再开」时 resolve#1
+ *  与 #2 并飞，#1 落地那一刻 `userPickedTemplate` 已被打开沿的 watch 重置为 `false`
+ *  ⇒ **挡不住**。今天无害只因为 `note.customer_id` 在一次挂载内不变（同客户 ⇒ 同 id ⇒ 幂等），
+ *  而那是**假设不是保证**。代次守卫让「只有最新一次 resolve 能写状态」成为事实。
+ *  附带修掉第二个症状：#1 的 `finally` 会把 `boundResolving` 提前置 false，#2 还在飞时按钮
+ *  loading 就消失了。 */
+const resolveSeq = ref(0);
 
 /** 该一级客户未绑定模板的后端业务码（见 `api/printTemplates.ts::resolvePrintTemplate`）。 */
 const TEMPLATE_NOT_BOUND_CODE = 21109;
@@ -122,10 +139,14 @@ const usingBoundTemplate = computed(() => templateSource.value?.kind === 'api');
  * ⚠️ **失败不弹 toast、只把原因摆进工具栏那一行**：这是一次后台自动选型，用户还没做任何
  * 事，弹一条红色错误只是噪音（`.auto-hint` 那行与图纸预览的 `.degrade-hint` 同一形态）。
  * ⚠️ **用户已手动选过模板时不覆盖**（见 `userPickedTemplate` 的说明）。
+ * ⚠️ **每次调用自增 `resolveSeq`，写任何状态前先比对代次**（见 `resolveSeq` 的说明）。
  */
 async function resolveBoundTemplate(): Promise<void> {
   const customerId = props.note.customer_id;
   if (!props.modelValue || !customerId) return;
+  const seq = (resolveSeq.value += 1);
+  /** 迟到的旧代次不许写任何状态（含 `boundResolving`）。 */
+  const stale = () => seq !== resolveSeq.value;
   boundResolving.value = true;
   try {
     const hit = await resolvePrintTemplate(customerId);
@@ -133,25 +154,32 @@ async function resolveBoundTemplate(): Promise<void> {
     const bytes = await fetchPrintTemplateContent(hit.id);
     const { openXlsx } = await import('hucre');
     const diffs = await assertTemplateMatches(await openXlsx(bytes));
-    if (userPickedTemplate.value) return;
+    if (stale() || userPickedTemplate.value) return;
     templateName.value = hit.original_filename;
     templateDiffs.value = diffs;
     // 校验不过就不留来源：导出按钮已经 disabled，留着只会让人以为「自动选用」这一步过了。
     templateSource.value = diffs.length === 0 ? { kind: 'api', id: hit.id } : null;
     boundMissing.value = false;
   } catch (e) {
+    if (stale() || userPickedTemplate.value) return;
     if ((e as { code?: number }).code === TEMPLATE_NOT_BOUND_CODE) {
       // 未绑定是**正常状态**（绝大多数客户还没配模板），不是失败：清空自动选型结果 + 置
       // 「未绑定」标志，让工具栏提示 + 「导出」禁用原因都说到点子上。
-      if (userPickedTemplate.value) return;
       templateSource.value = null;
       templateName.value = '';
       templateDiffs.value = [];
       boundMissing.value = true;
     } else {
-      // 其它失败（网络 / 权限 / 库里那份字节解不开）：退回「请手动选择」，并说明是自动选用
-      // 出了问题而不是「没配模板」—— 用户去「模板编辑」页改配置是解决不了网络问题的。
-      if (userPickedTemplate.value) return;
+      // 其它失败（网络 / 权限 / 库里那份字节解不开 / resolve 出参解析失败）：退回「请手动
+      // 选择」，并说明是自动选用出了问题而不是「没配模板」—— 用户去「模板编辑」页改配置是
+      // 解决不了网络问题的。
+      //
+      // ⚠️ `console.warn` 是**必需**的一行（2026-10-16 review 第 1 轮 MINOR-6）：这里原本
+      // 只有一句 12px 黄色小字，零 toast 零日志 ⇒ 「后端给 resolve 加了个字段 →
+      // printTemplateResolveSchema.parse 抛 → 全站客户的自动选型集体静默失效」这种故障
+      // 在生产上完全不可发现（且 resolve schema 已改为不 `.strict()`，但任何解析失败仍要
+      // 能查）。**这不是调试残留，别删。**
+      console.warn('[print-template] 自动选用失败', e);
       templateSource.value = null;
       templateName.value = '';
       templateDiffs.value = [];
@@ -159,12 +187,9 @@ async function resolveBoundTemplate(): Promise<void> {
       autoHint.value = '自动选用该客户模板失败，请手动选择模板';
     }
   } finally {
-    boundResolving.value = false;
+    if (!stale()) boundResolving.value = false;
   }
 }
-
-/** 自动选型失败时的那一句提示（成功 / 未绑定时都是空串 = 不显示）。 */
-const autoHint = ref('');
 
 /** el-upload 的 `:limit="1"` 意味着第二次选同一文件不触发 on-change；
  *  必须先 clearFiles() 清掉内部列表（仓内同款注释见 PurchaseOrderImportDialog）。 */
@@ -188,6 +213,12 @@ async function onFileChange(file: { raw?: File; name?: string }): Promise<void> 
     autoHint.value = '';
     if (templateDiffs.value.length === 0) ElMessage.success('模板校验通过');
   } catch (e) {
+    // ⚠️ **刻意不置 `userPickedTemplate = true`**（2026-10-16 review 第 1 轮 MINOR-11 登记的
+    // 取舍）：成功分支置了它，失败分支没置。置了的话「选了个解不开的文件」会连自动选型一起
+    // 挡掉，用户只剩一条死路；不置的话迟到的自动选型会接管 —— 这**正是想要的**：管理员给这个
+    // 客户配的那份常驻模板本来就是兜底。代价是 `templateDiffs` 里那条「模板解析失败」会被自动
+    // 选型的结果（成功 ⇒ 差异清空 + 「已校验」标签；也失败 ⇒ 换成自动选型自己的失败原因）
+    // 顶掉。两者都比「停在一句解不开」更有用，故接受。
     templateSource.value = null;
     templateName.value = file.name ?? '';
     templateDiffs.value = [`模板解析失败：${(e as Error).message}`];
@@ -314,14 +345,43 @@ watch(
 //
 // ⚠️ **独立一条 watch，不塞进上面那条**：上面那条还跟着 mergeMode / 分组数据变化触发，把
 // 自动选型挂进去会让「改一次合并模式」重打一次 `resolve` + `content`（两次往返）。
-// `note.customer_id` 在一次挂载内不会变（详情页切单据才会），而切单据必然经过关闭再打开。
+//
+// ⚠️ **`note.customer_id` 在一次挂载内不会变**（详情页切单据才会），而切单据必然经过关闭
+// 再打开 —— 这条是 resolve 只在打开沿跑一次的前提。**它是假设不是保证**，所以下面另有
+// `resolveSeq` 代次守卫兜住「开了又关又开」时两次 resolve 并飞的场景。
+//
+// 2026-10-16 review 第 1 轮 MINOR-8：**复位只清 auto 态、保留 `{kind:'local'}` 的手动
+// 模板**。改前这里无条件 `templateSource = null`，而 `DeliveryNoteDetail.vue` 的 `v-if` 只
+// 判 `detail.note`、组件**不卸载** ⇒ 详情页上「选模板 → 关闭 → 再打开」改前保留、改后被清空、
+// 要重新等一轮自动选型。用户拍板的决策 2 强调「保留手动上传兜底」，清空它与那条意图相反。
+// （`DeliveryNoteScan.vue` 侧组件会卸载，保留与否用户无感。）
+//
+// ⚠️ **「保留」的前提是「同一张单」** —— 所以 watch 源带上 `props.note.id`：详情页可以在
+// 对话框**关着**的时候换单（`v-if="detail.note"` 前后都为真、组件不卸载、`modelValue` 不变
+// ⇒ 只看 modelValue 的 watch 一个字都不会触发），那样 A 单手选的模板会跟着飘到 B 单上。
+// **换单清模板这一段不挂在 `if (!open) return` 之后** —— 关着的时候也必须清，否则「关着换单
+// → 再打开」时 `prev` 已经是新单号、`noteChanged` 判 false，模板照样飘过去。
 watch(
-  () => props.modelValue,
-  (open) => {
+  [() => props.modelValue, () => props.note.id],
+  (next, prev) => {
+    const open = next[0];
+    const noteChanged = prev !== undefined && prev[1] !== next[1];
+    if (noteChanged) {
+      templateSource.value = null;
+      templateName.value = '';
+      templateDiffs.value = [];
+      userPickedTemplate.value = false;
+    }
     if (!open) return;
-    userPickedTemplate.value = false;
     autoHint.value = '';
     boundMissing.value = false;
+    // 同一张单的手动模板跨「关 → 开」保留（理由见上方 doc）：不重置、不重跑 resolve。
+    // 置 `userPickedTemplate = true` 是必须的 —— 否则重跑的那次 resolve 会把它顶掉。
+    if (!noteChanged && templateSource.value?.kind === 'local') {
+      userPickedTemplate.value = true;
+      return;
+    }
+    userPickedTemplate.value = false;
     templateSource.value = null;
     templateName.value = '';
     templateDiffs.value = [];
@@ -392,6 +452,12 @@ const exportDisabled = computed(() => {
 
 /** 「导出」disabled 的原因（tooltip 显示；空串 = 可导出）。 */
 const exportHint = computed(() => {
+  // ⚠️ **「正在自动选用」要排在最前**（2026-10-16 review 第 1 轮 MINOR-7）：resolve 在途
+  // 期间状态是 `templateSource=null` / `diffs=[]` / `boundMissing=false`，三条分支都不命中 ⇒
+  // tooltip 会落到最后一行「请先上传送货单模板」。而真实状态是「正在自动选用…」—— 这段窗口
+  // = 2 次往返 + 一次完整 xlsx 解析（几百 ms ~ 数秒），是**每次打开都必然经过**的常态，
+  // 不是边缘情况。
+  if (boundResolving.value) return '正在自动选用该客户的绑定模板…';
   if (!templateOk.value) {
     if (templateDiffs.value.length > 0) {
       return `模板校验未通过：${templateDiffs.value.join('；')}`;

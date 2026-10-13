@@ -39,7 +39,16 @@ import { PRINT_TEMPLATE_ACCEPT_EXT, type PrintTemplateData } from '../printTempl
 import { usePrintTemplateListQuery } from './usePrintTemplateListQuery';
 
 /** 列表一次拉多少条。后端 clamp 上限比这大，但模板是配置数据、现实中一个 L1 就一行，
- *  给一个够用又不至于让「切客户」这一下拉回一整页的量。 */
+ *  给一个够用又不至于让「切客户」这一下拉回一整页的量。
+ *
+ * ⚠️ **本页刻意不翻页**（2026-10-16 review 第 1 轮 MINOR-13 复核）：后端的绑定维度是
+ * 「一份模板 ↔ 一个一级客户」，同一 L1 二次上传是**替换**而不是新增 ⇒ `items` 的上界就是
+ * 「库里有一级客户数」个量级，现实中到不了本常量。为了一个到不了的量级引入页码控件 / offset
+ * 状态 / 页码与筛选的联动，比它挡住的问题更贵。
+ *
+ * ⚠️ 正因为「到不了」，**静默截断是不可接受的失败形态**：`total` 一旦与 `items.length`
+ * 不一致就说明后端 clamp 上限被调低了。所以 `total` 必须上屏（见 `query.total` 的注释与
+ * `PrintTemplateList.vue` 的工具栏），让截断当场可见，而不是等某个客户抱怨「他的模板不见了」。*/
 const LIST_PAGE_SIZE = 200;
 
 export const usePrintTemplatesStore = defineStore('print-templates', () => {
@@ -66,6 +75,15 @@ export const usePrintTemplatesStore = defineStore('print-templates', () => {
 
   /** 模板列表。**恒为数组**（拿不到时给 `[]`，页面据此渲染空态而不是 `undefined`）。 */
   const rows = computed<PrintTemplateData[]>(() => listQuery.data.value?.items ?? []);
+  /**
+   * 后端返回的**总条数**（不受 `limit` 截断影响）。
+   *
+   * ⚠️ **这不是装饰字段、是一个可见性闸门**（2026-10-16 review 第 1 轮 MINOR-13）：本页不
+   * 翻页（理由见 `LIST_PAGE_SIZE`），所以 `total > rows.length` 的唯一成因就是「后端 clamp
+   * 上限被调低 / 将来绑定维度从一对一放宽」⇒ 那时表格会**静默截断**。把它渲染到工具栏，
+   * 截断当场可见。
+   */
+  const total = computed<number>(() => listQuery.data.value?.total ?? 0);
   const loading = listQuery.isFetching;
 
   function openGate(): void {
@@ -109,6 +127,14 @@ export const usePrintTemplatesStore = defineStore('print-templates', () => {
   /**
    * 上传一份模板（校验 → 请求两步）。
    *
+   * ⚠️ **两段的失败必须分开归因**（2026-10-16 review 第 1 轮 MAJOR-2）：模板在 `mutateAsync`
+   * 那一刻是**校验通过**的（第二道闸刚放行）。若把 `mutateAsync` 也塞进「校验」的
+   * `try/catch`，请求失败（21103 超限 / 40300 权限 / 40901 版本冲突 / 网络断开）会落进
+   * 那条 catch ⇒ ① `onError` 已弹过真实错误、这里再弹一条「模板解析失败」；②
+   * `uploadDiffs` 被写成 API 错误文案，`PrintTemplateList.vue` 的 `el-alert` 渲染成
+   * 「模板校验未通过，共 1 处差异」，正文是后端错误消息。报错完全指错方向：用户会去改
+   * Excel 单元格，而真正原因是文件太大 / 权限 / 版本冲突。
+   *
    * @returns true = 已入库；false = 校验不过 / 请求失败（两者都已给过提示）。
    */
   async function upload(file: File, targetCustomerId: string): Promise<boolean> {
@@ -121,26 +147,49 @@ export const usePrintTemplatesStore = defineStore('print-templates', () => {
     busy.value = true;
     uploadDiffs.value = [];
     try {
-      // 第二道闸：逐格结构校验。⚠️ 这一步不能省 —— 后端只认「是 xlsx 且是 ZIP」，
-      // 一份列位错位的模板在库里是完全合法的，坏在打印那一刻才发现已经晚了。
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      const { openXlsx } = await import('hucre');
-      const diffs = await assertTemplateMatches(await openXlsx(bytes));
-      if (diffs.length > 0) {
-        uploadDiffs.value = diffs;
-        ElMessage.error(`模板校验未通过（${diffs.length} 处差异），已取消上传`);
-        return false;
-      }
-      await uploadMutation.mutateAsync({ customerId: targetCustomerId, file });
-      return true;
-    } catch (e) {
-      // 校验阶段抛错（文件不是能解开的 xlsx / hucre 报错）—— 与「校验不过」同一条路处理。
-      uploadDiffs.value = [`模板解析失败：${(e as Error).message}`];
-      ElMessage.error('模板解析失败，已取消上传');
-      return false;
+      return await uploadChecked(file, targetCustomerId);
     } finally {
       busy.value = false;
     }
+  }
+
+  /**
+   * `upload` 的真正实现（**busy 的 finally 由调用方管**，见上面那层）。
+   *
+   * ⚠️ 两段 try/catch 是刻意的分界：第二段只包「读字节 + 解 zip + 逐格比对」，第三段的
+   * 请求失败**不允许**进第二段那个 catch（理由见 `upload` 的 doc）。
+   */
+  async function uploadChecked(file: File, targetCustomerId: string): Promise<boolean> {
+    // ---- 第二道闸：逐格结构校验。⚠️ 这一段单独一个 try/catch，**只有它**归「模板解析
+    // 失败」—— 见上方 doc 说的「两段失败必须分开归因」。
+    let diffs: string[];
+    try {
+      // ⚠️ 校验本身不能省 —— 后端只认「是 xlsx 且是 ZIP」，一份列位错位的模板在库里是完全
+      // 合法的，坏在打印那一刻才发现已经晚了。
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const { openXlsx } = await import('hucre');
+      diffs = await assertTemplateMatches(await openXlsx(bytes));
+    } catch (e) {
+      uploadDiffs.value = [`模板解析失败：${(e as Error).message}`];
+      ElMessage.error('模板解析失败，已取消上传');
+      return false;
+    }
+    if (diffs.length > 0) {
+      uploadDiffs.value = diffs;
+      ElMessage.error(`模板校验未通过（${diffs.length} 处差异），已取消上传`);
+      return false;
+    }
+    // ---- 第三段：请求。失败由 uploadMutation 的 onError 提示，这里只回落成 false ----
+    // ⚠️ 回落而不是继续向上抛（2026-10-16 review 第 1 轮 MAJOR-2）：页面壳那侧是
+    // `await store.upload.run(...)`，让 reject 冒出去就是一个未捕获的 rejection。真正给用户
+    // 的提示由 mutation 的 `onError` 弹（**只弹那一次**），这里既不重复弹、也**不把 API
+    // 错误文案写进 uploadDiffs** —— 那会让差异面板把「文件太大 / 无权限」渲染成
+    // 「模板校验未通过」，把用户引去改 Excel 单元格而不是改文件大小。
+    const ok = await uploadMutation
+      .mutateAsync({ customerId: targetCustomerId, file })
+      .then(() => true)
+      .catch(() => false);
+    return ok;
   }
 
   /** 正在下载的行 id（`null` = 无）。**按行**挂 loading：布尔量挂到每一行会让整张表的
@@ -210,6 +259,8 @@ export const usePrintTemplatesStore = defineStore('print-templates', () => {
   return {
     query: {
       rows,
+      /** 后端返回的总条数（`> rows.length` ⇒ 列表被后端 clamp 截断了，工具栏会显示出来）。 */
+      total,
       loading,
       /** 当前筛选的一级客户 id（`''` = 全部）。 */
       customerId,

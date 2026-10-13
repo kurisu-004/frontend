@@ -8,9 +8,18 @@
 //     （19 位 ID 在 JS Number 下丢精度）。前端所有「客户 id」都是 string。
 //   - **计数 / 版本号一律 JSON number**：`file_size` / `version`。
 //
-// ⚠️ **`.strict()` 的取舍**（与 mail 域同款）：后端给本域加字段时必须在这里显式决策，
-// 而不是被 Zod 默认的 strip 静默吞掉 —— 吞掉之后前端「照样通过校验」，那一列整列失效且
-// 无人发现（例如后端加了 `file_type` 而这里没跟上，表格那一列恒空）。
+// ⚠️ **`.strict()` 的取舍按「读侧 vs 写侧」分**（CLAUDE.md「读侧 vs 写侧 schema 的 strict
+// 口径相反」；2026-10-16 review 第 1 轮 NIT-9 订正本文件原先那段把三个 schema 一概按写侧
+// 理由解释的注释 —— 那条理由对 `printTemplateSchema` / `printTemplateListResultSchema`
+// 成立，对 `printTemplateResolveSchema` **不成立**）：
+//   - **写侧口径（`.strict()`）**：`printTemplateSchema` / `printTemplateListResultSchema`
+//     —— 后端给这两个出参加字段时必须在这里显式决策，而不是被 Zod 默认的 strip 静默吞掉：
+//     吞掉之后前端「照样通过校验」，那一列整列失效且无人发现（例如后端加了 `file_type` 而这里
+//     没跟上，表格那一列恒空）。
+//   - **读侧口径（**不** `.strict()`）**：`printTemplateResolveSchema`。它的失败模式与上面
+//     相反：`.strict()` 一旦抛，`PrintPreviewDialog.vue::resolveBoundTemplate` 落进 else 分支
+//     → 一句「自动选用该客户模板失败，请手动选择模板」⇒ **全站客户的自动选型集体静默失效**，
+//     而失败原因既不弹 toast 也不进错误日志。读侧多一个字段是纯增量信息，strip 掉它零代价。
 //
 // ⚠️ **`customer_name` / `content_sha256` 都是可空**：客户被软删后后端给 `null`，而
 // sha256 对「库里没算出来」的存量行也是 `null`。所以表格里这两格都必须有降级展示，
@@ -92,21 +101,27 @@ export type PrintTemplateListResultData = z.infer<typeof printTemplateListResult
  * 前缀、也**不带** Authorization 头）⇒ 它只能当展示信息，**不能**直接塞进 `<a href>` /
  * `<img src>`：`api` 实例的 `baseURL` 是 `/api/v2`，且 token 由请求拦截器注入。前端取字节
  * 一律走 `api/printTemplates.ts::fetchPrintTemplateContent(id)`（走 axios），不拼这条 URL。
+ *
+ * ⚠️ **刻意不 `.strict()`**（2026-10-16 review 第 1 轮 MINOR-6，理由见文件头「读侧 vs 写侧」
+ * 一节）：本 schema 是**纯读侧**出参，`.strict()` 抛出来的失败模式是「静默降级」—— 后端加
+ * 一个字段就抛 ZodError → `PrintPreviewDialog.vue::resolveBoundTemplate` 落进 else 分支 →
+ * **全站客户的自动选型集体失效**，只剩一行 12px 黄色小字、零 toast、零错误日志。那是本域
+ * 最难被发现的一类故障：现象是「管理员配了模板也要每次手动选」，而没人会去翻那句提示。
+ * 配套的可观测性补强（同轮）见 `PrintPreviewDialog.vue` 里 else 分支的 `console.warn`。
  */
-export const printTemplateResolveSchema = z
-  .object({
-    id: z.string(),
-    customer_id: z.string(),
-    customer_name: z.string().nullable(),
-    original_filename: z.string(),
-    file_size: z.number(),
-    content_sha256: z.string().nullable(),
-    version: z.number(),
-    updated_at: z.string(),
-    /** 相对路径，**仅供展示**（理由见本 schema 的 doc）。 */
-    content_url: z.string(),
-  })
-  .strict();
+export const printTemplateResolveSchema = z.object({
+  id: z.string(),
+  customer_id: z.string(),
+  customer_name: z.string().nullable(),
+  original_filename: z.string(),
+  file_size: z.number(),
+  content_sha256: z.string().nullable(),
+  version: z.number(),
+  updated_at: z.string(),
+  /** 相对路径，**仅供展示**（理由见本 schema 的 doc）。 */
+  content_url: z.string(),
+  // ⚠️ 不 `.strict()`：多出来的键被 strip（默认行为）而不是抛 —— 见上面那段 doc。
+});
 
 export type PrintTemplateResolveData = z.infer<typeof printTemplateResolveSchema>;
 
@@ -115,7 +130,8 @@ export type PrintTemplateResolveData = z.infer<typeof printTemplateResolveSchema
 // ============================================================
 
 /**
- * 本域唯一允许的扩展名。后端 `POST /print-templates/` 对非 xlsx 返 21102；前端在
+ * 本域唯一允许的扩展名。后端 `POST /print-templates`（后端源码注册在 `.route("/")`、被 nest
+ * 折叠成 prefix 本身，**不带尾斜杠**）对非 xlsx / 非 ZIP 返 21102；前端在
  * **发请求之前**就用它拦一道 —— 坏模板不该占一次往返，更不该先落库再报错。
  *
  * ⚠️ **本域没有自己的一份 MIME 常量**：模板文件就是送货单打印模板，MIME 的唯一来源是

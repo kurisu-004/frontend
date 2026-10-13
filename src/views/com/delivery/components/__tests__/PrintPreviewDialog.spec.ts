@@ -75,6 +75,15 @@ function builtinArrayBuffer(): ArrayBuffer {
   return exact.buffer as ArrayBuffer;
 }
 
+/** 手动可控的 Promise 闸：resolve 竞态用例（MINOR-7 / MINOR-9）用它卡住某一次请求。 */
+function deferred<T = void>(): { promise: Promise<T>; resolve: (v: T) => void } {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
 /** `GET /print-templates/resolve` 命中的出参（后端 `PrintTemplateResolveOut` 逐字形状）。 */
 const BOUND_TEMPLATE_OUT = {
   id: 'T1',
@@ -727,5 +736,112 @@ describe('PrintPreviewDialog 自动选用一级客户绑定的模板', () => {
     expect(w.text()).not.toContain('fala_bound.xlsx');
     expect(w.text()).toContain('manual.xlsx');
     expect(w.text()).toContain('已校验');
+  });
+
+  // 2026-10-16 review 第 1 轮 MINOR-7：resolve 在途期间 tooltip 必须说「正在自动选用」。
+  it('MINOR-7：resolve 在途期间 tooltip 是「正在自动选用…」，不是「请先上传送货单模板」', async () => {
+    // 那段窗口 = 2 次往返 + 一次完整 xlsx 解析，是每次打开都必然经过的常态。原实现三条
+    // 分支都不命中 ⇒ 落到最后一行「请先上传送货单模板」，把常态说成故障。
+    const gate = deferred();
+    apiGetMock.mockImplementation(async (url: string) => {
+      if (url.includes('/print-templates/resolve')) await gate.promise;
+      return defaultGet(url);
+    });
+    boundMode = 'bound';
+    const w = await mountDialog();
+    await waitUntil(
+      () => apiGetMock.mock.calls.some((c) => String(c[0]).includes('/print-templates/resolve')),
+      'resolve 已发出',
+    );
+    expect(w.find('.mock-el-tooltip').attributes('title')).toContain('正在自动选用');
+
+    gate.resolve();
+    await waitAutoSelected(w);
+    expect(w.find('.mock-el-tooltip').attributes('title')).not.toContain('正在自动选用');
+  });
+
+  // 2026-10-16 review 第 1 轮 MINOR-8：详情页组件常驻，「关 → 再开」不得把手动选的模板清空。
+  it('MINOR-8：关对话框再打开 ⇒ 手动选的模板仍在（不重置、不重跑 resolve）', async () => {
+    withDriverOptions();
+    const w = await mountDialog();
+    await uploadFile(w, builtinFile('manual.xlsx'));
+    expect(w.text()).toContain('manual.xlsx');
+
+    await w.setProps({ modelValue: false });
+    await flush();
+    apiGetMock.mockClear();
+    await w.setProps({ modelValue: true });
+    await flush();
+
+    // 改前这里会被无条件清空、重新等一轮自动选型 —— 与用户拍板的决策 2「保留手动上传兜底」相反。
+    expect(w.text()).toContain('manual.xlsx');
+    expect(w.text()).toContain('已校验');
+    expect(
+      apiGetMock.mock.calls.filter((c) => String(c[0]).includes('/print-templates/resolve')),
+    ).toHaveLength(0);
+  });
+
+  // MINOR-8 的「保留」前提是「同一张单」：详情页可以在对话框**关着**的时候换单
+  // （v-if 前后都为真、组件不卸载、modelValue 不变）⇒ 只看 modelValue 的 watch 不会触发。
+  it('MINOR-8b：换一张送货单 ⇒ 手动选的模板不跟着飘过去', async () => {
+    withDriverOptions();
+    const w = await mountDialog();
+    await uploadFile(w, builtinFile('for_note_a.xlsx'));
+    expect(w.text()).toContain('for_note_a.xlsx');
+
+    await w.setProps({ modelValue: false });
+    await flush();
+    // 对话框关着的时候换单：只有 note.id 变了。
+    await w.setProps({ note: note({ id: 'N2' }) });
+    await flush();
+    await w.setProps({ modelValue: true });
+    await flush();
+
+    expect(w.text()).not.toContain('for_note_a.xlsx');
+  });
+
+  // 2026-10-16 review 第 1 轮 MINOR-9：`userPickedTemplate` 守不了「开→关→再开」时两次
+  // resolve 并飞的场景（#1 落地时该标志已被打开沿的 watch 重置为 false）。代次守卫才守得住。
+  it('MINOR-9：常驻挂载下「开→关→再开」，迟到的第一次 resolve 不得覆盖第二次的结果', async () => {
+    withDriverOptions();
+    boundMode = 'bound';
+    // 第一次 resolve 卡在闸上；第二次放行且返回**另一个**文件名，便于区分谁落地了。
+    const firstGate = deferred();
+    let resolveCalls = 0;
+    apiGetMock.mockImplementation(async (url: string) => {
+      if (url.includes('/print-templates/resolve')) {
+        // ⚠️ 序号必须**就地捕获**：第一次 resolve 卡在闸上期间计数器已经涨到 2，在 await 之后
+        // 再读它会让两次都返回「第二个」的名字，用例就变成恒绿（它自己假绿过一次）。
+        const n = (resolveCalls += 1);
+        if (n === 1) await firstGate.promise;
+        return {
+          data: {
+            ...BOUND_TEMPLATE_OUT,
+            original_filename: n === 1 ? 'slow_first.xlsx' : 'fast_second.xlsx',
+          },
+        };
+      }
+      return defaultGet(url);
+    });
+
+    const w = await mountDialog();
+    await waitUntil(() => resolveCalls === 1, '第一次 resolve 已发出');
+    await w.setProps({ modelValue: false });
+    await flush();
+    await w.setProps({ modelValue: true });
+    await waitUntil(() => resolveCalls === 2, '第二次 resolve 已发出');
+    // 第二次先落地（慢的那条仍卡在闸上）。
+    await waitAutoSelected(w);
+    expect(w.text()).toContain('fast_second.xlsx');
+
+    // 现在放行迟到的那条：没有代次守卫时它会把上面那个结果覆盖掉。
+    firstGate.resolve();
+    await waitUntil(
+      () => apiGetMock.mock.calls.filter((c) => String(c[0]).includes('/print-templates/T1/content')).length >= 2,
+      '迟到的第一次 resolve 取字节',
+    );
+    await flush();
+    expect(w.text()).toContain('fast_second.xlsx');
+    expect(w.text()).not.toContain('slow_first.xlsx');
   });
 });
