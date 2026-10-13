@@ -28,7 +28,7 @@ import {
   type MailDigestFormModel,
 } from '../mailDigestSchema';
 
-/** 后端 `MailDigestConfigOut` 的 wire 形态（18 键，全显式声明）。 */
+/** 后端 `mail_digest/dto.rs::ConfigOut` 的 wire 形态（19 键，全显式声明）。 */
 const CONFIG = {
   id: '1900000000000000001',
   version: 3,
@@ -68,19 +68,28 @@ const CONFIG_EMPTY_ROW = {
   visible_columns: [],
 };
 
-const LOG_ROW = {
+/** 后端 `mail_digest/dto.rs::SendResultOut` 的 wire 形态（12 键，全显式声明）。
+ *
+ *  ⚠️ **本文件唯一的行 fixture，send 与 logs 两条用例共用这一份** —— 两条端点在后端是同一个
+ *  结构体（`LogListOut.items` 的元素类型就是 `SendResultOut`）。同一形状配两份手写 fixture
+ *  时两份各自漂移，且**漂移对单测不可见**：fixture 若是照着漏声明的 schema 写的，那条用例
+ *  就是自证式的（schema 少几个键、fixture 也少几个键，永远绿），真实响应却带着那几个键
+ *  ⇒ `.strict()` 下当场抛 —— 挂在 `send` 的守门上就是「邮件已发出、前端报失败、用户重发」。
+ *  键集清单见 `mailDigestKeySet.spec.ts`。 */
+const SEND_RESULT_ROW = {
   log_id: '1900000000000000010',
+  // `/send` 的响应里恒为 MANUAL（定时任务触发的那几行只在 logs 里出现）。
+  trigger_source: 'MANUAL',
+  config_version: 3,
   status: 'SUCCESS',
   subject: '交期汇总 2026-10-13',
   to_recipients: ['a@example.com'],
+  cc_recipients: ['b@example.com'],
   overdue_count: 3,
   upcoming_count: 12,
   html_bytes: 20480,
   sent_at: '2026-10-13 08:30:00',
   error_message: null,
-  config_version: 3,
-  cc_recipients: ['b@example.com'],
-  trigger_source: 'SCHEDULED',
 };
 
 describe('mailDigestConfigSchema（GET /config 守门）', () => {
@@ -228,29 +237,40 @@ describe('preview / send / logs 的守门 schema', () => {
     expect(parsed.upcoming_count).toBe(12);
   });
 
-  it('send：log_id 是字符串、status 是两个枚举之一、error_message 可空', () => {
+  it('send：出参 = SendResultOut 的 12 键行视图（与 logs 行是同一个结构体）', () => {
     const ok = mailDigestSendResultSchema.parse({
-      log_id: '1900000000000000010',
+      ...SEND_RESULT_ROW,
       status: 'FAILED',
-      subject: '交期汇总',
-      to_recipients: ['a@example.com'],
-      overdue_count: 0,
-      upcoming_count: 0,
-      html_bytes: 0,
-      sent_at: '2026-10-13 08:30:00',
       error_message: 'SMTP 握手失败',
     });
     expect(ok.status).toBe('FAILED');
     expect(ok.error_message).toBe('SMTP 握手失败');
+    expect(ok.trigger_source).toBe('MANUAL');
+    expect(ok.config_version).toBe(3);
     expect(
       mailDigestSendResultSchema.parse({ ...ok, status: 'SUCCESS', error_message: null }).status,
     ).toBe('SUCCESS');
     expect(() => mailDigestSendResultSchema.parse({ ...ok, status: 'PENDING' })).toThrow();
   });
 
-  it('logs：行 = send 形状 + config_version / cc_recipients / trigger_source，分页三计数按 number', () => {
+  it('send：缺任一键即抛（漏声明 = 后端多发一个键当场抛，而邮件那时已经发出去了）', () => {
+    for (const key of Object.keys(SEND_RESULT_ROW)) {
+      const without: Record<string, unknown> = { ...SEND_RESULT_ROW };
+      delete without[key];
+      expect(() => mailDigestSendResultSchema.parse(without), `少了 ${key} 竟然过了`).toThrow();
+    }
+  });
+
+  it('send：多一个未知键即抛（.strict()：后端加派生字段时必须在这里显式决策）', () => {
+    expect(() =>
+      mailDigestSendResultSchema.parse({ ...SEND_RESULT_ROW, smtp_error: 'timeout' }),
+    ).toThrow();
+  });
+
+  it('logs：行形状就是 send 行形状（后端两端同一个结构体），分页三计数按 number', () => {
+    const scheduledRow = { ...SEND_RESULT_ROW, trigger_source: 'SCHEDULED' };
     const parsed = mailDigestLogListSchema.parse({
-      items: [LOG_ROW],
+      items: [scheduledRow],
       total: 1,
       limit: 20,
       offset: 0,
@@ -258,10 +278,10 @@ describe('preview / send / logs 的守门 schema', () => {
     expect(parsed.items[0]?.trigger_source).toBe('SCHEDULED');
     expect(parsed.items[0]?.config_version).toBe(3);
     expect(parsed.total).toBe(1);
-    // 少一个扩展字段即抛（扩展字段是「回溯用的快照」，漏声明 = 前端静默显示 undefined）
-    const { config_version: _drop, ...withoutVer } = LOG_ROW;
+    // 行少一个键即抛：logs 行与 send 行是同一个结构体，缺一个就说明两处声明漂了
+    const { cc_recipients: _drop, ...withoutCc } = scheduledRow;
     expect(() =>
-      mailDigestLogListSchema.parse({ items: [withoutVer], total: 1, limit: 20, offset: 0 }),
+      mailDigestLogListSchema.parse({ items: [withoutCc], total: 1, limit: 20, offset: 0 }),
     ).toThrow();
   });
 });
