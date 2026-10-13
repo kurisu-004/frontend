@@ -4,8 +4,8 @@
 // 打印送货单对话框的守卫。覆盖：
 //   - 模板未上传 → 「导出」disabled（tooltip 说明原因）；
 //   - 模板校验失败（逐条差异）→ 「导出」disabled + 差异原文上屏；
-//   - 模板校验通过 → 「导出」可点（哪怕还没选司机 —— 单据上已有司机名即可）；
-//   - 未指定司机 → 「导出」disabled（页脚「送货人」与 pickup 都要它）；
+//   - 模板校验通过 → 「导出」可点；
+//   - **单据上没有司机也照样能导出**（2026-10-16：指定司机搬去「一键送货」那一步）；
 //   - el-tabs 按 L2 客户分组，label 带 (N)；
 //   - 行拆分（守恒不通过则「确定」disabled）；
 //   - 司机落库时机：没碰下拉直接导出 ⇒ 零 driver POST（打开时的零 POST 另有用例）。
@@ -15,8 +15,8 @@
 // `deliveryNotePartRows.spec.ts`），所以本文件不再有标签模式的用例。
 //
 // ⚠️ 两条「导出」闸门用例守的是**对话框内**的闸门，与入口可见性无关：详情页 / 草稿卡
-// 的按钮一律可见（canPrint 只看角色 + 行项数），司机由对话框自己兜。这是 2026-10-08
-// 死锁修复后必须仍然成立的不变量。
+// 的按钮一律可见（canPrint 只看角色 + 行项数）。司机**不再**由本对话框兜底 ——
+// 那是「一键送货」确认对话框（`DeliveryDriverPickerDialog`）的职责，见该组件的 spec。
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { mount, type VueWrapper } from '@vue/test-utils';
@@ -270,11 +270,17 @@ describe('PrintPreviewDialog 导出闸门', () => {
     expect(exportDisabled(w)).toBe(false);
   });
 
-  it('模板通过但未指定司机 → 「导出」disabled（页脚「送货人」与 pickup 都要它）', async () => {
+  it('模板通过但单据上没有司机 → 「导出」仍可点，提示里没有「请先指定司机」，且导出零 driver POST', async () => {
+    // 2026-10-16：打印只 gate 模板与行项。指定司机改到「一键送货」的确认对话框里选
+    // （服务端 POST /{id}/pickup 只吃 version、司机从单据上读，没司机返 21409）。
+    withDriverOptions();
     const w = await mountDialog({ driver_worker_name: null });
     await uploadFile(w, builtinFile());
-    expect(exportDisabled(w)).toBe(true);
-    expect(w.find('.mock-el-tooltip').attributes('title')).toContain('请先指定司机');
+    expect(exportDisabled(w)).toBe(false);
+    expect(w.find('.mock-el-tooltip').attributes('title')).not.toContain('请先指定司机');
+    await clickExport(w, true);
+    expect(driverPosts()).toHaveLength(0);
+    expect(downloads).toHaveLength(1);
   });
 
   it('模板校验失败 → 差异上屏 + 「导出」保持 disabled', async () => {
@@ -285,9 +291,16 @@ describe('PrintPreviewDialog 导出闸门', () => {
     expect(exportDisabled(w)).toBe(true);
   });
 
-  it('阻断原因有优先级：模板 > 行项 > 司机（都缺时先说模板）', async () => {
+  it('阻断原因有优先级：模板 > 行项（司机已不参与阻断；都缺时先说模板）', async () => {
     const w = await mountDialog({ driver_worker_name: null, line_items: [] });
     expect(w.find('.mock-el-tooltip').attributes('title')).toBe('请先上传送货单模板');
+  });
+
+  it('模板过了但一行都没有（且没有司机）→ 阻断原因只剩「没有可打印的行项」', async () => {
+    const w = await mountDialog({ driver_worker_name: null, line_items: [] });
+    await uploadFile(w, builtinFile());
+    expect(exportDisabled(w)).toBe(true);
+    expect(w.find('.mock-el-tooltip').attributes('title')).toBe('没有可打印的行项');
   });
 
   it('有行项时页脚显示条数与 sheet 数', async () => {
