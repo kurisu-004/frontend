@@ -69,7 +69,7 @@ import {
 } from './usePartBatchShared';
 
 interface PdfFormState {
-  /** 一级客户 id（Tab 2 必选；决定 serial_prefix 来源 + 二级客户候选范围）。 */
+  /** 一级客户 id（Tab 2 必选；决定 serial_prefix 来源 + 行内客户候选范围 = 该根子树内的叶子）。 */
   customerL1Id: string | null;
   requestDate: string;
 }
@@ -110,7 +110,7 @@ export interface StandalonePartRow {
   drawing_no: string;
   name: string;
   applicant_name: string;
-  customer_id: string; // 二级客户 id（L2 leaf）；后端 customer_id 校验需要叶子节点
+  customer_id: string; // 客户 id（必须是**叶子**：业务单据只能挂叶子，后端 customer_id 校验如此）
   customer_name: string; // 显示用，提交时不发送
   request_date: string;
   planned_delivery_date: string;
@@ -127,7 +127,7 @@ export interface StandalonePartRow {
   three_d_index: number | null;
 }
 
-/** 装配件子件。分厂 / 申请人由顶层 AssemblyRow 指定，提交时复制到每条 item。 */
+/** 装配件子件。客户 / 申请人由顶层 AssemblyRow 指定，提交时复制到每条 item。 */
 export interface AssemblyChildRow {
   uid: string;
   pdfSourceUid: string;
@@ -156,7 +156,7 @@ export interface AssemblyRow {
   drawing_no: string;
   name: string;
   applicant_name: string;
-  customer_id: string; // 二级客户 id（L2 leaf）
+  customer_id: string; // 客户 id（必须是叶子，见 StandalonePartRow 同字段注释）
   customer_name: string;
   request_date: string;
   planned_delivery_date: string;
@@ -234,7 +234,12 @@ export interface UsePartBatchPdfReturn {
     cb: (items: Array<{ id: string; name: string }>) => void,
   ) => void;
   l1Customers: ComputedRef<Array<{ id: string; name: string }>>;
-  l2Customers: ComputedRef<Array<{ id: string; name: string }>>;
+  /**
+   * 2026-10-17：行内「客户」列选的候选 = **所选根整棵子树里的叶子节点**（任意深度），
+   * 不再是「该根的直接子」。`path` 走 `customer_path`（第 2 层到叶子的 ` / ` 拼接、
+   * 不含 L1 —— L1 已由页面顶部的下拉承载）。
+   */
+  leafCustomerOptions: ComputedRef<Array<{ id: string; name: string; path: string }>>;
   pdfFiles: Ref<UploadFile[]>;
   excelFiles: Ref<UploadFile[]>;
   threeDModelFiles: Ref<UploadFile[]>;
@@ -277,7 +282,7 @@ export interface UsePartBatchPdfReturn {
   /** 2026-10-05 新增：装配件顶层整套含税单价（联动 total_price = 单价 × 套数）。 */
   onAsmUnitPriceChange: (row: AssemblyRow, v: number | undefined) => void;
   onChildUnitPriceChange: (c: AssemblyChildRow, v: number | undefined) => void;
-  onL2Change: (row: { customer_id: string; customer_name?: string }, v: string) => void;
+  onCustomerLeafChange: (row: { customer_id: string; customer_name?: string }, v: string) => void;
   onAsmPlannedChange: (asmRow: AssemblyRow, v: string) => void;
   onSourceSelectionChange: (rows: SourceTreeRow[]) => void;
   previewSourceRow: (row: SourceTreeRow) => void;
@@ -339,18 +344,53 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     { immediate: false },
   );
 
-  /** Tab 2 PDF 批量上传专用：仅展示一级客户。 */
+  /** Tab 2 PDF 批量上传专用：仅展示一级客户（树的根）。 */
   const l1Customers = computed(() =>
     customers.value.filter((c) => c.parent_id === null).map((c) => ({ id: c.id, name: c.name })),
   );
-  /** Tab 2 分厂下拉专用：所选 L1 的二级子客户。 */
-  const l2Customers = computed(() =>
-    pdfForm.customerL1Id
-      ? customers.value
-          .filter((c) => c.parent_id === pdfForm.customerL1Id)
-          .map((c) => ({ id: c.id, name: c.name }))
-      : [],
-  );
+
+  /**
+   * 2026-10-17（客户无限层级改造）：行内客户列选的候选 = **所选根子树内的叶子节点**。
+   *
+   * 为什么不是「该根的直接子」：客户改成任意深度后，「分厂」这一层可能根本没有子节点，
+   * 直接子就是叶子；也可能「分厂 → 车间 → 班组」三层，直接子（分厂）是中间层，**业务
+   * 单据不能挂中间层**（零件 / 装配件只能挂叶子）⇒ 只列直接子会让下拉里能选的值全部
+   * 被后端拒（20302），而真正的末级部门一个都选不到。
+   *
+   * 遍历用「parent_id → children」索引 + 显式栈，深度不可控也不递归（与
+   * `api/customer.tree.ts::buildCustomerTree` 同一份脏数据口径：成环靠 `seen` 断开，
+   * 不静默丢节点）。「叶子」= 没有子节点的节点，孤儿节点（父不在集合里）走不到本栈
+   * 上（它不在所选根的子树内），与「按子树筛」的口径一致。
+   */
+  const leafCustomerOptions = computed(() => {
+    const rootId = pdfForm.customerL1Id;
+    if (!rootId) return [];
+    const childrenByParent = new Map<string, Customer[]>();
+    const byId = new Map(customers.value.map((c) => [c.id, c]));
+    for (const c of customers.value) {
+      if (c.parent_id === null) continue;
+      const bucket = childrenByParent.get(c.parent_id);
+      if (bucket) bucket.push(c);
+      else childrenByParent.set(c.parent_id, [c]);
+    }
+    const out: Array<{ id: string; name: string; path: string }> = [];
+    const stack: string[] = [rootId];
+    const seen = new Set<string>();
+    while (stack.length > 0) {
+      const id = stack.pop() as string;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const kids = childrenByParent.get(id);
+      if (!kids || kids.length === 0) {
+        // 「没有子节点」= 叶子。所选根自己就是叶子（该 L1 下没建任何下级）时同样合法。
+        const leaf = byId.get(id);
+        if (leaf) out.push({ id: leaf.id, name: leaf.name, path: leaf.customer_path || leaf.name });
+        continue;
+      }
+      for (const kid of kids) stack.push(kid.id);
+    }
+    return out;
+  });
 
   // PDF / Excel 文件列表（el-upload 控件绑定）
   const pdfFiles = ref<UploadFile[]>([]);
@@ -593,7 +633,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     assemblies?: AssemblyRow[];
   }
 
-  /** 用 Excel 行覆盖表内字段（applicant / quantity / planned_delivery_date + 分厂 L2 + 单价）。
+  /** 用 Excel 行覆盖表内字段（applicant / quantity / planned_delivery_date + 客户 + 单价）。
    *  2026-07-30 起不再覆盖 is_urgent（批量 PDF 导入默认全部不加急，由用户手动 switch）。
    *
    *  数据源是 composable 级 `excelByDrawingNo`。没有 Excel 数据时静默返回（不抛错、不提示）
@@ -604,7 +644,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
    *  手改过的既有行」需要保护）。`target` **已传** = 只回填它显式给出的集合，
    *  **没给的一侧按空集合处理，绝不退回全量**：全表重扫会把用户在另一侧（独立零件表
    *  ↔ 装配件表）手改过的数量 / 单价 / 总价 / 交期 / 申请人一起覆盖回 Excel 值
-   *  （分厂有 `!customer_id` 守卫所以幸免），而「建行」这个动作与那些行无关。
+   *  （客户有 `!customer_id` 守卫所以幸免），而「建行」这个动作与那些行无关。
    *  ⇒ 4 个建行入口（合并成零件 / 合并成装配件 / 手动新增零件 / 手动新增装配件）
    *  一律显式传入本次新建的行，且**只给本次涉及的那一侧**。 */
   function applyExcelToAll(target?: ExcelFillTarget): void {
@@ -626,12 +666,12 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       // PR-H 2026-07-28：含税单价 / 总价
       if (matched.unitPrice != null) r.unit_price = matched.unitPrice;
       if (matched.totalPrice != null) r.total_price = matched.totalPrice;
-      // 自动解析二级客户（分厂）
+      // 自动解析客户（Excel 的「申请人所在一级部门名称」→ 客户 id）
       if (!r.customer_id) {
-        const l2Id = resolveL2CustomerId(matched.deptName);
-        if (l2Id) {
-          r.customer_id = l2Id;
-          const c = customers.value.find((x) => x.id === l2Id);
+        const customerId = resolveCustomerIdFromDeptName(matched.deptName);
+        if (customerId) {
+          r.customer_id = customerId;
+          const c = customers.value.find((x) => x.id === customerId);
           r.customer_name = c?.name ?? '';
         }
       }
@@ -645,19 +685,19 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       // 还能与顶层不同。
       //
       // ⚠️ 随之而来的**已知代价**：Excel 的「物料编号」列若是旧口径的「逐个子件各占一行」
-      // （那一行装的是子件自己的图号；那行的**单价**是子件价，而分厂 / 申请人 / 数量 /
+      // （那一行装的是子件自己的图号；那行的**单价**是子件价，而客户 / 申请人 / 数量 /
       // 计划交期在两种形态下都是整套口径），顶层图号在表里查不到 ⇒ 这一行**整行都不回填**：
-      // 分厂 / 申请人 / 计划交期 / 单价 / 总价保持建行时的空值（`makeAssemblyRow` 的
+      // 客户 / 申请人 / 计划交期 / 单价 / 总价保持建行时的空值（`makeAssemblyRow` 的
       // 默认值）待手填，数量保持默认 1。不再是「只有价不回填、其余几列照填」。
       // 子件图号与装配件一致是产品定的口径，不做前缀模糊匹配：错的数字比空值危险。
       const ownHit = excelMap.get(a.drawing_no);
       if (ownHit) {
-        // 分厂 / 申请人由顶层统一持有（子件不再各自持有这两个字段）
+        // 客户 / 申请人由顶层统一持有（子件不再各自持有这两个字段）
         if (!a.customer_id) {
-          const l2Id = resolveL2CustomerId(ownHit.deptName);
-          if (l2Id) {
-            a.customer_id = l2Id;
-            const c = customers.value.find((x) => x.id === l2Id);
+          const customerId = resolveCustomerIdFromDeptName(ownHit.deptName);
+          if (customerId) {
+            a.customer_id = customerId;
+            const c = customers.value.find((x) => x.id === customerId);
             a.customer_name = c?.name ?? '';
           }
         }
@@ -674,7 +714,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       // 未命中（`ownHit` 为 undefined）时顶层整套价保持 null 等用户手填：Excel 的
       // 「物料编号」列装不进这个装配件的图号，硬套别的行的价格会与整套口径差一个套数
       // 倍率，错的数字比空值更危险。
-      // 2026-10-05 子件口径（业务口径：分厂 / 申请人 / 计划交期 / 单价是整套共享的，
+      // 2026-10-05 子件口径（业务口径：客户 / 申请人 / 计划交期 / 单价是整套共享的，
       // 子件数量与单价需手填）：
       //   - 计划交期：顶层填完后同步给全部子件，保证「整套一个交期」。交期既可能来自
       //     Excel，也可能来自用户在顶层手改（`onAsmPlannedChange`），两种来源都会同步
@@ -691,14 +731,28 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     }
   }
 
-  /** 把 Excel 的「申请人所在一级部门名称」（如"二厂"）解析成 L2 客户 id。
-   *  仅在所选 L1 客户的子客户里查找。 */
-  function resolveL2CustomerId(deptName: string): string | null {
-    if (!pdfForm.customerL1Id || !deptName) return null;
-    const match = customers.value.find(
-      (c) => c.parent_id === pdfForm.customerL1Id && c.name.trim() === deptName.trim(),
-    );
-    return match?.id ?? null;
+  /**
+   * 把 Excel 的「申请人所在一级部门名称」（如「六厂」「一车间 装配班」）解析成客户 id。
+   *
+   * 2026-10-17（客户无限层级改造）：查找范围由「所选根的**直接子**」改成「所选根的
+   * **整棵子树**」，且只在**叶子**里匹配 —— 业务单据只能挂叶子，命中中间层等于交一份
+   * 必然被后端拒（20302）的数据。叶子口径与 `leafCustomerOptions`（行内下拉候选）
+   * 逐字一致 ⇒ 「Excel 能自动回填的值一定能在下拉里选到，用户看得懂它是什么」。
+   *
+   * **同名多命中不猜**：子树里出现两个同名叶子（不同分支下都有「一车间」）时返回
+   * `null`，由调用点保持该行客户为空、待用户手选。取第一个匹配会把零件挂到另一个部门，
+   * 错数据比空值危险（同本文件 Excel 价回填、CLAUDE.md 多处「错的比空危险」的口径）。
+   *
+   * 调用点两处（独立零件行 / 装配件顶层行）都在 `if (!row.customer_id)` 守卫内，
+   * 返回 `null` 时不写任何字段 ⇒ 该行客户保持空值待手填。
+   */
+  function resolveCustomerIdFromDeptName(deptName: string): string | null {
+    const rootId = pdfForm.customerL1Id;
+    const wanted = deptName.trim();
+    if (!rootId || !wanted) return null;
+    const hits = leafCustomerOptions.value.filter((c) => c.name.trim() === wanted);
+    if (hits.length !== 1) return null;
+    return hits[0]?.id ?? null;
   }
 
   /**
@@ -829,7 +883,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     };
   }
 
-  /** 装配件子件默认填充（分厂 / 申请人由顶层 AssemblyRow 指定）。 */
+  /** 装配件子件默认填充（客户 / 申请人由顶层 AssemblyRow 指定）。 */
   function makeAssemblyChild(opts: {
     pdfSourceUid: string;
     pageIndex: number;
@@ -857,7 +911,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   }
 
   /** 装配件顶层默认填充（2026-10-05 新增：与两个建行入口共用，避免字段漏填）。
-   *  分厂 / 申请人 / 单价 / 总价初始全空，由 `applyExcelToAll` 回填或用户手填。
+   *  客户 / 申请人 / 单价 / 总价初始全空，由 `applyExcelToAll` 回填或用户手填。
    *  `masterPdfSourceUid` 与 `masterPageIndex` 成对：默认两者皆 null = 无总装图。 */
   function makeAssemblyRow(opts: {
     pdfSourceUid: string;
@@ -1382,8 +1436,11 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     previewAt(uid, `${pdfSourceLabel(uid)} 预览`, 1);
   }
 
-  /** 行（standalone / child）分厂下拉 onChange：同步 customer_name。 */
-  function onL2Change(row: { customer_id: string; customer_name?: string }, v: string): void {
+  /** 行（standalone / 装配件顶层）客户下拉 onChange：同步 customer_name（显示用单段名）。 */
+  function onCustomerLeafChange(
+    row: { customer_id: string; customer_name?: string },
+    v: string,
+  ): void {
     row.customer_id = v;
     const c = customers.value.find((x) => x.id === v);
     row.customer_name = c?.name ?? '';
@@ -2427,9 +2484,9 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     summarizeUploads();
   }
 
-  /** 前端兜底：所有 row 的 customer_id 必须有 L2 客户（后端强校验 L2-leaf）。
+  /** 前端兜底：所有 row 的 customer_id 必须已指定客户（后端强校验「必须是叶子」，20302）。
    *  返回 true 表示通过，false 表示阻塞；阻塞时已通过 ElMessage.warning 提示。 */
-  function validateL2Customers(): boolean {
+  function validateLeafCustomers(): boolean {
     const missing: string[] = [];
     for (const r of standaloneParts.value) {
       if (!r.customer_id) missing.push(`独立零件 ${r.drawing_no || r.uid}`);
@@ -2439,7 +2496,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     }
     if (missing.length > 0) {
       ElMessage.warning(
-        `以下 ${missing.length} 行未指定分厂（二级客户），请补全后再提交：\n` +
+        `以下 ${missing.length} 行未指定客户（单据只能挂在末级部门），请补全后再提交：\n` +
           missing.slice(0, 5).join('\n') +
           (missing.length > 5 ? '\n…' : ''),
       );
@@ -2500,7 +2557,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     return {
       name: a.name || a.drawing_no || `装配件-${a.uid}`,
       drawing_no: a.drawing_no,
-      // 必须是 L2 叶子，后端强校验（20302）；空值由 validateL2Customers 挡在前头。
+      // 必须是叶子客户，后端强校验（20302）；空值由 validateLeafCustomers 挡在前头。
       customer_id: a.customer_id,
       applicant_name: a.applicant_name,
       request_date: a.request_date,
@@ -2756,11 +2813,11 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       if (res.failed.length > 0)
         parts.push(`${res.failed.length} 行被服务端拒绝：\n${sample}${more}`);
       const groupLines = (res.groupErrors ?? []).map(
-        (g) => `第 ${g.startIndex + 1}-${g.endIndex + 1} 行（分厂 ${g.customer_id}）：${g.message}`,
+        (g) => `第 ${g.startIndex + 1}-${g.endIndex + 1} 行（客户 ${g.customer_id}）：${g.message}`,
       );
       if (groupLines.length > 0) {
         parts.push(
-          `${groupLines.length} 个分厂组请求失败，成功与否未知（响应丢失时后端可能已落库）：\n${groupLines
+          `${groupLines.length} 个客户组请求失败，成功与否未知（响应丢失时后端可能已落库）：\n${groupLines
             .slice(0, 3)
             .join('\n')}`,
         );
@@ -2807,7 +2864,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
    * 主按钮：创建工单 + 逐实体后置上传图纸 / 3D（单入口，2026-10-04）。
    *
    * creating 阶段分两路（2026-10-05）：
-   *  1. 独立零件行 → `batchCreateParts`（一次请求，`batchCreateParts` 内部按分厂分组、
+   *  1. 独立零件行 → `batchCreateParts`（一次请求，`batchCreateParts` 内部按客户分组、
    *     逐组 try/catch 聚合，从不整体 reject）；
    *  2. 装配件行 → `createAssemblyGroups`（逐组一次 `POST /assemblies`，受控并发，
    *     逐组 try/catch）。
@@ -2833,9 +2890,9 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       ElMessage.warning('请先解析上传');
       return;
     }
-    if (!validateL2Customers()) return;
+    if (!validateLeafCustomers()) return;
 
-    // 建单前固化快照：上传途中刷新 / 切走时，行数据（含用户已填的分厂、交期）还在
+    // 建单前固化快照：上传途中刷新 / 切走时，行数据（含用户已填的客户、交期）还在
     draft.saver.flush();
 
     const { items, rowUids } = buildCommitItems();
@@ -3019,7 +3076,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   return {
     // 客户
     l1Customers,
-    l2Customers,
+    leafCustomerOptions,
     // applicants
     applicantCandidates: applicantSearch.applicants,
     applicantLoading: applicantSearch.loading,
@@ -3063,7 +3120,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     onUnitPriceChange,
     onAsmUnitPriceChange,
     onChildUnitPriceChange,
-    onL2Change,
+    onCustomerLeafChange,
     onAsmPlannedChange,
     // preview
     closePdfPreview,

@@ -18,6 +18,9 @@
     formRef.validate() / clearValidate() 失去存在意义；本组件挂载的 el-form
     仅为 el-form-item 容器，ref 不再需要。
   - emit confirm / closed / update:form；visible 走 prop + close 触发父组件 mutator。
+  - 2026-10-17（客户无限层级改造）：options 改吃 `buildCustomerTree` 的产物（任意
+    深度），cascader label 改走 `customer_path`；「必须落叶子」的校验在父组件
+    `onAddConfirm`，本组件只负责展示。
 -->
 
 <template>
@@ -58,15 +61,9 @@
           <el-form-item label="客户" :error="formErrors.customerId">
             <el-cascader
               v-model="localForm.customerId"
-              :options="customerTree"
-              :props="{
-                value: 'id',
-                label: 'name',
-                children: 'children',
-                checkStrictly: true,
-                emitPath: false,
-              }"
-              placeholder="选择一级 / 二级客户"
+              :options="cascaderOptions"
+              :props="CASCADER_PROPS"
+              placeholder="选择客户（末级部门）"
               style="width: 100%"
               clearable
               @change="onCustomerChangeLocal"
@@ -217,8 +214,8 @@
 // emit 命名遵循 vue/custom-event-name-casing（仓库 lint 规则）：camelCase，
 // 仅 update:* 协议事件可含连字符。
 
-import { reactive, ref, toRaw, watch } from 'vue';
-import { ElMessage } from 'element-plus';
+import { computed, reactive, ref, toRaw, watch } from 'vue';
+import { ElMessage, type CascaderOption } from 'element-plus';
 import CosUploader from '@/components/CosUploader/index.vue';
 import type {
   CosUploadedItem,
@@ -228,6 +225,7 @@ import type {
 import type { FormState } from '../composables/usePartBatchManual';
 import type { PartEntryFieldErrors, PartEntryInput } from '../partEntrySchema';
 import type { Applicant } from '@/types/applicant';
+import type { CustomerTreeNode } from '@/api/customer.tree';
 
 interface Props {
   visible: boolean;
@@ -241,8 +239,11 @@ interface Props {
   validateField: (field: keyof PartEntryInput) => void;
   /** dialog 桌面宽度配置（useDialogSize 结果）。 */
   addDlg: { width: string | number; top: string; fullscreen: false };
-  /** 客户 cascader 选项树（父组件 customerTree computed）。 */
-  customerTree: Array<{ id: string; name: string; children?: Array<{ id: string; name: string }> }>;
+  /**
+   * 客户 cascader 选项树（父组件 customerTree computed = buildCustomerTree 产物，
+   * **任意深度**）。节点带 `customer_path`，cascader 的 label 吃它。
+   */
+  customerTree: CustomerTreeNode[];
   /** 申请人搜索相关 props（透传父 composable 的 applicantSearch 子集）。 */
   applicantLoading: boolean;
   querySearch: (queryString: string, cb: (items: Applicant[]) => void) => void;
@@ -275,6 +276,38 @@ const emit = defineEmits<{
   drawingAllDone: [];
   drawingUploadError: [item: CosUploaderItem];
 }>();
+
+/** el-cascader 的 props 配置（2026-10-17 客户无限层级改造后重写注释）。
+ *
+ *  - `checkStrictly: true` **保留**：草稿 / 编辑态允许选任意层级的节点（用户在组装草稿
+ *    时可能先定部门再定班组）。「必须落叶子」是**提交时**的校验，走父组件
+ *    `onAddConfirm` 的业务层（schema 那层拿不到客户树结构，见 partEntrySchema 文件头）。
+ *  - `emitPath: false`：v-model 直接拿到单个 id（父组件 onCustomerChange 按此解包）。
+ *  - `label: 'customer_path'`：每级显示「从第 2 层到本级」的 ` / ` 拼接，**不含 L1**
+ *    （L1 是根列，按后端口径等于自己的名字）。三条理由：
+ *      ① 输入框里只显示**选中节点**那一个 label —— label 若是 `name`，选完只看到
+ *         「装配班」三个字，同名部门跨分支时完全无法分辨挂到了哪家；
+ *      ② el-cascader 每列已按父级分组，层级上下文来自列的位置，不需要每列都把 L1
+ *         重复一遍（`customer_path` 本来就不含 L1，不会重复）；
+ *      ③ 深度 ≤ 2 时 `customer_path === name`，零视觉变化；深度 ≥ 3 时增长的是祖先链，
+ *         而消歧价值恰好出现在这一档。代价是深层列变宽，由面板自身省略号兜底。
+ */
+const CASCADER_PROPS = {
+  value: 'id',
+  label: 'customer_path',
+  children: 'children',
+  checkStrictly: true,
+  emitPath: false,
+} as const;
+
+/**
+ * el-cascader 的 `options` 形参声明是 `CascaderOption[]`（带 `[key: string]: any`
+ * 索引签名），而 `CustomerTreeNode` 是我们自己的精确类型、没有索引签名 ⇒ 直接传会
+ * 报 TS2322。**只有这一处需要放宽**：cascader 运行时按 `CASCADER_PROPS` 里的
+ * `value` / `label` / `children` 三个键取值，读不到别的键，也不会往节点上写任何东西
+ * （checkStrictly 的勾选态是组件内部维护的）。不带 this 断言会红（见本文件类型检查）。
+ */
+const cascaderOptions = computed(() => props.customerTree as unknown as CascaderOption[]);
 
 // 走 as unknown as 两次断言绕开 TS "object literal" 报错（consistent-type-assertions 不触发，因为是 unknown 中转）
 const localForm = reactive({} as unknown as FormState);
@@ -338,14 +371,14 @@ function onDrawingUploadErrorLocal(item: CosUploaderItem): void {
 }
 
 /**
-   * 2026-09-28 新增：pickError 统一展示。caller 侧用 ElMessage 显示组件产出的
-   * 选文件阶段错误消息（size/accept/getUploadGrant/multiple）。
-   *
-   * 组件自身不再直接弹 ElMessage（沿 P2 错误反馈通道统一约定）：业务侧 handler
-   * 由 caller 决定，本视图用 ElMessage.error 展示。
-   *
-   * 2026-09-28 重命名：requestUpload → getUploadGrant。
-   */
+ * 2026-09-28 新增：pickError 统一展示。caller 侧用 ElMessage 显示组件产出的
+ * 选文件阶段错误消息（size/accept/getUploadGrant/multiple）。
+ *
+ * 组件自身不再直接弹 ElMessage（沿 P2 错误反馈通道统一约定）：业务侧 handler
+ * 由 caller 决定，本视图用 ElMessage.error 展示。
+ *
+ * 2026-09-28 重命名：requestUpload → getUploadGrant。
+ */
 function onPickErrorLocal(message: string, _file: File): void {
   ElMessage.error(message);
 }

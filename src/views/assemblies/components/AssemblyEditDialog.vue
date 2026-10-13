@@ -14,6 +14,8 @@
   2026-09-13 PR-2：父级 form = reactive<AssemblyEditForm>(...)。vue/no-mutating-props
   禁止 props.form.x = v。本地 reactive 副本 + watch 同步 + emit('update:form')；
   父级 @update:form 合并即可（提交时 props.form 已是最新编辑值）。
+
+  2026-10-17（客户无限层级改造）：客户 option 的 label 改用后端 `customer_path`。
 -->
 <template>
   <el-dialog
@@ -35,16 +37,23 @@
         <el-input v-model="localForm.name" placeholder="例如：精研挡料座" />
       </el-form-item>
       <el-form-item label="客户" prop="customer_id">
+        <!-- 2026-10-17（客户无限层级改造）：候选仍是叶子（useAssemblyDetail.leafCustomers
+             的口径本就对，不改过滤逻辑），但 label 从「直接父名 / 本级名」换成后端下发的
+             `customer_path`（第 2 层到叶子的 ` / ` 拼接、不含 L1）—— 深度 ≥ 3 时直接父名
+             只给出最后一段祖先，跨分支同名时仍分不清。故意在本组件内联 `c.customer_path`
+             而不复用 useAssemblyDetail 的 `formatCustomerOptionLabel`：该文件由并行任务
+             独占、本任务不得触碰（同一 worktree 并行开发的文件边界）。改完之后该导出在
+             本组件零引用，由拥有它的任务决定去留。 -->
         <el-select
           v-model="localForm.customer_id"
           filterable
-          placeholder="选择二级客户"
+          placeholder="选择末级客户"
           style="width: 100%"
         >
           <el-option
             v-for="c in customers"
             :key="c.id"
-            :label="formatCustomerOptionLabel(c)"
+            :label="c.customer_path || c.name"
             :value="c.id"
           />
         </el-select>
@@ -94,11 +103,7 @@ import type { FormInstance } from 'element-plus';
 import { useDialogSize } from '@/composables/useDialogSize';
 import type { Customer } from '@/api/customer';
 import type { Applicant } from '@/types/applicant';
-import {
-  ASSEMBLY_EDIT_RULES,
-  formatCustomerOptionLabel,
-  type AssemblyEditForm,
-} from '../composables/useAssemblyDetail';
+import { ASSEMBLY_EDIT_RULES, type AssemblyEditForm } from '../composables/useAssemblyDetail';
 import type { AssemblyUpdatePayload } from '@/types/assembly';
 
 interface Props {

@@ -10,7 +10,7 @@
 //   - 申请人缓存未命中 → createApplicant 被调且 payload 带新 id。
 // @vitest-environment happy-dom
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, nextTick } from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 
@@ -82,14 +82,12 @@ vi.mock('@tanstack/vue-query', async (importOriginal) => {
     ...actual,
     VueQueryPlugin: actual.VueQueryPlugin,
     QueryClient: actual.QueryClient,
-    useMutation: <TData, TError, TVars>(
-      opts: {
-        mutationKey?: unknown[];
-        mutationFn: (vars: TVars) => Promise<TData> | TData;
-        onSuccess?: (data: TData, vars: TVars) => void | Promise<void>;
-        onError?: (err: TError, vars: TVars) => void;
-      },
-    ) => {
+    useMutation: <TData, TError, TVars>(opts: {
+      mutationKey?: unknown[];
+      mutationFn: (vars: TVars) => Promise<TData> | TData;
+      onSuccess?: (data: TData, vars: TVars) => void | Promise<void>;
+      onError?: (err: TError, vars: TVars) => void;
+    }) => {
       // 真正的 ref，computed 才能正确追踪 .value 变化
       const isPending = vueRef(false) as Ref<boolean>;
       return {
@@ -130,6 +128,26 @@ import type { Customer } from '@/api/customer';
 import type { Applicant } from '@/types/applicant';
 
 // ============ harness 组件 ============
+// 2026-10-17（客户无限层级改造）：customers 提到模块级 `customersRef` —— 深度相关
+// 用例要在 mount **之前**换一棵树（客户任意深度：中间层节点有子节点）。原来 ref 建在
+// Harness setup 内部，用例拿不到、换不了树。
+const baseCustomer: Customer = {
+  id: 'c1',
+  name: '客户A',
+  parent_id: null,
+  parent_name: null,
+  serial_prefix: null,
+  // 2026-09-26（M-1 修复）：Customer 补齐 version / created_at / updated_at 后，
+  // 测试 fixture 同步补齐（与 backend-rust CustomerOut 8 字段对齐）。
+  version: 1,
+  // 2026-10-17（客户无限层级改造）：新增必填 customer_path；本 fixture 的节点
+  // 是一级客户（parent_id = null），按口径等于自己的 name。
+  customer_path: '客户A',
+  created_at: '',
+  updated_at: '',
+};
+const customersRef = vueRef<Customer[]>([baseCustomer]);
+
 // setup 阶段调 usePartBatchManual，把 return 挂到 instance 便于断言。
 let captured: ReturnType<typeof usePartBatchManual> | null = null;
 const Harness = defineComponent({
@@ -138,24 +156,7 @@ const Harness = defineComponent({
     const rootCustomerId = vueRef<string | null>(null);
     const loading = vueRef(false);
     captured = usePartBatchManual({
-      customers: vueRef([
-        {
-          id: 'c1',
-          name: '客户A',
-          parent_id: null,
-          parent_name: null,
-          serial_prefix: null,
-          // 2026-09-26（M-1 修复）：Customer 补齐 version / created_at / updated_at 后，
-          // 测试 fixture 同步补齐（与 backend-rust CustomerOut 8 字段对齐）。
-          version: 1,
-          // 2026-10-17（客户无限层级改造）：新增必填 customer_path；本 fixture 的节点
-          // 是一级客户（parent_id = null），按口径等于自己的 name。
-          customer_path: '客户A',
-          status: 'ACTIVE',
-          created_at: '',
-          updated_at: '',
-        },
-      ]) as Ref<Customer[]>,
+      customers: customersRef,
       applicantSearch: {
         applicants,
         rootCustomerId,
@@ -220,10 +221,17 @@ const okPartItem: PartBatchResult['created'][number] = {
   process_chain_id: null,
   customer_name: '客户A',
   l1_customer_name: '客户A-一级',
+  // 2026-10-17：partDetailSchema（strict，28 键）新增必填 customer_path（可空）——
+  // 该类型经 PartDetailDto 流到 PartBatchResult['created']，fixture 必须补。
+  customer_path: '客户A',
   current_batch_id: null,
 };
 const okResult: PartBatchResult = { created: [okPartItem], failed: [], cleanup_tmp_keys: [] };
-const partialResult: PartBatchResult = { created: [], failed: [{ index: 0, message: 'invalid' }], cleanup_tmp_keys: [] };
+const partialResult: PartBatchResult = {
+  created: [],
+  failed: [{ index: 0, message: 'invalid' }],
+  cleanup_tmp_keys: [],
+};
 
 beforeEach(() => {
   mocks.batchCreateParts.mockReset();
@@ -355,7 +363,7 @@ describe('usePartBatchManual', () => {
     await captured.onSubmit();
     await flushPromises();
 
-    expect((ElMessageBox.alert as ReturnType<typeof vi.fn>)).toHaveBeenCalled();
+    expect(ElMessageBox.alert as ReturnType<typeof vi.fn>).toHaveBeenCalled();
     expect(captured.staged.value.length).toBe(1);
     expect(mocks.routerReplace).not.toHaveBeenCalled();
 
@@ -401,10 +409,15 @@ describe('usePartBatchManual', () => {
     // 用 mockImplementation 自定义 promise 让 batchCreateParts 永远 pending
     let resolveBatch: (r: PartBatchResult) => void = () => undefined;
     mocks.batchCreateParts.mockImplementation(
-      () => new Promise<PartBatchResult>((r) => { resolveBatch = r; }),
+      () =>
+        new Promise<PartBatchResult>((r) => {
+          resolveBatch = r;
+        }),
     );
     mocks.batchCreateParts.mockResolvedValueOnce(
-      new Promise<PartBatchResult>((r) => { resolveBatch = r; }) as never,
+      new Promise<PartBatchResult>((r) => {
+        resolveBatch = r;
+      }) as never,
     );
     const w = harnessMount();
     await flushPromises();
@@ -435,6 +448,134 @@ describe('usePartBatchManual', () => {
       await new Promise((r) => setTimeout(r, 10));
     }
     expect(captured.submitting.value).toBe(false);
+
+    w.unmount();
+  });
+});
+
+// ============================================================================
+// 2026-10-17（客户无限层级改造）：cascader 任意深度 + 「单据只能挂叶子」提交闸。
+//
+// 改前口径：customerTree 是本 composable 内联拼的**硬编码两层**树（第 3 层往下的客户
+// 选不到），且提交只校验「客户存在」⇒ 选中间层（下面还有车间）也能进待新增列表，
+// 后端会以 20302 拒掉。
+// ============================================================================
+
+/** 任意深度客户树（customer_path = 第 2 层到叶子 ` / ` 拼接、不含 L1）。 */
+function deepCustomer(
+  id: string,
+  name: string,
+  parentId: string | null,
+  customerPath: string,
+): Customer {
+  return {
+    id,
+    name,
+    parent_id: parentId,
+    parent_name: null,
+    serial_prefix: null,
+    customer_path: customerPath,
+    version: 1,
+    created_at: '',
+    updated_at: '',
+  };
+}
+
+const DEEP_TREE: Customer[] = [
+  deepCustomer('d-root', '测试集团', null, '测试集团'),
+  deepCustomer('d-f1', '甲分厂', 'd-root', '甲分厂'),
+  deepCustomer('d-f1-w1', '一车间', 'd-f1', '甲分厂 / 一车间'),
+  deepCustomer('d-f1-w1-b1', '装配班组', 'd-f1-w1', '甲分厂 / 一车间 / 装配班组'),
+  deepCustomer('d-f2', '乙分厂', 'd-root', '乙分厂'),
+  deepCustomer('d-f2-w1', '镀膜厂', 'd-f2', '乙分厂 / 镀膜厂'),
+];
+
+describe('usePartBatchManual：客户任意深度（cascader + 落叶子）', () => {
+  beforeEach(() => {
+    customersRef.value = DEEP_TREE;
+  });
+
+  afterAll(() => {
+    customersRef.value = [baseCustomer];
+  });
+
+  it('customerTree 走 buildCustomerTree：第 4 层节点也在树上，且带 customer_path', () => {
+    const w = harnessMount();
+    if (!captured) throw new Error('not captured');
+
+    const roots = captured.customerTree.value;
+    expect(roots.map((r) => r.id)).toEqual(['d-root']);
+    const f1 = roots[0]?.children[0];
+    expect(f1?.id).toBe('d-f1');
+    // 深度 3
+    expect(f1?.children[0]?.id).toBe('d-f1-w1');
+    // 深度 4（改前的硬编码两层树在这里就没有任何选项）
+    expect(f1?.children[0]?.children[0]?.id).toBe('d-f1-w1-b1');
+    // cascader 的 label 吃 customer_path
+    expect(f1?.children[0]?.children[0]?.customer_path).toBe('甲分厂 / 一车间 / 装配班组');
+
+    w.unmount();
+  });
+
+  it('选中**中间层**客户 → 拒绝入队 + formErrors.customerId 提示挂末级（后端 20302）', async () => {
+    const w = harnessMount();
+    await flushPromises();
+    if (!captured) throw new Error('not captured');
+
+    captured.form.drawingNo = 'LT1';
+    captured.form.name = 'p1';
+    captured.form.customerId = 'd-f1'; // 甲分厂：下面还有一车间
+    captured.form.applicantName = 'bob';
+    captured.form.requestDate = '2026-09-24';
+    captured.form.plannedDeliveryDate = '2026-09-25';
+    await captured.onAddConfirm();
+    await nextTick();
+
+    expect(captured.formErrors.value.customerId).toContain('还有下级部门');
+    expect(captured.formErrors.value.customerId).toContain('甲分厂');
+    expect(captured.staged.value.length).toBe(0);
+
+    w.unmount();
+  });
+
+  it('选中**叶子**客户 → 正常入队（任意深度都放行）', async () => {
+    const w = harnessMount();
+    await flushPromises();
+    if (!captured) throw new Error('not captured');
+
+    captured.form.drawingNo = 'LT1';
+    captured.form.name = 'p1';
+    captured.form.customerId = 'd-f1-w1-b1'; // 深度 4 的末级班组
+    captured.form.applicantName = 'bob';
+    captured.form.requestDate = '2026-09-24';
+    captured.form.plannedDeliveryDate = '2026-09-25';
+    await captured.onAddConfirm();
+    await nextTick();
+
+    expect(captured.formErrors.value.customerId).toBeUndefined();
+    expect(captured.staged.value.length).toBe(1);
+    expect(captured.staged.value[0]?.customerId).toBe('d-f1-w1-b1');
+
+    w.unmount();
+  });
+
+  it('根节点自己就是叶子（该 L1 下没建任何下级）→ 照样放行', async () => {
+    customersRef.value = [deepCustomer('solo-root', '独立客户', null, '独立客户')];
+    const w = harnessMount();
+    await flushPromises();
+    if (!captured) throw new Error('not captured');
+
+    captured.form.drawingNo = 'LT1';
+    captured.form.name = 'p1';
+    captured.form.customerId = 'solo-root';
+    captured.form.applicantName = 'bob';
+    captured.form.requestDate = '2026-09-24';
+    captured.form.plannedDeliveryDate = '2026-09-25';
+    await captured.onAddConfirm();
+    await nextTick();
+
+    expect(captured.formErrors.value.customerId).toBeUndefined();
+    expect(captured.staged.value.length).toBe(1);
 
     w.unmount();
   });

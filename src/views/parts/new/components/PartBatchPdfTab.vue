@@ -743,7 +743,12 @@ interface UploadStatusCellViewCell {
 
 const props = defineProps<{
   l1Customers: { id: string; name: string }[];
-  l2Customers: { id: string; name: string }[];
+  /**
+   * 2026-10-17（客户无限层级改造）：行内「客户」列选的候选 = 所选根子树内的**叶子**
+   * （单据只能挂叶子）。`path` = `customer_path`（第 2 层到叶子的 ` / ` 拼接、不含
+   * L1 —— L1 已由顶部下拉承载），深度 ≤ 2 时它就是本级 name。
+   */
+  leafCustomerOptions: { id: string; name: string; path: string }[];
   applicantCandidates: { id: string; name: string }[];
   applicantLoading: boolean;
   querySearch: (queryString: string, cb: (items: { id: string; name: string }[]) => void) => void;
@@ -780,7 +785,7 @@ const props = defineProps<{
   /** 2026-10-05 新增：装配件顶层整套含税单价（联动 total_price = 单价 × 套数）。 */
   onAsmUnitPriceChange: (row: AssemblyRow, v: number | undefined) => void;
   onChildUnitPriceChange: (c: AssemblyChildRow, v: number | undefined) => void;
-  onL2Change: (row: { customer_id: string; customer_name?: string }, v: string) => void;
+  onCustomerLeafChange: (row: { customer_id: string; customer_name?: string }, v: string) => void;
   onAsmPlannedChange: (asmRow: AssemblyRow, v: string) => void;
   previewSourceRow: (row: SourceTreeRow) => void;
   previewStandalonePart: (row: StandalonePartRow) => void;
@@ -1148,8 +1153,11 @@ const columnDefs_standalone: ColumnDef[] = [
   },
   {
     key: 'customer_id',
-    label: '分厂',
-    minWidth: 160,
+    label: '客户',
+    // 2026-10-17：候选改成 `customer_path` 后单条文案变长（最坏「第 2 层 / 第 3 层 /
+    // 第 4 层」三段），列宽与 select 宽度同步放宽；超长仍由 el-select 自身的
+    // `.el-select__selected-item` ellipsis 截断，不会撑破单元格。
+    minWidth: 210,
     align: 'center',
     cellRender: ({ row }) => {
       const r = row as StandalonePartRow;
@@ -1161,15 +1169,18 @@ const columnDefs_standalone: ColumnDef[] = [
           'onUpdate:modelValue': (v: string | null | undefined) => {
             r.customer_id = v ?? '';
           },
-          placeholder: '选分厂',
+          placeholder: '选末级部门',
           filterable: true,
           clearable: true,
           size: 'small',
-          style: 'width: 150px',
-          disabled: props.l2Customers.length === 0,
-          onChange: (v: string) => props.onL2Change(r, v),
+          style: 'width: 190px',
+          disabled: props.leafCustomerOptions.length === 0,
+          onChange: (v: string) => props.onCustomerLeafChange(r, v),
         },
-        () => props.l2Customers.map((c) => h(ElOption, { key: c.id, label: c.name, value: c.id })),
+        () =>
+          props.leafCustomerOptions.map((c) =>
+            h(ElOption, { key: c.id, label: c.path || c.name, value: c.id }),
+          ),
       );
     },
   },
@@ -1301,8 +1312,11 @@ const columnDefs_assembly: ColumnDef[] = [
   },
   {
     key: 'customer_id',
-    label: '分厂',
-    minWidth: 160,
+    label: '客户',
+    // 2026-10-17：候选改成 `customer_path` 后单条文案变长（最坏「第 2 层 / 第 3 层 /
+    // 第 4 层」三段），列宽与 select 宽度同步放宽；超长仍由 el-select 自身的
+    // `.el-select__selected-item` ellipsis 截断，不会撑破单元格。
+    minWidth: 210,
     align: 'center',
     cellRender: ({ row }) => {
       const r = row as AssemblyRow;
@@ -1313,15 +1327,18 @@ const columnDefs_assembly: ColumnDef[] = [
           'onUpdate:modelValue': (v: string | null | undefined) => {
             r.customer_id = v ?? '';
           },
-          placeholder: '选分厂',
+          placeholder: '选末级部门',
           filterable: true,
           clearable: true,
           size: 'small',
-          style: 'width: 150px',
-          disabled: props.l2Customers.length === 0,
-          onChange: (v: string) => props.onL2Change(r, v),
+          style: 'width: 190px',
+          disabled: props.leafCustomerOptions.length === 0,
+          onChange: (v: string) => props.onCustomerLeafChange(r, v),
         },
-        () => props.l2Customers.map((c) => h(ElOption, { key: c.id, label: c.name, value: c.id })),
+        () =>
+          props.leafCustomerOptions.map((c) =>
+            h(ElOption, { key: c.id, label: c.path || c.name, value: c.id }),
+          ),
       );
     },
   },
