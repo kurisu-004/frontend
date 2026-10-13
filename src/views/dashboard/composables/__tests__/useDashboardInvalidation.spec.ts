@@ -3,7 +3,7 @@
 // 2026-09-29 新增：useDashboardInvalidation WS 事件 → invalidate 回归保护。
 //
 // 覆盖：
-//   - I1：25 个 AFFECTS_DASHBOARD 事件命中 → 触发 debounced invalidate
+//   - I1：26 个 AFFECTS_DASHBOARD 事件命中 → 触发 debounced invalidate
 //   - I2：连续 5 个 AFFECTS_DASHBOARD 事件 → debounce 500ms 内合并 → 1 次 invalidate
 //   - I3：maxWait 1500ms flush —— 持续超过 1500ms 必须强制 invalidate
 //   - I4：非 AFFECTS_DASHBOARD 事件（如 DELIVERY_NOTE_CREATED）不触发 invalidate
@@ -280,7 +280,7 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
     scope.stop();
   });
 
-  it('I7：25 个 AFFECTS_DASHBOARD 事件全部触发 invalidate（白名单回归保护）', async () => {
+  it('I7：26 个 AFFECTS_DASHBOARD 事件全部触发 invalidate（白名单回归保护）', async () => {
     vi.useFakeTimers();
     for (const evType of AFFECTS_DASHBOARD_EVENTS) {
       const invalidateSpy = vi.spyOn(testQueryClient, 'invalidateQueries');
@@ -318,11 +318,11 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
   });
 
   // ==========================================================================
-  // I9 / I10：4003「慢消费方」全量重取接入点（2026-10-02 新增）
+  // I9 / I10：'dashboard:full-refetch' 全量重取接入点（2026-10-02 新增）
   //
-  // 与 I2~I4 的关键差别是**不防抖**：4003 是后端明确告知「广播队列溢出，永久丢了
-  // n 条事件」，重连补不回来（重连后的首帧 snapshot 在 api/dashboard.ts 里被显式
-  // no-op 丢弃），所以每多等 500ms 都在展示已知过期的数据。
+  // 与 I2~I4 的关键差别是**不防抖**：这个信号的两个派发源（4003 慢消费方丢事件 /
+  // 重连后的首帧 snapshot 丢的增量事件，见 api/dashboard.ts 的 dispatchFullRefetch）
+  // 都意味着「已经确定丢了数据」，服务端不会重发 ⇒ 每多等 500ms 都在展示已知过期的数据。
   // ==========================================================================
 
   it('I9：window 事件 dashboard:full-refetch → 立即 invalidate（0ms，不等 500ms 防抖）', () => {

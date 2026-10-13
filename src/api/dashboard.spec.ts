@@ -19,8 +19,8 @@
 //   - **close 1006 → 仍按退避重连**：防「把所有关闭码都停掉」这种过度处理回归
 //   - **close 4001 → 派发 'auth:session-lost'**
 //   - **close 4003（慢消费方丢事件）→ 派发 'dashboard:full-refetch'** 且仍重连
-//     （后端规定动作是「重连 + 全量 HTTP 重取」，而重连后的首帧 snapshot 在本层被
-//     no-op 丢掉 ⇒ 补数据只能靠这个信号）
+//     （'dashboard:full-refetch' 有两个派发源：本条的 4003 与**重连后的首帧 snapshot**，
+//     共用同一个信号与同一个接收方，见下方 C5 / C6 / C7）
 //
 // 关闭码 fixture 的 reason 字符串**必须与后端实际发送值一致**（语义真源是后端
 // `src/modules/dashboard/handler.rs` 的 `reauth_close_code`，`docs/api/dashboard.md`
@@ -48,6 +48,7 @@
 // @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { DashboardConnectionState } from '@/types/dashboard';
 
 class FakeWebSocket {
   public static readonly CONNECTING = 0;
@@ -112,6 +113,13 @@ class FakeWebSocket {
         data,
         ts: '2026-09-28T10:00:00+08:00',
       }),
+    });
+  }
+
+  /** 模拟服务端推送 snapshot 首帧（后端 `handle_socket` 每次连接都推一帧新的）。 */
+  public pushSnapshot(): void {
+    this.onmessage?.({
+      data: JSON.stringify({ type: 'snapshot', data: { ts: 'x' }, ts: 'x' }),
     });
   }
 }
@@ -239,7 +247,8 @@ beforeEach(() => {
         // 2026-10-02 新增：4001 用例自己也往 window 上挂 'auth:session-lost' 收集器，
         // 挂进来一起记，afterEach 统一清，避免 listener 在用例之间泄漏。
         type === 'auth:session-lost' ||
-        // 2026-10-02 新增：4003 用例挂 'dashboard:full-refetch' 收集器，同上。
+        // 2026-10-02 新增：4003 用例挂 'dashboard:full-refetch' 收集器，同上
+        // （2026-10-13：重连后的首帧 snapshot 也派这个信号，共用同一组收集器）。
         type === 'dashboard:full-refetch') &&
       typeof listener === 'function'
     ) {
@@ -935,11 +944,14 @@ describe('dashboard WS：关闭码 4001（re-auth 失败）停止重连', () => 
   // ==========================================================================
   // 4003「慢消费方」丢事件 → 补一次全量重取
   //
-  // 后端 `docs/api/dashboard.md` §7 慢消费方条的规定动作是「重连 + 全量 HTTP 重取」，
-  // 且成立前提写的是「重连时自然重新收到首帧 snapshot」。本仓 dashboard 域是
-  // 「HTTP 全量首取 + WS 事件 invalidate 重取」，重连后的首帧 snapshot 被显式
-  // no-op 丢弃（api/dashboard.ts 的 dispatch()）⇒ 该前提不成立，重连补不回来
-  // 丢掉的事件，必须由 WS 层额外派发 'dashboard:full-refetch' 让上层立即 invalidate。
+  // 后端 `docs/api/dashboard.md` §7 慢消费方条的规定动作是「重连 + 全量 HTTP 重取」。
+  // 本仓的 'dashboard:full-refetch' 承担这个「全量 HTTP 重取」，且有**两个派发源**
+  // （见 api/dashboard.ts 的 dispatchFullRefetch）：
+  //   - 4003：在**关闭那一刻**就派一次 —— 重连要等退避（1s 起），不派的话这段时间大屏
+  //     一直展示已知过期的数据，而 4003 是后端**明确告知**「永久丢了 n 条」的码；
+  //   - **重连后的首帧 snapshot**：承担断线期丢的增量事件的补偿（首次连接那一帧被
+  //     dispatch() 显式排除，见下方 C5 / C6 / C7）。
+  // 两者的缺口性质相同：服务端不重发，只能靠 HTTP 重取。
   // ==========================================================================
 
   it('close 4003 → 派发 dashboard:full-refetch（丢的事件重连补不回来）', async () => {
@@ -986,8 +998,10 @@ describe('dashboard WS：关闭码 4001（re-auth 失败）停止重连', () => 
     await bootstrapSocket(api);
     FakeWebSocket.instances[0]!.open();
     FakeWebSocket.instances[0]!.closeWith({ code: 1006 });
-    // 1006 同样会因断连丢事件，但那是既有架构的已知缺口（无轮询），本轮刻意不扩范围：
-    // 4003 是后端**明确告知**「永久丢了 n 条」的码，只有它配得上「全量重取」这个动作。
+    // 1006 同样会因断连丢事件，但**不在关闭那一刻**派全量重取：那时连接还没恢复，
+    // 重取只能拿到断连前的同一份事实。补偿点在重连之后（重连后的首帧 snapshot，见下方
+    // 「2026-10-13」describe 的 C6）；只有 4003 配得上「关闭即全量重取」这个动作 ——
+    // 它是后端**明确告知**「永久丢了 n 条」的码。
     expect(fullRefetch).not.toHaveBeenCalled();
 
     // 推进退避建第 2 个连接，再喂 4001（终止性码，同样不该触发全量重取）
@@ -996,5 +1010,168 @@ describe('dashboard WS：关闭码 4001（re-auth 失败）停止重连', () => 
     FakeWebSocket.instances[1]!.open();
     FakeWebSocket.instances[1]!.closeWith({ code: 4001, reason: 'auth expired' });
     expect(fullRefetch).not.toHaveBeenCalled();
+  });
+});
+
+// ============================================================================
+// 2026-10-13：连接状态订阅（onDashboardConnection）
+//
+// 这批用例守两件事：
+//   1. **订阅即刻回放** —— 连接状态是组件的初始渲染输入，不是「发生了什么」的增量
+//      通知。push-only 订阅对后挂的组件等于零信息：指示器挂上来时若状态恰好没发生
+//      变更（大屏常驻、WS 早就连上了），它会一直停在初始值。
+//   2. **`expected` 分流** —— 主动关闭（登出 / token 刷新换连接）与真实断开在
+//      ConnectionStatus 上是同一个 'closed'，但对 UI 含义完全相反。判据必须绑在
+//      「待关闭 socket 实例」的等值比较上，不能按 close code 猜：code 1000 也可能
+//      由服务端 / 中间层主动发出，那是真实断开。
+//   3. **重连后的首帧 snapshot 是断线期的数据补偿点** —— dashboard 三个 query 都是
+//      `gcTime: POSITIVE_INFINITY` + 无 `refetchInterval`，断连期间丢的增量事件没有
+//      别的补偿通道。首次连接那一帧必须排除（与首屏 HTTP 全量首取重复）。
+// ============================================================================
+
+describe('dashboard WS：连接状态订阅（2026-10-13）', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('C1：订阅即刻回放 —— 后挂的订阅者立刻拿到当前状态（open）', async () => {
+    const api = await loadDashboardApi();
+    await bootstrapSocket(api);
+    FakeWebSocket.instances[0]!.open();
+
+    const handler = vi.fn();
+    api.onDashboardConnection(handler);
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0]?.[0]).toEqual<DashboardConnectionState>({
+      status: 'open',
+      expected: false,
+      retries: 0,
+      lastError: null,
+    });
+  });
+
+  it('C2：主动关闭（closeDashboard，code 1000）→ expected=true，不是断线', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const api = await loadDashboardApi();
+    await bootstrapSocket(api);
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+
+    const handler = vi.fn();
+    api.onDashboardConnection(handler);
+
+    api.closeDashboard();
+
+    const last = handler.mock.calls.at(-1)?.[0] as DashboardConnectionState;
+    expect(last.status).toBe('closed');
+    expect(last.expected).toBe(true);
+    // 主动关闭不记失败（与 2026-10-09 那条「code 1000 不算失败」同源）
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('C3：服务端主动发 1000（无主动关闭标记）→ expected=false，算真断线', async () => {
+    const api = await loadDashboardApi();
+    await bootstrapSocket(api);
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+
+    const handler = vi.fn();
+    api.onDashboardConnection(handler);
+
+    socket.closeWith({ code: 1000, reason: '' });
+
+    const last = handler.mock.calls.at(-1)?.[0] as DashboardConnectionState;
+    expect(last.status).toBe('closed');
+    expect(last.expected).toBe(false);
+  });
+
+  it('C4：retries 透传连续失败次数，连上后归零；lastError 带 close code 与 reason', async () => {
+    const api = await loadDashboardApi();
+    await bootstrapSocket(api);
+    const handler = vi.fn();
+    api.onDashboardConnection(handler);
+
+    FakeWebSocket.instances[0]!.failHandshake(1006);
+    let last = handler.mock.calls.at(-1)?.[0] as DashboardConnectionState;
+    expect(last.retries).toBe(1);
+    expect(last.lastError).toEqual({ code: 1006, reason: null });
+
+    // 第 2 次退避后重连，再失败一次 → retries 累加
+    vi.advanceTimersByTime(1_000);
+    FakeWebSocket.instances[1]!.closeWith({ code: 1012, reason: 'restarting' });
+    last = handler.mock.calls.at(-1)?.[0] as DashboardConnectionState;
+    expect(last.retries).toBe(2);
+    expect(last.lastError).toEqual({ code: 1012, reason: 'restarting' });
+
+    // 连上 → 计数与 lastError 一起归零
+    vi.advanceTimersByTime(2_000);
+    FakeWebSocket.instances[2]!.open();
+    last = handler.mock.calls.at(-1)?.[0] as DashboardConnectionState;
+    expect(last.status).toBe('open');
+    expect(last.retries).toBe(0);
+    expect(last.lastError).toBeNull();
+  });
+
+  it('C5：首次连接的首帧 snapshot 不派 dashboard:full-refetch', async () => {
+    const fullRefetch = vi.fn();
+    window.addEventListener('dashboard:full-refetch', fullRefetch);
+
+    const api = await loadDashboardApi();
+    await bootstrapSocket(api);
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+
+    socket.pushSnapshot();
+
+    // 那帧与首屏 HTTP 全量首取重复，触发补偿等于让三个 query 白刷一遍
+    expect(fullRefetch).not.toHaveBeenCalled();
+  });
+
+  it('C6：重连后的首帧 snapshot 派 dashboard:full-refetch（断线期数据补偿）', async () => {
+    const fullRefetch = vi.fn();
+    window.addEventListener('dashboard:full-refetch', fullRefetch);
+
+    const api = await loadDashboardApi();
+    await bootstrapSocket(api);
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+
+    // 断线（1006）→ 退避 1s 后重建连接 → 后端 `handle_socket` 推一帧新鲜 snapshot
+    socket.closeWith({ code: 1006 });
+    vi.advanceTimersByTime(1_000);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    FakeWebSocket.instances[1]!.open();
+    FakeWebSocket.instances[1]!.pushSnapshot();
+
+    expect(fullRefetch).toHaveBeenCalledTimes(1);
+    const detail = (
+      fullRefetch.mock.calls[0]?.[0] as CustomEvent<{ code: number | null; reason: string | null }>
+    ).detail;
+    expect(detail).toEqual({ code: null, reason: 'reconnected snapshot' });
+  });
+
+  it('C7：token 刷新换连接也算重连 —— 新连接首帧同样派补偿信号', async () => {
+    // 换连接（主动关闭 + open）会走新的 `handle_socket`，新订阅集合从此刻起算；
+    // 旧连接在位期间的事件同样不该指望被补发。该路径与「断线重连」同源，共用一条实现。
+    const fullRefetch = vi.fn();
+    window.addEventListener('dashboard:full-refetch', fullRefetch);
+
+    const api = await loadDashboardApi();
+    await bootstrapSocket(api);
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+
+    api.reconnectDashboard();
+    expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(2);
+    FakeWebSocket.instances.at(-1)!.open();
+    FakeWebSocket.instances.at(-1)!.pushSnapshot();
+
+    expect(fullRefetch).toHaveBeenCalledTimes(1);
   });
 });

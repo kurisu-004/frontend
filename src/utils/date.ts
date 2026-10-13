@@ -1,7 +1,7 @@
 // utils/date.ts
 //
 // 统一日期格式化入口（2026-08-25 frontend-overall-refactor 抽取）。
-// 之前 NotificationBanner / ApplicantList / PartDetail / AssemblyDetail
+// 之前 ApplicantList / PartDetail / AssemblyDetail
 // 都各自实现了一个仅在 .slice(0,10)/.slice(0,19) 上略有差异的 formatDate/formatDateTime，
 // 这里把签名 + 输出格式统一到 YYYY-MM-DD / YYYY-MM-DD HH:mm[:ss]。
 //

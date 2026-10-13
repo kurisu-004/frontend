@@ -7,10 +7,12 @@
 //      useDashboardDeliveryOrders（柱状图下钻）。三者都走 HTTP 首取 + WS 事件
 //      invalidate 重取，不依赖本模块推送的业务数据。
 //   2. 本模块仍是 WebSocket 单例层：持有唯一长连接 + 按频道分发事件给订阅者。
-//      WS 首帧 snapshot 仍会到达（后端行为不变），但前端消费方已切到 HTTP 全量，
-//      故首帧 snapshot 仅作「连接就绪信号」（通过 onConnected 标记 isReady）。
-//   3. 业务事件（PICKED_UP / RELEASED / PART_TO_SHIP 等）继续通过 onDashboardEvent
-//      派发给 NotificationBanner.vue / useDashboardInvalidation 等消费者。
+//      WS 首帧 snapshot 仍会到达（后端行为不变），其 data 业务字段不消费（前端消费方
+//      已切到 HTTP 全量）；但 dispatch() 按「是不是首次连接」分流 —— 首次连接仅作就绪
+//      信号（no-op），重连后的那一帧是断线期丢事件的补偿点，派 'dashboard:full-refetch'。
+//   3. 业务事件（PART_TO_SHIP / SCAN_BANNER 等）继续通过 onDashboardEvent 派发给
+//      ScanBanner.vue（SCAN_BANNER 展示）/ useDashboardInvalidation（其余事件 invalidate）
+//      等消费者；连接状态通过 onDashboardConnection 派发给 WsConnectionIndicator.vue。
 //
 // 实现要点：
 //   - 用 VueUse useWebSocket + createGlobalState 包单例（替代原 258 行手写 socket 管理）；
@@ -44,6 +46,7 @@ import { api, cleanParams } from '@/api/http';
 import type { OrderStatus } from '@/types/parts';
 import type {
   ConnectionStatus,
+  DashboardConnectionState,
   DashboardEvent,
   DashboardEventType,
   DashboardServerMessage,
@@ -58,6 +61,15 @@ import { decodeJwt } from '@/utils/jwt';
 
 type EventHandler = (ev: DashboardEvent) => void;
 type StatusHandler = (status: ConnectionStatus) => void;
+type ConnectionHandler = (state: DashboardConnectionState) => void;
+
+/** 'dashboard:full-refetch' 的 detail 形态。两种派发源：
+ *   - 后端关闭码 4003（慢消费方永久丢了 n 条事件）→ code 带 4003；
+ *   - 重连后的首帧 snapshot（断线期的事件同样丢了）→ code 为 null。 */
+export interface DashboardFullRefetchDetail {
+  code: number | null;
+  reason: string | null;
+}
 
 /** 指数退避 1s/2s/4s/8s/10s 封顶，无限重试（对齐原手写 retryDelay 行为）。 */
 function reconnectDelay(retries: number): number {
@@ -96,11 +108,12 @@ const WS_CLOSE_SESSION_LOST = 4001;
  *  与 4001 的处理**不同**：4001 是终止性的（重连是死路），4003 必须
  *  「重连 + 全量 HTTP 重取」（后端 `docs/api/dashboard.md` §7.1 慢消费方条的规定动作）。
  *  单纯重连是不够的 —— 本仓 dashboard 域是「HTTP 全量首取 + WS 事件 invalidate
- *  重取」，**重连后的首帧 snapshot 被本层显式 no-op 丢弃**（见 dispatch() 的
- *  `msg.type === 'snapshot'` 分支），且 TanStack Query 无轮询、staleTime 30s 只是
- *  「下次取数是否放行」而不是定时自取 ⇒ 丢掉的 n 个事件没有任何补偿通道，
- *  「丢 1 个事件 = 对应区块永不刷新」。后端文档里 4003 动作成立的前提是「重连时
- *  自然重新收到首帧 snapshot」，那个前提对本前端不成立，必须自己补 invalidate。 */
+ *  重取」，**丢掉的 n 条事件在服务端已不可追溯**（新连接的订阅集合从此刻起算），
+ *  TanStack Query 也无轮询（staleTime 30s 只管「下次取数是否放行」而不是定时自取）
+ *  ⇒ 必须自己派一次「全量重取」信号，由 views 层立即 invalidate。
+ *
+ *  同一个信号也被「重连后的首帧 snapshot」复用（见 dispatch()）—— 断线期间丢的事件
+ *  与慢消费方丢的事件是同一类缺口：服务端不再重发，只能靠重取。 */
 const WS_CLOSE_LAGGED = 4003;
 
 // ============================================================
@@ -187,12 +200,37 @@ function redactWsUrl(url: string | undefined): string {
 // 卸载不会误关共享 socket，模块顶层无 scope 概念）。
 const useDashboardWebSocketInternal = createGlobalState(() => {
   const eventSubs = new Set<EventHandler>();
-  const statusSubs = new Set<StatusHandler>();
+  const connectionSubs = new Set<ConnectionHandler>();
 
   // 工厂首次执行时同步一次 URL（此时若尚无 token 则保持 undefined，不连接）。
   syncWsUrl();
 
   let attempt = 0;
+
+  /** 已建立连接的累计次数（每次 open 事件 +1）。
+   *
+   *  dispatch() 用它区分「首次连接的首帧 snapshot」与「重连后的首帧 snapshot」：
+   *  后端 `handle_socket` 每次连接都推一帧新鲜 snapshot，所以重连后的那一帧就是
+   *  断线期的数据补偿点；而首次连接的那一帧与首屏 HTTP 全量首取重复，触发补偿等于
+   *  白刷一次三个 dashboard query。
+   *
+   *  2026-10-13 澄清：这里的「首次」是**本 WS 单例生命周期内的首次**（模块级
+   *  createGlobalState，整个页面生命周期只有一个实例），**不是**「本次会话的首连」。
+   *  connectedCount 不随登出复位 —— 登出→登入后第一次连接时它已经 ≥ 2，会被按
+   *  「重连」处理、照常派一次 dashboard:full-refetch。**当前无实际危害**：登出时
+   *  teardownSession() 已 `queryClient.clear()` 清空缓存，而登录后 dashboard 页的
+   *  listener 一般还没挂上（要等用户真的打开该页），此时重取无人接收。刻意不改代码：
+   *  真要按「会话」计数就得把会话标识引进 WS 层，而 WS 层不得 import stores/auth
+   *  （见本文件分层禁令），为一个零危害的差异破这条禁令不划算。 */
+  let connectedCount = 0;
+
+  /** 连接状态订阅者共享的当前状态。订阅即刻回放的就是它。 */
+  let connectionState: DashboardConnectionState = {
+    status: 'connecting',
+    expected: false,
+    retries: 0,
+    lastError: null,
+  };
   /** 上一次是否收到 error 事件（失败握手必先 error 后 close）。
    *  **只在 closeCode=1006 时有判别力** —— 其余关闭码都是后端主动发的 Close 帧，
    *  不伴随 error 事件且自身已带语义（见 WS_CLOSE_SESSION_LOST 上方注释）：
@@ -281,10 +319,11 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
    *  降噪策略：前 FAIL_LOG_DETAIL_TIMES 次打完整对象，之后每 FAIL_LOG_THROTTLE_EVERY
    *  次打一行。**不封顶重试**（autoReconnect.retries 仍为 -1）—— WS 是 dashboard 唯一
    *  的更新通道，封顶会让页面静默停止刷新，比刷屏更糟。 */
-  function reportFailure(stage: 'close', ev?: CloseEvent, hadErrorEvent = false): void {
+  function reportFailure(stage: 'close', ev?: CloseEvent, hadErrorEvent = false): number {
     attempt += 1;
+    const retries = attempt;
     if (attempt > FAIL_LOG_DETAIL_TIMES && attempt % FAIL_LOG_THROTTLE_EVERY !== 0) {
-      return;
+      return retries;
     }
     const token = readTokenFromStorage();
     const exp = token ? (decodeJwt(token)?.exp ?? null) : null;
@@ -300,6 +339,7 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
           '先按 closeCode 查后端 handler.rs 的 reauth_close_code 关闭码表（1011 内部错误 / 1012 服务重启 / 4001 re-auth 失败 / 4003 慢消费方；1006 是原因未知的兜底码）；4003 已额外派发全量重取信号（丢的事件重连补不回来）；仅 1006 才需再查握手期 HTTP status（Network 面板 / 直连后端 curl）',
       },
     );
+    return retries;
   }
 
   const { status, close, open, ws } = useWebSocket(wsUrl, {
@@ -320,12 +360,13 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
     },
     onConnected() {
       attempt = 0;
+      connectedCount += 1;
       // 这里**不**碰主动关闭标记（2026-10-09）：标记绑在具体 socket 实例上，滞留也无害。
       // 而且旧实现的「onConnected 里清标记」本身是个反向乱序竞争 —— reconnectDashboard
       // 的顺序是「置位 → open()」，真实浏览器里旧 socket 的 close 事件与新 socket 的
       // open 事件**无顺序保证**：新连接握手更快时 onConnected 先跑 → 清掉标记 → 随后旧
       // socket 的 close 到达，被记成一次真实失败。改成实例匹配后这个竞争自然消失。
-      notifyStatus('open');
+      setConnectionState({ status: 'open', expected: false, retries: 0, lastError: null });
     },
     onDisconnected(_ws, ev) {
       // 主动关闭判定必须放在最前面。判定依据是「**实例同一性**」，不是 code：code 1000
@@ -333,7 +374,7 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
       if (expectedClosingWs !== null && expectedClosingWs === _ws) {
         expectedClosingWs = null;
         pendingError = false;
-        notifyStatus('closed');
+        setConnectionState({ status: 'closed', expected: true });
         return;
       }
       // 4001「连接期间 re-auth 失败」是**唯一需要终止重连**的关闭码。少了这个分支，
@@ -369,7 +410,11 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
             detail: { code: ev.code, reason: ev.reason || null },
           }),
         );
-        notifyStatus('closed');
+        setConnectionState({
+          status: 'closed',
+          expected: false,
+          lastError: { code: ev.code, reason: ev.reason || null },
+        });
         return;
       }
       if (ev.code === WS_CLOSE_LAGGED) {
@@ -387,18 +432,19 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
         // 「会话没事，但数据可能已经缺了，补一次全量重取」。
         //
         // 注意：重连本身仍按通用路径走（下面 reportFailure + autoReconnect），4003
-        // 只是额外挂一个补数据的信号。其余关闭码（1006/1011/1012）同样会因
-        // 断连丢事件，那是既有架构的已知缺口（TanStack Query 无轮询），本轮不扩范围。
-        window.dispatchEvent(
-          new CustomEvent('dashboard:full-refetch', {
-            detail: { code: ev.code, reason: ev.reason || null },
-          }),
-        );
+        // 只是额外挂一个补数据的信号。断连期丢的事件由「重连后的首帧 snapshot」
+        // 在 dispatch() 里派同一个信号补偿，两条路径共用一个接收方。
+        dispatchFullRefetch(ev.code, ev.reason || null);
       }
       // 一次失败会先 fire error 再 fire close，只在 close 侧计一次，避免重复计数。
-      reportFailure('close', ev, pendingError);
+      const retries = reportFailure('close', ev, pendingError);
       pendingError = false;
-      notifyStatus('closed');
+      setConnectionState({
+        status: 'closed',
+        expected: false,
+        retries,
+        lastError: { code: ev.code, reason: ev.reason || null },
+      });
     },
     onError() {
       // 失败握手的 error 事件不携带任何信息（无 status / 无 code），只置标记，
@@ -420,12 +466,32 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
     },
   });
 
-  function notifyStatus(s: ConnectionStatus): void {
-    for (const h of statusSubs) {
+  /** 派发「补一次全量重取」信号。接收方是 `views/dashboard/composables/
+   *  useDashboardInvalidation.ts` → 立即（不防抖）invalidate 它持有的 queryKey。
+   *  两条派发源共用这一个出口：后端关闭码 4003（慢消费方永久丢事件）与重连后的首帧
+   *  snapshot（断线期丢的事件）—— 两者的缺口性质相同：服务端不会重发，只能靠重取。
+   *
+   *  本层**不 import useQueryClient**（api 层引入 TanStack Query 依赖是分层倒置），
+   *  沿用 CLAUDE.md 既定 CustomEvent 解耦范式。 */
+  function dispatchFullRefetch(code: number | null, reason: string | null): void {
+    window.dispatchEvent(
+      new CustomEvent<DashboardFullRefetchDetail>('dashboard:full-refetch', {
+        detail: { code, reason },
+      }),
+    );
+  }
+
+  /** 更新连接状态并广播。
+   *
+   *  `patch` 是增量：调用点只写自己这次真正改到的字段（例如 4001 不推进 `retries`，
+   *  主动关闭不写 `lastError`），避免每个分支都手工搬一遍四字段后写错其一。 */
+  function setConnectionState(patch: Partial<DashboardConnectionState>): void {
+    connectionState = { ...connectionState, ...patch };
+    for (const h of connectionSubs) {
       try {
-        h(s);
+        h(connectionState);
       } catch (e) {
-        console.error('dashboard status handler error', e);
+        console.error('dashboard connection handler error', e);
       }
     }
   }
@@ -433,8 +499,7 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
   function dispatch(msg: DashboardServerMessage): void {
     // union 补全后这里用 discriminated union narrowing；msg.type 字面量在每个分支被
     // 精确收窄到对应 interface，TS 不再把 snapshot/heartbeat 帧硬塞到
-    // DashboardEvent 类型里。显式三分支，snapshot 与 heartbeat 的 no-op 行为保留
-    // （HTTP 全量首取已替代 snapshot；heartbeat 是后端 30s 保活 text 帧，前端无需消费）。
+    // DashboardEvent 类型里。显式三分支（heartbeat 是后端 30s 保活 text 帧，前端无需消费）。
     if (msg.type === 'event') {
       // 未来形态：若日后落地真增量（DASHBOARD_ITEM_UPSERT / REMOVE 等），在此分支内
       // 加二级分发（例：按 msg.event_type 走 query cache patcher，default 仍走事件
@@ -449,8 +514,20 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
         }
       }
     } else if (msg.type === 'snapshot') {
-      // 2026-09-28 新架构下不再消费首帧 snapshot 业务字段（HTTP 全量首取
-      // 已替代）；保留分支显式 no-op 便于日后落地真增量 patch。
+      // 首帧 snapshot 的业务字段仍不消费（HTTP 全量首取已替代）—— 但**重连**后的
+      // 首帧承担数据补偿职责，见下面两行。
+      //
+      // 依据：后端 `handle_socket` 每次连接（含每次重连）都会推一帧**新鲜的** snapshot，
+      // 也就是说重连那一刻服务端已经把当前事实重新算了一遍。而 dashboard 域三个 query
+      // 是 `gcTime: POSITIVE_INFINITY` + 无 `refetchInterval`（staleTime 只决定
+      // 「下次取数放不放行」，不产生定时器）⇒ 断连期间丢失的增量事件没有任何补偿通道，
+      // 大屏会静默停更。这一帧就是那个补偿点：派一次「全量重取」，由 useDashboardInvalidation
+      // 立即 invalidate，走 HTTP 把这一帧等价的数据取回来。
+      //
+      // ⚠️ 必须排除首次连接（connectedCount === 1）：那时的数据正由首屏 HTTP 全量首取
+      // 加载，再触发一次重取只会让三个 query 白刷一遍（首屏也会闪一次 loading）。
+      if (connectedCount <= 1) return;
+      dispatchFullRefetch(null, 'reconnected snapshot');
       return;
     } else if (msg.type === 'heartbeat') {
       // 30s 保活 text 帧直接忽略。
@@ -465,7 +542,7 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
   watch(
     status,
     (s) => {
-      if (s === 'CONNECTING') notifyStatus('connecting');
+      if (s === 'CONNECTING') setConnectionState({ status: 'connecting' });
     },
     { immediate: true },
   );
@@ -483,7 +560,9 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
 
   return {
     eventSubs,
-    statusSubs,
+    connectionSubs,
+    /** 供 onDashboardConnection 订阅即刻回放当前状态。 */
+    getConnectionState: (): DashboardConnectionState => connectionState,
     closeConnection,
     reopenConnection,
   };
@@ -507,13 +586,36 @@ export function onDashboardEvent(h: EventHandler): () => void {
   };
 }
 
-/** 订阅连接状态。状态订阅本身不影响 socket 生命周期。 */
-export function onDashboardStatus(h: StatusHandler): () => void {
-  const { statusSubs } = getSocket();
-  statusSubs.add(h);
+/** 订阅连接状态（返回退订函数）。
+ *
+ *  **订阅即刻回放**：注册瞬间先回调一次当前状态，再进后续的变更推送。
+ *  没有这一下，push-only 订阅对「后挂的组件」等于零信息 —— 组件挂上来时若状态没
+ *  恰好发生一次变更（比如大屏常驻、WS 早就连上了），指示器会一直停在初始值。状态是
+ *  组件的初始渲染输入，不是「发生了什么」的增量通知。
+ *
+ *  返回值是 `onDashboardConnection` 的退订函数，两个接口共享同一份订阅集合。 */
+export function onDashboardConnection(h: ConnectionHandler): () => void {
+  const { connectionSubs, getConnectionState } = getSocket();
+  connectionSubs.add(h);
+  try {
+    h(getConnectionState());
+  } catch (e) {
+    console.error('dashboard connection handler error', e);
+  }
   return () => {
-    statusSubs.delete(h);
+    connectionSubs.delete(h);
   };
+}
+
+/** 只拿三态字符串的薄封装（`onDashboardConnection` 的 `state.status`）。
+ *
+ *  保留它是为了不打断 `src/api/dashboard.spec.ts` 的既有用例（生产侧零消费方）；新写的
+ *  UI 一律用 `onDashboardConnection` —— 三态字符串表达不了「closed 是主动关闭还是
+ *  真的断了」，而这两者对界面的含义恰好相反（见 DashboardConnectionState）。 */
+export function onDashboardStatus(h: StatusHandler): () => void {
+  return onDashboardConnection((state) => {
+    h(state.status);
+  });
 }
 
 /** 显式关闭长连接（一般不调用，保留供登出 / 测试使用）。 */
@@ -544,7 +646,7 @@ export function reconnectDashboard(): void {
 }
 
 // ============================================================
-// HTTP 端点（2026-10-07 收敛为 3 个，与 WS snapshot 帧并行；WS 首帧不再消费）
+// HTTP 端点（2026-10-07 收敛为 3 个；WS snapshot 帧的 data 业务字段不消费）
 //
 // 契约来源：backend-rust docs/api/dashboard.md
 //   1. GET /dashboard/snapshot          —— 无 query 参数
@@ -663,11 +765,13 @@ if (typeof window !== 'undefined' && !sessionListenerBound) {
 //        - `auth expired` → `auth.forceLogout(router)` 直接终止；
 //        - `null` / 未知 → null 按「可能只是 token 过期」走 refresh 分支，
 //          其它非空未知值保守 forceLogout。
-//   2. 'dashboard:full-refetch'（4003 慢消费方丢了 n 条事件，非终止性）
-//      `CustomEvent<{ code: number; reason: string | null }>`，接收方是
+//   2. 'dashboard:full-refetch'（补一次全量重取，非终止性）
+//      `CustomEvent<DashboardFullRefetchDetail>`，接收方是
 //      `src/views/dashboard/composables/useDashboardInvalidation.ts` → 立即
 //      （不防抖）invalidate 本 composable 持有的全部 queryKey。
 //      语义：**会话还在，但数据可能已经缺了，补一次全量重取**。
+//      两个派发源共用这一个信号：后端关闭码 4003（慢消费方永久丢了 n 条）与
+//      **重连后的首帧 snapshot**（断线期丢的增量事件）—— 缺口性质相同。
 
 // ============================================================
 // 兼容导出（部分 spec 仍可能 import 类型）

@@ -39,7 +39,8 @@
       <!-- 2026-09-29 重构：el-header 改为三段式（left / middle / right）。
            header-left 留折叠按钮；header-middle 嵌入 TagsView（40px 容器贴
            header 下边缘，active tab margin-bottom: -1px 盖住 header border）；
-           header-right 仅放 UserDropdown。面包屑与刷新按钮已移除。 -->
+           header-right 放 WsConnectionIndicator（WS 连接状态）+ UserDropdown。
+           面包屑与刷新按钮已移除。 -->
       <el-header class="header">
         <div class="header-left">
           <el-button link class="collapse-btn" @click="onNavToggle">
@@ -55,6 +56,10 @@
         </div>
 
         <div class="header-right">
+          <!-- 2026-10-13 新增：WS 连接状态指示器，排在 UserDropdown 左侧。
+               它读 dashboard 域的 WS 契约（api/dashboard.ts 的连接状态），
+               dashboard 域零轮询 + gcTime 无限 ⇒ 断线只能靠这个指示器讲给用户。 -->
+          <WsConnectionIndicator />
           <UserDropdown />
         </div>
       </el-header>
@@ -76,15 +81,17 @@
       </el-main>
     </el-container>
 
-    <!-- 全局业务事件横幅：Teleport 到 body，右上角浮层 -->
-    <NotificationBanner />
+    <!-- 报工台业务事件条：Teleport 到 body，右下角浮层（2026-10-13 取代旧的
+         NotificationBanner —— 旧横幅支持 8 个 v1 遗留 kind、后端零产出方，且对
+         全部事件无白名单，每条都弹一条空文案）。 -->
+    <ScanBanner />
   </el-container>
 </template>
 
 <script setup lang="ts">
 // 2026-09-29 精简：移除面包屑、刷新按钮、用户下拉、改密弹窗、currentUser onMounted
 // 全部逻辑，迁出到 UserDropdown.vue + useUserActions.ts。本文件只保留 layout 装配
-// —— 折叠 / 侧栏菜单 / 顶栏三段式 / keep-alive / NotificationBanner。
+// —— 折叠 / 侧栏菜单 / 顶栏三段式 / keep-alive / 两条 dashboard WS 浮层。
 import { ref, computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { Fold, Expand } from '@element-plus/icons-vue';
@@ -97,6 +104,16 @@ import { useTagsViewStore } from '@/stores/tagsView';
 import MenuTreeItem from '@/layouts/components/MenuTreeItem.vue';
 import TagsView from '@/layouts/components/TagsView.vue';
 import UserDropdown from '@/layouts/components/UserDropdown.vue';
+// 2026-10-13：dashboard 域的两条 WS 浮层组件。放 views/dashboard/components/ 而不是
+// src/components/ —— 它们依赖 dashboard 域的 WS 契约与守门 schema（域内依赖），且只有本 layout
+// 一个消费方，不满足「零域内依赖 + 多域复用」的上提判据（对照 BatchCard：6 个跨域
+// 消费方才配得上 src/components/）。
+//
+// ⚠️ 这两条 import 是全仓仅有的 `layouts/ → views/` 边，是**有意识的取舍**：消费方是应用
+// 外壳而非某个页面，按判据归属在 dashboard 域内。若将来出现第二个壳层（Kiosk 屏 / 打印页）
+// 要复用作标，应届时把两条**整体上提到 `src/components/`**，而不是再加一条 layouts → views 边。
+import ScanBanner from '@/views/dashboard/components/ScanBanner.vue';
+import WsConnectionIndicator from '@/views/dashboard/components/WsConnectionIndicator.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -263,6 +280,10 @@ function onMenuSelect(index: string): void {
 .header-right {
   display: flex;
   align-items: center;
+  // 2026-10-13：WsConnectionIndicator 与 UserDropdown 之间的间距。指示器与
+  // .user-info 两侧各有 8px 内边距（光学对齐基准）。.header-right 只有这两个子元素
+  // ⇒ gap 只产生这一处间距，4px 就够，再大会把指示器顶离 UserDropdown。
+  gap: 4px;
 }
 
 .main-content {
