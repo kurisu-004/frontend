@@ -19,8 +19,8 @@
 //   - **close 1006 → 仍按退避重连**：防「把所有关闭码都停掉」这种过度处理回归
 //   - **close 4001 → 派发 'auth:session-lost'**
 //   - **close 4003（慢消费方丢事件）→ 派发 'dashboard:full-refetch'** 且仍重连
-//     （后端规定动作是「重连 + 全量 HTTP 重取」，而重连后的首帧 snapshot 在本层被
-//     no-op 丢掉 ⇒ 补数据只能靠这个信号）
+//     （'dashboard:full-refetch' 有两个派发源：本条的 4003 与**重连后的首帧 snapshot**，
+//     共用同一个信号与同一个接收方，见下方 C5 / C6 / C7）
 //
 // 关闭码 fixture 的 reason 字符串**必须与后端实际发送值一致**（语义真源是后端
 // `src/modules/dashboard/handler.rs` 的 `reauth_close_code`，`docs/api/dashboard.md`
@@ -944,11 +944,14 @@ describe('dashboard WS：关闭码 4001（re-auth 失败）停止重连', () => 
   // ==========================================================================
   // 4003「慢消费方」丢事件 → 补一次全量重取
   //
-  // 后端 `docs/api/dashboard.md` §7 慢消费方条的规定动作是「重连 + 全量 HTTP 重取」，
-  // 且成立前提写的是「重连时自然重新收到首帧 snapshot」。本仓 dashboard 域是
-  // 「HTTP 全量首取 + WS 事件 invalidate 重取」，重连后的首帧 snapshot 被显式
-  // no-op 丢弃（api/dashboard.ts 的 dispatch()）⇒ 该前提不成立，重连补不回来
-  // 丢掉的事件，必须由 WS 层额外派发 'dashboard:full-refetch' 让上层立即 invalidate。
+  // 后端 `docs/api/dashboard.md` §7 慢消费方条的规定动作是「重连 + 全量 HTTP 重取」。
+  // 本仓的 'dashboard:full-refetch' 承担这个「全量 HTTP 重取」，且有**两个派发源**
+  // （见 api/dashboard.ts 的 dispatchFullRefetch）：
+  //   - 4003：在**关闭那一刻**就派一次 —— 重连要等退避（1s 起），不派的话这段时间大屏
+  //     一直展示已知过期的数据，而 4003 是后端**明确告知**「永久丢了 n 条」的码；
+  //   - **重连后的首帧 snapshot**：承担断线期丢的增量事件的补偿（首次连接那一帧被
+  //     dispatch() 显式排除，见下方 C5 / C6 / C7）。
+  // 两者的缺口性质相同：服务端不重发，只能靠 HTTP 重取。
   // ==========================================================================
 
   it('close 4003 → 派发 dashboard:full-refetch（丢的事件重连补不回来）', async () => {
@@ -996,8 +999,8 @@ describe('dashboard WS：关闭码 4001（re-auth 失败）停止重连', () => 
     FakeWebSocket.instances[0]!.open();
     FakeWebSocket.instances[0]!.closeWith({ code: 1006 });
     // 1006 同样会因断连丢事件，但**不在关闭那一刻**派全量重取：那时连接还没恢复，
-    // 重取只能拿到断连前的同一份事实。补偿点在重连之后（重连首帧 snapshot，见下方
-    // 「2026-10-13」describe 的 C4）；只有 4003 配得上「关闭即全量重取」这个动作 ——
+    // 重取只能拿到断连前的同一份事实。补偿点在重连之后（重连后的首帧 snapshot，见下方
+    // 「2026-10-13」describe 的 C6）；只有 4003 配得上「关闭即全量重取」这个动作 ——
     // 它是后端**明确告知**「永久丢了 n 条」的码。
     expect(fullRefetch).not.toHaveBeenCalled();
 

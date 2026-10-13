@@ -118,7 +118,10 @@ describe('ScanBanner — SCAN_BANNER 事件条（2026-10-13）', () => {
     expect(texts()).toEqual(['张三领取 F1234 x 20']);
   });
 
-  it('S1d：交期带时刻（NaiveDateTime 形态）也只取 M-DD', async () => {
+  it('S1d：交期漂移成带时刻形态也只取 M-DD（不靠宽松 schema 之外的闸门兜底）', async () => {
+    // 后端 `Option<NaiveDate>` 的 wire 形态恒为 `YYYY-MM-DD` / `null`，本条守的是
+    // **漂移容忍**：`monthDay` 按位取第 6~10 位，带时刻的形态同样能降级，
+    // 且不会因为「格式不对」把整条事件丢掉。
     mountBanner();
     await pushEvent(bannerEvent(goodPayload({ system_delivery_date: '2026-10-27T00:00:00' })));
 
@@ -244,5 +247,16 @@ describe('ScanBanner — SCAN_BANNER 事件条（2026-10-13）', () => {
     expect(el.className).toContain('is-returned');
     expect(el.getAttribute('style')).toBeNull();
     expect(wrapper.html()).not.toContain('border-left-color');
+  });
+
+  it('S9b：动作词含下划线时类名折成 kebab-case（与全仓其它语义色类一致）', async () => {
+    // `toLowerCase()` 直出会得到 `is-picked_up`；全仓其它语义色类都是 kebab-case
+    // （is-urgent / is-open / is-disconnected），CSS 虽合法但口径不一致。
+    mountBanner();
+    await pushEvent(bannerEvent(goodPayload({ action: 'PICKED_UP' })));
+
+    const el = banners()[0]!;
+    expect(el.className).toContain('is-picked-up');
+    expect(el.className).not.toContain('is-picked_up');
   });
 });

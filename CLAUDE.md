@@ -186,7 +186,7 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 | `views/dashboard/components/ScanBanner.vue` | 右下角浮层（`Teleport to="body"`） | `onDashboardEvent` 里 `event_type === 'SCAN_BANNER'` |
 | `views/dashboard/components/WsConnectionIndicator.vue` | `MainLayout` 顶栏 `.header-right` 内、`UserDropdown` 左侧 | `onDashboardConnection` |
 
-两条都放**域内** `views/dashboard/components/`，不上提 `src/components/`：它们依赖 dashboard 域的 WS 契约与守门 schema（域内依赖），且只有 MainLayout 一个消费方，不满足「零个域内依赖 + 多域复用」的上提判据 —— 与 `BatchCard.vue` 那种 6 个跨域消费方才上提的判据**相反**。
+两条都放**域内** `views/dashboard/components/`，不上提 `src/components/`：它们依赖 dashboard 域的 WS 契约与守门 schema（域内依赖），且只有 MainLayout 一个消费方，不满足「零个域内依赖 + 多域复用」的上提判据 —— 与 `BatchCard.vue` 那种 6 个跨域消费方才上提的判据**相反**。⚠️ `MainLayout.vue` 里那两条 import 是全仓仅有的 `layouts/ → views/` 边，属**有意识的取舍**（消费方是应用外壳而非某个页面）。**若将来出现第二个壳层**（Kiosk 屏 / 打印页）要复用作标，应届时把两条**整体上提到 `src/components/`**，而不是再加一条 `layouts → views` 边。
 
 **⚠️ `ScanBanner` 的 `bottom: 72px` 是硬值，不是随手取的数**：`components/PagedTable.vue` 的 `.pagination` 是右对齐的，恰好就在页面右下角（全部列表页都是这个壳）。贴底（24px）会盖住「下一页」按钮 4 秒。同理，入场动画从 `translateX`（右上角那版）改成 `translateY` —— 贴右下角的层从下方滑入。
 
@@ -203,7 +203,7 @@ v2 后端约 40 个事件里，**只有 `SCAN_BANNER` 的 payload 带展示字�
 | `quantity` | 本次动作涉及的件数 | 否 |
 | `system_delivery_date` | 系统交期，展示层只取 `M-DD` | 是 |
 
-`system_delivery_date` 刻意用宽松的 `z.string().nullable()` 而非日期格式闸：后端用 `NaiveDate` 还是 `NaiveDateTime` 序列化会决定 wire 上是 `2026-10-27` 还是 `2026-10-27T00:00:00`，格式闸加严只会把两种合法形态里的一种变成「事件被静默丢弃」，对展示正确性零收益。
+`system_delivery_date` 刻意用宽松的 `z.string().nullable()` 而非日期格式闸：后端 `ScanBannerItem.system_delivery_date` 是 `Option<chrono::NaiveDate>`（后端 `src/modules/prod/scan/vo/transition.rs`，三个序列化单测断言恒为 `"2026-10-27"` / `null`）⇒ wire 上只有 `YYYY-MM-DD` 与 `null` 两种形态，类型不再是未决项。保持宽松的理由是**展示层只取 `M-DD`** —— `slice(5,10)` 对带时刻的漂移形态仍能正确降级，而加严的唯一效果是把漂移变成「事件被静默丢弃 + 一行 warn」，对展示正确性零收益。
 
 **它不进 `AFFECTS_DASHBOARD` 白名单** —— 纯展示事件。dashboard 三张报表的数据事实由同一次扫码提交产生的既有状态翻转事件（`PART_PICKED_UP` / `WORKER_SCAN_*` …）承载，把它加进白名单等于每次扫码多刷一遍大屏。守卫：`composables/__tests__/useDashboardInvalidation.spec.ts` 的 I1 用例断言白名单元素数（**加它那条断言就会红**）。
 

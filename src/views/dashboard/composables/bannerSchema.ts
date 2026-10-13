@@ -35,9 +35,12 @@ export const scanBannerItemSchema = z.object({
   /** 本次动作涉及的件数（后端 i32 → JS number）。 */
   quantity: z.number(),
   /** 系统交期（可空）。**刻意用宽松的 `z.string().nullable()` 而非日期格式闸**：
-   *  后端用 NaiveDate 还是 NaiveDateTime 序列化会决定 wire 上是 `2026-10-27` 还是
-   *  `2026-10-27T00:00:00`，展示层只取 `M-DD`，格式闸加严只会让两种合法形态里
-   *  的一种被静默丢弃（事件被守门丢掉 = 该条横幅不出现），对正确性零收益。 */
+   *  后端 `ScanBannerItem.system_delivery_date` 是 `Option<chrono::NaiveDate>`
+   *  （后端 `src/modules/prod/scan/vo/transition.rs`，三个序列化单测断言恒为
+   *  `"2026-10-27"` / `null`）⇒ wire 上只有 `YYYY-MM-DD` 与 `null` 两种形态。
+   *  保持宽松的理由不是「类型还没定」，而是**展示层只取 `M-DD`**：`slice(5,10)`
+   *  对带时刻的漂移形态（如 `2026-10-27T00:00:00`）仍能正确降级，而加严的唯一效果
+   *  是把漂移变成「事件被守门丢掉 + 一行 warn」，对正确性零收益。 */
   system_delivery_date: z.string().nullable(),
 });
 

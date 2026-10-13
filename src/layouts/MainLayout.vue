@@ -104,9 +104,13 @@ import MenuTreeItem from '@/layouts/components/MenuTreeItem.vue';
 import TagsView from '@/layouts/components/TagsView.vue';
 import UserDropdown from '@/layouts/components/UserDropdown.vue';
 // 2026-10-13：dashboard 域的两条 WS 浮层组件。放 views/dashboard/components/ 而不是
-// src/components/ —— 它们依赖 dashboard 域的 WS 契约与守门 schema，且只有本 layout
+// src/components/ —— 它们依赖 dashboard 域的 WS 契约与守门 schema（域内依赖），且只有本 layout
 // 一个消费方，不满足「零域内依赖 + 多域复用」的上提判据（对照 BatchCard：6 个跨域
 // 消费方才配得上 src/components/）。
+//
+// ⚠️ 这两条 import 是全仓仅有的 `layouts/ → views/` 边，是**有意识的取舍**：消费方是应用
+// 外壳而非某个页面，按判据归属在 dashboard 域内。若将来出现第二个壳层（Kiosk 屏 / 打印页）
+// 要复用作标，应届时把两条**整体上提到 `src/components/`**，而不是再加一条 layouts → views 边。
 import ScanBanner from '@/views/dashboard/components/ScanBanner.vue';
 import WsConnectionIndicator from '@/views/dashboard/components/WsConnectionIndicator.vue';
 
@@ -276,8 +280,8 @@ function onMenuSelect(index: string): void {
   display: flex;
   align-items: center;
   // 2026-10-13：WsConnectionIndicator 与 UserDropdown 之间的间距。指示器与
-  // .user-info 两侧各有 8px 内边距（光学对齐基准），gap 只补 4px 就够 ——
-  // gap 同样会加在 UserDropdown 的左右两侧，所以值必须小，别把折叠按钮挤远。
+  // .user-info 两侧各有 8px 内边距（光学对齐基准）。.header-right 只有这两个子元素
+  // ⇒ gap 只产生这一处间距，4px 就够，再大会把指示器顶离 UserDropdown。
   gap: 4px;
 }
 

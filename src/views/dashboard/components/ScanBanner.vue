@@ -5,7 +5,7 @@
         <div
           v-for="item in items"
           :key="item.key"
-          :class="['scan-banner', `is-${item.action.toLowerCase()}`]"
+          :class="['scan-banner', `is-${item.action.toLowerCase().replace('_', '-')}`]"
           @mouseenter="pauseTimer(item.key)"
           @mouseleave="resumeTimer(item.key)"
         >
@@ -31,7 +31,7 @@
 // 承载，也不是 api 层的函数调用，WS 层只负责把帧原样 fan-out。守门点是 `onEvent`
 // 里的 `safeParse` —— 一条坏事件丢弃 + warn，绝不让异常冒泡把整条订阅链带走
 // （dispatch() 里虽有一层 try/catch，但那样会静默吞掉整条事件，连日志都没有）。
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { onBeforeUnmount, ref } from 'vue';
 import { Close } from '@element-plus/icons-vue';
 import { onDashboardEvent } from '@/api/dashboard';
 import type { DashboardEvent } from '@/types/dashboard';
@@ -62,7 +62,6 @@ interface BannerItem {
 const items = ref<BannerItem[]>([]);
 const timers = new Map<number, ReturnType<typeof setTimeout>>();
 let seq = 0;
-let offEvent: (() => void) | null = null;
 
 function scheduleDismiss(key: number): void {
   clearTimer(key);
@@ -94,8 +93,9 @@ function dismiss(key: number): void {
   items.value = items.value.filter((i) => i.key !== key);
 }
 
-/** 系统交期取 `M-DD`。后端可能给 `2026-10-27` 也可能给 `2026-10-27T00:00:00`
- *  （取决于用 NaiveDate 还是 NaiveDateTime 序列化），两种形态的第 6~10 位都是 M-DD。
+/** 系统交期取 `M-DD`。后端是 `Option<NaiveDate>` ⇒ 恒为 `YYYY-MM-DD` 或 `null`；
+ *  这里按「只取第 6~10 位」而不是按格式解析，所以带时刻的漂移形态
+ *  （`2026-10-27T00:00:00`）同样能正确降级。
  *  空值 / 空串一律返回 null，由调用方连括号一起省略。 */
 function monthDay(date: string | null): string | null {
   if (!date || date.length < 10) return null;
@@ -113,10 +113,16 @@ function composeText(item: ScanBannerItemData): string {
 
 function push(item: ScanBannerItemData): void {
   const key = ++seq;
-  items.value = [{ key, action: item.action, text: composeText(item) }, ...items.value].slice(
+  const next = [{ key, action: item.action, text: composeText(item) }, ...items.value].slice(
     0,
     MAX_VISIBLE,
   );
+  // 溢出被挤掉的那一条：连它的定时器一起清。不清的话它仍会在 4s 内到点触发一次
+  // dismiss()（filter 无匹配，空操作），每条溢出泄漏一个定时器。
+  for (const dropped of items.value) {
+    if (!next.some((i) => i.key === dropped.key)) clearTimer(dropped.key);
+  }
+  items.value = next;
   scheduleDismiss(key);
 }
 
@@ -130,13 +136,13 @@ function onEvent(ev: DashboardEvent): void {
   push(parsed.data);
 }
 
-onMounted(() => {
-  offEvent = onDashboardEvent(onEvent);
-});
+// 订阅在 setup 里建立（**不挂 onMounted**）：与同域既有范式 `useDashboardInvalidation`
+// 一致，且挂载期订阅会留一个 tick 的漏收窗口。退订仍在 onBeforeUnmount
+// （组件根是 Teleport，卸载时订阅与定时器必须一起清）。
+const offEvent = onDashboardEvent(onEvent);
 
 onBeforeUnmount(() => {
-  offEvent?.();
-  offEvent = null;
+  offEvent();
   for (const t of timers.values()) clearTimeout(t);
   timers.clear();
 });
@@ -184,10 +190,12 @@ onBeforeUnmount(() => {
   line-height: 1.4;
 }
 
-// 语义色走类绑定（`:class="\`is-${item.action.toLowerCase()}\`"`），**不走模板 inline
-// :style** —— inline 优先于任何非 !important 规则，会盖掉后面任何按状态改
-// border-color 的规则（同仓 BatchCard / PartRowCard 踩过这个坑）。
-.is-picked_up {
+// 语义色走类绑定（`:class="\`is-${item.action.toLowerCase().replace('_','-')}\`"`），
+// **不走模板 inline :style** —— inline 优先于任何非 !important 规则，会盖掉后面任何
+// 按状态改 border-color 的规则（同仓 BatchCard / PartRowCard 踩过这个坑）。
+// 下划线折成连字符：`toLowerCase()` 直出会得到 `is-picked_up`，与全仓其它语义色类
+// （`is-urgent` / `is-open` / `is-disconnected`）的 kebab-case 口径不一致。
+.is-picked-up {
   border-left-color: var(--primary-color);
 }
 .is-returned {

@@ -19,11 +19,11 @@
 // 换连接）与真实断开在 ConnectionStatus 上是同一个值，但对 UI 含义恰好相反 ——
 // 前者不该 alarming，后者必须变红。判据来自 WS 层「待关闭 socket 实例」的等值比较
 // （见 api/dashboard.ts 的 expectedClosingWs），不是按 close code 猜。
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, ref } from 'vue';
 import { onDashboardConnection } from '@/api/dashboard';
 import type { DashboardConnectionState } from '@/types/dashboard';
 
-/** 组件挂上前的默认值。onDashboardConnection 订阅即刻回放真实状态，正常路径下
+/** 组件 setup 前的默认值。onDashboardConnection 订阅即刻回放真实状态，正常路径下
  *  这个值只会存在一帧；它只是为了让初始渲染有确定输入。 */
 const state = ref<DashboardConnectionState>({
   status: 'connecting',
@@ -31,8 +31,6 @@ const state = ref<DashboardConnectionState>({
   retries: 0,
   lastError: null,
 });
-
-let offConnection: (() => void) | null = null;
 
 const stateClass = computed(() => {
   if (state.value.status === 'open') return 'is-open';
@@ -58,15 +56,16 @@ const tooltipText = computed(() => {
   return parts.join(' · ');
 });
 
-onMounted(() => {
-  offConnection = onDashboardConnection((next) => {
-    state.value = next;
-  });
+// 订阅在 setup 里建立（**不挂 onMounted**）：与同域既有范式 `useDashboardInvalidation`
+// 一致，且挂载期订阅会留一个 tick 的漏收窗口。onDashboardConnection 注册瞬间就回放一次
+// 当前状态（见 api/dashboard.ts），所以 setup 里订阅拿到的仍是真实值，不是初始值。
+const offConnection = onDashboardConnection((next) => {
+  state.value = next;
 });
 
+// 退订走 onBeforeUnmount：el-tooltip 包根，卸载时订阅必须摘干净。
 onBeforeUnmount(() => {
-  offConnection?.();
-  offConnection = null;
+  offConnection();
 });
 </script>
 
