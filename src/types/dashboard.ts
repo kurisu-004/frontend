@@ -90,8 +90,9 @@ export interface DashboardEvent {
 
 // WS 协议层消息壳三件套，让 DashboardServerMessage union 是真正的判别联合
 // （discriminated union）—— dispatch 函数里三个 type 分支靠 TS narrowing 收窄。
-//   - WsSnapshotMsg：后端首帧 snapshot，本仓架构（HTTP 全量首取 + WS 事件 invalidate）
-//     下仅作「连接就绪信号」，不再消费 data 业务字段。
+//   - WsSnapshotMsg：后端**每次连接（含重连）**的首帧 snapshot。`data` 的业务字段不消费
+//     （HTTP 全量首取已替代），但重连后的那一帧承担断线期丢事件的补偿职责（派
+//     `dashboard:full-refetch`）—— 详见 `api/dashboard.ts::dispatch` 的 snapshot 分支。
 //   - WsHeartbeatMsg：后端 30s 保活 text 帧，前端无消费者。
 // 字段对齐 backend-rust `src/modules/ws/hub.rs`。
 

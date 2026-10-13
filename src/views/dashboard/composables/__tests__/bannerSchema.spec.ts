@@ -48,9 +48,11 @@ describe('scanBannerItemSchema（2026-10-13）', () => {
     expect(parsed.system_delivery_date).toBeNull();
   });
 
-  it('正向：system_delivery_date 带时刻（后端用 NaiveDateTime 序列化）同样通过', () => {
-    // 刻意不收紧日期格式闸：展示层只取 M-DD，格式过紧只会把两种合法形态里的一种
-    // 静默变成「事件被丢弃」，对正确性零收益。
+  it('正向：system_delivery_date 带时刻的漂移形态仍然通过', () => {
+    // 刻意不收紧日期格式闸：后端 `system_delivery_date` 是 `Option<chrono::NaiveDate>`
+    // （后端 `src/modules/prod/scan/vo/transition.rs`），wire 上只有 "YYYY-MM-DD" 与
+    // null 两种形态；展示层只取 M-DD，带时刻的漂移 `slice(5,10)` 仍能正确降级，而
+    // 格式过紧只会把它静默变成「事件被丢弃」，对正确性零收益。
     expect(
       scanBannerItemSchema.parse(valid({ system_delivery_date: '2026-10-27T00:00:00' })),
     ).toMatchObject({ system_delivery_date: '2026-10-27T00:00:00' });

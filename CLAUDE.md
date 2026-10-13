@@ -188,7 +188,7 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 
 两条都放**域内** `views/dashboard/components/`，不上提 `src/components/`：它们依赖 dashboard 域的 WS 契约与守门 schema（域内依赖），且只有 MainLayout 一个消费方，不满足「零个域内依赖 + 多域复用」的上提判据 —— 与 `BatchCard.vue` 那种 6 个跨域消费方才上提的判据**相反**。⚠️ `MainLayout.vue` 里那两条 import 是全仓仅有的 `layouts/ → views/` 边，属**有意识的取舍**（消费方是应用外壳而非某个页面）。**若将来出现第二个壳层**（Kiosk 屏 / 打印页）要复用作标，应届时把两条**整体上提到 `src/components/`**，而不是再加一条 `layouts → views` 边。
 
-**⚠️ `ScanBanner` 的 `bottom: 72px` 是硬值，不是随手取的数**：`components/PagedTable.vue` 的 `.pagination` 是右对齐的，恰好就在页面右下角（全部列表页都是这个壳）。贴底（24px）会盖住「下一页」按钮 4 秒。同理，入场动画从 `translateX`（右上角那版）改成 `translateY` —— 贴右下角的层从下方滑入。
+**⚠️ `ScanBanner` 的 `bottom: 72px` 是硬值，不是随手取的数**：`components/PagedTable.vue` 的 `.pagination` 是右对齐的，恰好就在页面右下角（全部列表页都是这个壳）。贴底（24px）会盖住「下一页」按钮 4 秒。同理，入场动画用 `translateY` —— 入场方向与浮层位置对齐，贴右下角的层从下方滑入。
 
 #### `SCAN_BANNER`：唯一带展示字段的事件
 

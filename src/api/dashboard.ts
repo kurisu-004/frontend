@@ -7,8 +7,9 @@
 //      useDashboardDeliveryOrders（柱状图下钻）。三者都走 HTTP 首取 + WS 事件
 //      invalidate 重取，不依赖本模块推送的业务数据。
 //   2. 本模块仍是 WebSocket 单例层：持有唯一长连接 + 按频道分发事件给订阅者。
-//      WS 首帧 snapshot 仍会到达（后端行为不变），但前端消费方已切到 HTTP 全量，
-//      故首帧 snapshot 仅作「连接就绪信号」（通过 onConnected 标记 isReady）。
+//      WS 首帧 snapshot 仍会到达（后端行为不变），其 data 业务字段不消费（前端消费方
+//      已切到 HTTP 全量）；但 dispatch() 按「是不是首次连接」分流 —— 首次连接仅作就绪
+//      信号（no-op），重连后的那一帧是断线期丢事件的补偿点，派 'dashboard:full-refetch'。
 //   3. 业务事件（PART_TO_SHIP / SCAN_BANNER 等）继续通过 onDashboardEvent 派发给
 //      ScanBanner.vue（SCAN_BANNER 展示）/ useDashboardInvalidation（其余事件 invalidate）
 //      等消费者；连接状态通过 onDashboardConnection 派发给 WsConnectionIndicator.vue。
@@ -599,7 +600,7 @@ export function onDashboardConnection(h: ConnectionHandler): () => void {
 
 /** 只拿三态字符串的薄封装（`onDashboardConnection` 的 `state.status`）。
  *
- *  保留它是为了不打断既有消费方与 `src/api/dashboard.spec.ts` 的既有用例；新写的
+ *  保留它是为了不打断 `src/api/dashboard.spec.ts` 的既有用例（生产侧零消费方）；新写的
  *  UI 一律用 `onDashboardConnection` —— 三态字符串表达不了「closed 是主动关闭还是
  *  真的断了」，而这两者对界面的含义恰好相反（见 DashboardConnectionState）。 */
 export function onDashboardStatus(h: StatusHandler): () => void {
@@ -636,7 +637,7 @@ export function reconnectDashboard(): void {
 }
 
 // ============================================================
-// HTTP 端点（2026-10-07 收敛为 3 个，与 WS snapshot 帧并行；WS 首帧不再消费）
+// HTTP 端点（2026-10-07 收敛为 3 个；WS snapshot 帧的 data 业务字段不消费）
 //
 // 契约来源：backend-rust docs/api/dashboard.md
 //   1. GET /dashboard/snapshot          —— 无 query 参数

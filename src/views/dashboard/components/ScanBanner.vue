@@ -215,7 +215,7 @@ onBeforeUnmount(() => {
   }
 }
 
-// 入场方向与浮层位置对齐：贴右下角的层从**下**方滑入（右上角那版是 translateX）。
+// 入场方向与浮层位置对齐：贴右下角的层从**下**方滑入（translateY）。
 .scan-banner-enter-active,
 .scan-banner-leave-active {
   transition: all 0.25s ease;
