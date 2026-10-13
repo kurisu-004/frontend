@@ -9,7 +9,7 @@
     - basis: 'planned' | 'system'（交期统计口径）
     - @update:modelValue: 双向同步
   渲染：el-table stripe；列 = # / 流水(serial_no) / 图号(drawing_no) / 名称 /
-  客户(l1_customer_name + customer_name 拼接) / 状态 ElTag / 倒计
+  客户(后端下发的 customer_path，2026-10-17 起不再前端拼 L1+L2) / 状态 ElTag / 倒计
   （按 basis 取 planned_delivery_date 或 system_delivery_date，出逾期/临近配色）；
   loading / error / empty 三态。
   闸门：父组件 DashboardView `v-if="selectedLayer"` 保证 drawer 首次点击前不挂载，
@@ -109,14 +109,21 @@
           </el-table-column>
           <el-table-column label="客户" min-width="120">
             <template #default="{ row }">
-              <span class="cell-customer" :title="customerPath(row.l1_customer_name, row.customer_name)">
-                {{ customerPath(row.l1_customer_name, row.customer_name) || '—' }}
+              <span
+                class="cell-customer"
+                :title="customerPath(row.customer_path, row.customer_name)"
+              >
+                {{ customerPath(row.customer_path, row.customer_name) || '—' }}
               </span>
             </template>
           </el-table-column>
           <el-table-column prop="status" label="状态" width="86">
             <template #default="{ row }">
-              <el-tag :type="ORDER_STATUS_TAG_TYPE[row.status as OrderStatus]" size="small" effect="plain">
+              <el-tag
+                :type="ORDER_STATUS_TAG_TYPE[row.status as OrderStatus]"
+                size="small"
+                effect="plain"
+              >
                 {{ ORDER_STATUS_LABEL[row.status as OrderStatus] }}
               </el-tag>
             </template>
@@ -124,12 +131,20 @@
           <el-table-column label="倒计" width="84" align="right">
             <template #default="{ row }">
               <span
-                :class="['cell-due', deliveryUrgencyClass(rowDeliveryDate(row.planned_delivery_date, row.system_delivery_date))]"
+                :class="[
+                  'cell-due',
+                  deliveryUrgencyClass(
+                    rowDeliveryDate(row.planned_delivery_date, row.system_delivery_date),
+                  ),
+                ]"
               >
                 {{
                   deliveryDaysLeftText(
                     rowDeliveryDate(row.planned_delivery_date, row.system_delivery_date),
-                  ) || formatDeliveryDate(rowDeliveryDate(row.planned_delivery_date, row.system_delivery_date))
+                  ) ||
+                  formatDeliveryDate(
+                    rowDeliveryDate(row.planned_delivery_date, row.system_delivery_date),
+                  )
                 }}
               </span>
             </template>
@@ -241,9 +256,7 @@ const params = computed(() => {
   };
 });
 
-const { data: rows, total, isPending, error } = useDashboardDeliveryOrders(
-  () => toValue(params),
-);
+const { data: rows, total, isPending, error } = useDashboardDeliveryOrders(() => toValue(params));
 
 /** total 超过实际取回条数 = 服务端截断（items 上限 200 行），
  *  头部件数与提示条的开关。total <= rows.length 时不渲染任何额外提示。 */
@@ -256,13 +269,20 @@ function onRowClick(row: DeliveryOrderDetailData): void {
   emit('rowClick', row);
 }
 
-/** 客户路径展示 —— l1_customer_name + customer_name（如有）。
- *  同 rowDeliveryDate：收字段值而非整行，模板侧免掉整行强转。 */
-function customerPath(l1Name: string | null, customerName: string | null): string {
-  const l1 = l1Name ?? '';
-  const cur = customerName ?? '';
-  if (l1 && cur && l1 !== cur) return `${l1} / ${cur}`;
-  return cur || l1;
+/** 客户路径展示 —— 直接读后端下发的 `customer_path`。
+ *
+ *  2026-10-17 客户无限层级：改前是这里手工拼 `l1_customer_name + customer_name`（两参拼接、
+ *  含 `l1 !== cur` 去重），现在那一对字段是「第 2 层到叶子」与「根 L1」，再拼就等于把
+ *  L1 拼进一个本来就不含 L1 的串里、层级越深越离谱。拼接逻辑的真源在后端。
+ *
+ *  ⚠️ 抽屉**刻意不渲染 L1 次行**（其它列表页渲染）：它是大屏下钻抽屉，一行是一张工单卡、
+ *  纵向空间按行数定死（每次下钻看 30 件），多一行次行等于一屏少看两件。完整根名要看
+ *  「零件一览」的客户列。
+ *
+ *  空串 / null（客户软删、父链成环）退回单段名，两者皆空落 '—'。
+ *  口径与 `utils/elTableCell.ts::customerCellText` 的规则 1 + 兜底一致。 */
+function customerPath(path: string | null, customerName: string | null): string {
+  return path?.trim() || customerName?.trim() || '';
 }
 </script>
 

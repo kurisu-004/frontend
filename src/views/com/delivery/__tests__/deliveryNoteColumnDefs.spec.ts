@@ -33,6 +33,7 @@ import {
 } from '../deliveryNotePrintColumnDefs';
 import type { DeliveryNoteItemData } from '../composables/deliveryNoteSchema';
 import type { PrintRow } from '../utils/deliveryNotePrintRows';
+import type { PartTreeRow } from '../utils/deliveryNotePartRows';
 import type { ColumnDef } from '@/composables/useColumnVisibility';
 
 /** 打印对话框的列定义（按 key 取，宽度守卫用）。 */
@@ -183,5 +184,162 @@ describe('行类型与 schema 的 z.infer 同源', () => {
     };
     expect(row.quantity).toBeNull();
     expect(row.member_ids).toHaveLength(2);
+  });
+});
+
+// ============================================================================
+// 客户列的两行形态（2026-10-17 客户无限层级改造）
+// ============================================================================
+
+describe('客户列渲染：主行 customer_path + 次行 L1', () => {
+  /** cellRender 产物 → 递归纯文本 + 根 class。 */
+  function renderOf(v: unknown): { text: string; cls: string } {
+    const node = v as { children?: unknown; props?: { class?: unknown } };
+    const cls = Array.isArray(node.props?.class)
+      ? (node.props?.class as string[]).join(' ')
+      : String(node.props?.class ?? '');
+    const kids = node.children;
+    let text = '';
+    if (typeof kids === 'string') text = kids;
+    else if (Array.isArray(kids)) {
+      text = kids
+        .map((c) => (typeof c === 'object' && c !== null ? renderOf(c).text : ''))
+        .join('');
+    }
+    return { text, cls };
+  }
+
+  function renderCol(defs: ColumnDef[], key: string, row: unknown): { text: string; cls: string } {
+    const col = defs.find((d) => d.key === key);
+    if (!col?.cellRender) throw new Error(`列 ${key} 缺 cellRender`);
+    return renderOf(col.cellRender({ row, column: {}, $index: 0 }));
+  }
+
+  /** 详情表行（PartTreeRow 最小可赋值形态）。 */
+  function partRow(over: Partial<PartTreeRow> = {}): PartTreeRow {
+    return {
+      id: 'r1',
+      is_part_row: true,
+      seq: 1,
+      serial_no: 'S-1',
+      drawing_no: 'D-1',
+      name: '电容',
+      order_no: 'SO-1',
+      applicant_name: '张三',
+      customer_name: '影像组',
+      customer_path: '终端BG / 手机部 / 影像组',
+      parent_customer_name: '某某集团',
+      note: '',
+      quantity: 5,
+      unit: '件',
+      batch_ids: ['b1'],
+      label_printed: false,
+      request_date: null,
+      planned_delivery_date: null,
+      system_delivery_date: null,
+      status: 'READY_TO_SHIP',
+      part_id: 'p1',
+      assembly_id: null,
+      assembly_serial_no: null,
+      assembly_drawing_no: null,
+      assembly_name: null,
+      assembly_order_no: null,
+      assembly_quantity: null,
+      shippable_sets: null,
+      min_seq: null,
+      ...over,
+    };
+  }
+
+  /** 送货单本体行：`customer_name` = 单据归属的 L1 客户名（**不是**单段名）。 */
+  function noteRow(over: Partial<DeliveryNoteItemData> = {}): DeliveryNoteItemData {
+    return {
+      id: '1',
+      version: 1,
+      delivery_note_no: 'DN-1',
+      customer_id: 'C1',
+      customer_name: '某某集团',
+      customer_path: '终端BG / 手机部 / 影像组',
+      status: 'DRAFT',
+      submitted_at: null,
+      picked_up_at: null,
+      driver_worker_name: null,
+      part_count: 0,
+      note: null,
+      delivery_date: null,
+      ...over,
+    };
+  }
+
+  it('C1：送货单一览主行 customer_path、次行 L1（L1 挂在 customer_name 上）', () => {
+    const r = renderCol(buildDeliveryNoteColumnDefs(), 'customer', noteRow());
+    expect(r.cls).toContain('customer-cell');
+    expect(r.text).toBe('终端BG / 手机部 / 影像组某某集团');
+  });
+
+  it('C2：customer_path 为空串时 L1 顶上主行（不留「—」）', () => {
+    const r = renderCol(buildDeliveryNoteColumnDefs(), 'customer', noteRow({ customer_path: '' }));
+    expect(r.text).toBe('某某集团');
+    expect(r.cls).not.toContain('customer-cell--empty');
+  });
+
+  it('C3：客户自身即 L1 时不重复渲染（两个字段返同一个名）', () => {
+    const r = renderCol(
+      buildDeliveryNoteColumnDefs(),
+      'customer',
+      noteRow({ customer_path: '某某集团', customer_name: '某某集团' }),
+    );
+    expect(r.text).toBe('某某集团');
+    expect(r.cls).toBe('customer-cell__main');
+  });
+
+  it('C4：连 L1 都没有 → 灰色占位破折号', () => {
+    const r = renderCol(
+      buildDeliveryNoteColumnDefs(),
+      'customer',
+      noteRow({ customer_path: null, customer_name: null }),
+    );
+    expect(r.text).toBe('—');
+    expect(r.cls).toContain('customer-cell--empty');
+  });
+
+  it('C5：详情行项主行 customer_path、次行 parent_customer_name（无限层级后 = 根名）', () => {
+    const row = partRow({
+      customer_name: '影像组',
+      parent_customer_name: '某某集团',
+      customer_path: '终端BG / 手机部 / 影像组',
+    });
+    const r = renderCol(buildDeliveryNoteLineItemsColumnDefs(), 'customer', row);
+    expect(r.text).toBe('终端BG / 手机部 / 影像组某某集团');
+  });
+
+  it('C6：详情行项 customer_path 空串时退回单段名，L1 仍作次行', () => {
+    const row = partRow({
+      customer_name: '影像组',
+      parent_customer_name: '某某集团',
+      customer_path: '',
+    });
+    const r = renderCol(buildDeliveryNoteLineItemsColumnDefs(), 'customer', row);
+    expect(r.text).toBe('影像组某某集团');
+  });
+
+  // 打印预览列刻意保持单行（预览必须与导出的 xlsx 单元格逐字一致，见列定义文件头）。
+  it('C7：打印预览列仍是单行（不出 L1 次行，与导出到 xlsx 的单格文本一致）', () => {
+    const row: PrintRow = {
+      id: '1',
+      order_no: 'SO-1',
+      // PrintRow.l2_customer 已经是「第 2 层到叶子的路径」（deliveryNotePrintRows 补全）
+      l2_customer: '终端BG / 手机部 / 影像组',
+      applicant_name: '张三',
+      drawing_no: 'D-1',
+      name: 'N',
+      quantity: 1,
+      unit: '件',
+      system_delivery_date: null,
+      note: '',
+    };
+    const r = renderCol(buildDeliveryNotePrintColumnDefs(), 'customer_name', row);
+    expect(r.text).toBe('终端BG / 手机部 / 影像组');
+    expect(r.cls).not.toContain('customer-cell');
   });
 });

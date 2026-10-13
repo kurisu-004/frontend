@@ -48,8 +48,10 @@ function makeRow(overrides: Record<string, unknown> = {}): Record<string, unknow
     is_urgent: true,
     planned_delivery_date: '2026-10-10',
     system_delivery_date: null,
-    customer_name: '客户A-子',
+    customer_name: '手机部',
     parent_customer_name: '客户A',
+    // 2026-10-17 客户无限层级：新增必填 customer_path（第 2 层到叶子、不含 L1）。
+    customer_path: '终端BG / 手机部',
     has_cnc_program: false,
     batch_id: '190000000000123',
     batch_version: 7,

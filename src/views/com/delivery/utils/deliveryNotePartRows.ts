@@ -103,7 +103,12 @@ export interface PartTreeRow {
   applicant_name: string;
   note: string;
   customer_name: string;
+  /** 第 2 层到叶子的客户名 ` / ` 拼接（**不含 L1**；空串 = 该行没有客户名）。
+   *  详情页客户列的主行。2026-10-17 客户无限层级改造后语义从「L1 / L2 两级路径」改成这个。 */
   customer_path: string;
+  /** 根（L1）客户名（空串 = 无）。详情页客户列的**次行**。
+   *  ⚠️ 2026-10-17 起语义 = 根名（改前是「直接父名」）。 */
+  parent_customer_name: string;
   request_date: string | null;
   planned_delivery_date: string | null;
   system_delivery_date: string | null;
@@ -180,6 +185,7 @@ function foldPartRows(
       applicant_name: li.applicant_name ?? '',
       customer_name: li.customer_name ?? '',
       customer_path: li.customer_path ?? '',
+      parent_customer_name: li.parent_customer_name ?? '',
       request_date: li.request_date,
       planned_delivery_date: li.planned_delivery_date,
       system_delivery_date: li.system_delivery_date,
@@ -231,6 +237,7 @@ function buildAsmParentRow(assemblyId: string, children: PartTreeRow[]): PartTre
     applicant_name: first.applicant_name,
     customer_name: first.customer_name,
     customer_path: first.customer_path,
+    parent_customer_name: first.parent_customer_name,
     request_date: null,
     planned_delivery_date: first.planned_delivery_date,
     // 子件行的系统交期已经是「组内首个非空」，父行直接沿用首个子件的值。

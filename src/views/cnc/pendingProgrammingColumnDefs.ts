@@ -18,6 +18,7 @@ import { h, type VNode } from 'vue';
 import { ElButton, ElTag } from 'element-plus';
 import { RouterLink } from 'vue-router';
 import type { ColumnDef } from '@/composables/useColumnVisibility';
+import { renderCustomerCell } from '@/utils/elTableCell';
 import type { PendingProgrammingItemData } from './composables/pendingProgrammingSchema';
 
 /** 行类型 = 待编程列表项（prod 域 ProgrammingItem）。 */
@@ -69,15 +70,19 @@ export function buildPendingProgrammingColumnDefs(deps: PendingProgrammingColumn
     return h(RouterLink, { to: `/parts/${r.id}`, class: 'name-link' }, () => r.name);
   }
 
-  // 2026-10-01 端点迁移：客户列改读 parent_customer_name(L1) + customer_name(L2)
-  // （旧 part 域 PartListItem 是 l1_customer_name，字段名不同，不能沿用）。
+  // 2026-10-17 客户无限层级：本端点的客户字段名与 part 域**仍然不同**（本 schema 是
+  // `parent_customer_name`(L1) / `customer_name`(L2)，part 域是 `l1_customer_name` /
+  // `customer_name`），所以下面的字段映射逐个点名、绝不 cast —— 渲染器收的是裸字段，
+  // 字段名对不上只会渲染出「—」，而那正是文件头警告过的坑。
+  // 语义变化：`parent_customer_name` 从「直接父名」改成「根（L1）名」，
+  // 主行改读新增的 `customer_path`（第 2 层到叶子、不含 L1），L1 退成次行。
   function renderCustomer({ row }: { row: unknown }): VNode {
     const r = row as PendingProgrammingRow;
-    if (r.parent_customer_name) {
-      return h('span', `${r.parent_customer_name} / ${r.customer_name ?? '—'}`);
-    }
-    if (r.customer_name) return h('span', { class: 'muted' }, r.customer_name);
-    return h('span', { class: 'muted' }, '—');
+    return renderCustomerCell({
+      path: r.customer_path,
+      name: r.customer_name,
+      l1: r.parent_customer_name,
+    });
   }
 
   // CNC 程序状态列（已编程绿色 / 未编程灰色）。has_cnc_program 由后端按

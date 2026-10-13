@@ -41,8 +41,15 @@ export interface InspectionQueueItem {
   is_urgent: boolean;
   customer_id: string;
   customer_name: string | null;
-  /** L1（一级客户）名；客户列渲染「L1 / L2」两段文本。 */
+  /** 根（L1）客户名；客户列次行。⚠️ 2026-10-17 客户无限层级改造后语义从「直接父名」
+   *  改成「根名」，配套新增 `customer_path`（第 2 层到叶子的 ` / ` 拼接，不含 L1）。 */
   l1_customer_name: string | null;
+  /** 2026-10-17 新增（客户无限层级改造）：第 2 层到叶子的名称用 ` / ` 拼接，**不含 L1**；
+   *  零件所属客户自身即 L1 时等于它自己的名字。客户软删 / 父链成环时后端落**空串**
+   *  （不是 null），展示层必须兜底（`utils/elTableCell.ts::renderCustomerCell`）。
+   *  ⚠️ 后端未上线前声明成可选 —— 行类型与 `inspectionQueueListItemSchema` 是**双声明**，
+   *  两处都要改（见下方分页信封注释）。 */
+  customer_path?: string | null;
 }
 
 // 分页信封不另起一份手写声明：形状 = `InspectionQueueItem[]` + 三个 JSON string 计数，

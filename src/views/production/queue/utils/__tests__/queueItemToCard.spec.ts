@@ -138,3 +138,35 @@ describe('queueItemToCard — 待下发批次：按 process_chain_id !== "0" 推
     ).toBe(true);
   });
 });
+
+// ============================================================================
+// 客户两字段（2026-10-17 客户无限层级改造）
+// ============================================================================
+
+describe('客户：customer_l1 = 根名，customer_l2 = 第 2 层到叶子的路径', () => {
+  // 树：某某集团 / 终端BG / 手机部 / 影像组 ⇒ L4 叶子的 customer_path 不含 L1。
+  it('Q1：三个适配层都优先取 customer_path（不再只写叶子单段名）', () => {
+    const withPath = { customer_path: '终端BG / 手机部 / 影像组' };
+    expect(poolItemToCard(makePoolItem(withPath)).customer_l2).toBe('终端BG / 手机部 / 影像组');
+    expect(heldToCard(makeHeld(withPath)).customer_l2).toBe('终端BG / 手机部 / 影像组');
+    expect(pendingBatchToCard(makePending(withPath)).customer_l2).toBe('终端BG / 手机部 / 影像组');
+    // L1 独立一行，是**根**名
+    expect(poolItemToCard(makePoolItem(withPath)).customer_l1).toBe('某某集团');
+  });
+
+  it('Q2：customer_path 缺失（后端未上线 / 该键被 strip）时退回叶子单段名', () => {
+    // DTO 里 customer_path 是**可选**声明（这两个 contract 没有 Zod 守门层），
+    // 所以「后端还没上」在运行时就是「这个键不存在」—— 兜底不是可选项。
+    for (const item of [makePoolItem(), makeHeld(), makePending()]) {
+      expect('customer_path' in item).toBe(false);
+    }
+    expect(poolItemToCard(makePoolItem()).customer_l2).toBe('某某零件厂');
+    expect(heldToCard(makeHeld()).customer_l2).toBe('某某零件厂');
+    // 待下发行的既有 fixture 本就无客户名 ⇒ 路径也退化为 null（不是 undefined 也不是 ''）
+    expect(pendingBatchToCard(makePending()).customer_l2).toBeNull();
+  });
+
+  it('Q3：customer_path 为空串（客户软删 / 父链成环）也退回单段名', () => {
+    expect(poolItemToCard(makePoolItem({ customer_path: '' })).customer_l2).toBe('某某零件厂');
+  });
+});

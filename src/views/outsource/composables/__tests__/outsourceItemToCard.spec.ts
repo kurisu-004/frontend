@@ -216,3 +216,30 @@ describe('heldBatchToCard — 右列在途卡 → BatchCardModel', () => {
     expect(pool.shelf_id).toBe('5000000000001');
   });
 });
+
+// ============================================================================
+// 客户两字段（2026-10-17 客户无限层级改造）
+// ============================================================================
+
+describe('客户：customer_l1 = 根名，customer_l2 = 第 2 层到叶子的路径', () => {
+  it('O1：两个适配层都优先取 customer_path（不再只写叶子单段名）', () => {
+    const withPath = { customer_path: '终端BG / 手机部 / 影像组' };
+    expect(poolCandidateToCard({ ...candidateFixture, ...withPath }, null).customer_l2).toBe(
+      '终端BG / 手机部 / 影像组',
+    );
+    expect(heldBatchToCard({ ...heldBatchFixture, ...withPath }, null).customer_l2).toBe(
+      '终端BG / 手机部 / 影像组',
+    );
+  });
+
+  it('O2：customer_path 缺失时退回叶子单段名（DTO 里它是可选声明，无 Zod 守门层）', () => {
+    expect(poolCandidateToCard(candidateFixture, null).customer_l2).toBe('某某零件厂');
+    expect(heldBatchToCard(heldBatchFixture, null).customer_l2).toBe('某某零件厂');
+  });
+
+  it('O3：customer_path 为空串（客户软删 / 父链成环）也退回单段名', () => {
+    expect(poolCandidateToCard({ ...candidateFixture, customer_path: '' }, null).customer_l2).toBe(
+      '某某零件厂',
+    );
+  });
+});

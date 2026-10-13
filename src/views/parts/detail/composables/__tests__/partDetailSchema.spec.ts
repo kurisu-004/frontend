@@ -9,7 +9,7 @@
 // 等格子在现场恒为空。以 VO 为准的 `.strict()` schema 是唯一能当场炸出来的守门。
 //
 // 覆盖：
-//   - D1：28 字段全量对象能 parse，且解析结果键集合与 fixture 逐键对齐（不多不少）；
+//   - D1：29 字段全量对象能 parse，且解析结果键集合与 fixture 逐键对齐（不多不少）；
 //   - D2：`.strict()` 守门 —— 多一个键立刻抛（幽灵字段回流即红）；
 //   - D3：缺任一必填键都抛（Zod strip 陷阱 guard）；
 //   - D4：`unit_price` / `total_price` 是 JSON **string**（后端 Decimal + serde-with-str），
@@ -66,8 +66,10 @@ function makeDetail(overrides: Record<string, unknown> = {}): Record<string, unk
     updated_by: '9000000000002',
     deleted_at: null,
     process_chain_id: '9000000000010',
-    customer_name: '二级客户',
+    customer_name: '手机部',
     l1_customer_name: '一级客户',
+    // 2026-10-17 客户无限层级：新增 customer_path（第 2 层到叶子、不含 L1）。
+    customer_path: '终端BG / 手机部',
     current_batch_id: null,
     ...overrides,
   };
@@ -96,23 +98,25 @@ function makeEvent(overrides: Record<string, unknown> = {}): Record<string, unkn
   };
 }
 
-describe('partDetailSchema — 零件详情（28 字段 .strict()）', () => {
-  it('D1：完整 28 字段通过解析，解析结果键集合与 fixture 逐键对齐', () => {
+describe('partDetailSchema — 零件详情（29 字段 .strict()）', () => {
+  it('D1：完整 29 字段通过解析，解析结果键集合与 fixture 逐键对齐', () => {
     const detail = makeDetail();
-    expect(Object.keys(detail)).toHaveLength(28);
+    expect(Object.keys(detail)).toHaveLength(29);
     const parsed = partDetailSchema.parse(detail);
     expect(Object.keys(parsed).sort()).toEqual(Object.keys(detail).sort());
     expect(parsed.id).toBe('219276974948876288');
     expect(parsed.l1_customer_name).toBe('一级客户');
-    expect(parsed.customer_name).toBe('二级客户');
+    expect(parsed.customer_name).toBe('手机部');
+    expect(parsed.customer_path).toBe('终端BG / 手机部');
     expect(parsed.version).toBe(3);
   });
 
   it('D2：多一个键立刻抛错（.strict() 守门：幽灵字段回流即红）', () => {
-    // 这 9 个键正是旧 `PartItem` 声明而后端从不返的字段。任何一条被加回 schema /
+    // 下面这些键正是旧 `PartItem` 声明而后端从不返的字段。任何一条被加回 schema /
     // 被误当作「后端会返」写进消费侧时，这条会红。
+    // ⚠️ `customer_path` 已于 2026-10-17 移出本清单 —— 客户无限层级改造给它定了正式语义
+    // （见 partDetailSchema 的同名声明），它现在是详情 VO 的合法键。
     for (const key of [
-      'customer_path',
       'parent_customer_name',
       'current_holder_kind',
       'shelf_code',
@@ -150,6 +154,7 @@ describe('partDetailSchema — 零件详情（28 字段 .strict()）', () => {
           'process_chain_id',
           'customer_name',
           'l1_customer_name',
+          'customer_path',
           'current_batch_id',
         ].includes(key)
       ) {
@@ -184,6 +189,7 @@ describe('partDetailSchema — 零件详情（28 字段 .strict()）', () => {
         process_chain_id: null,
         customer_name: null,
         l1_customer_name: null,
+        customer_path: null,
         current_batch_id: null,
       }),
     );

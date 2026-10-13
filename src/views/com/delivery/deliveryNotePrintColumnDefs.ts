@@ -22,9 +22,15 @@
 // `.cell` 是 `white-space: normal` + `overflow-wrap: break-word` ⇒ 装不下就折行（用户报的
 // 「申请人 / 预估交期 表头换行」）。按上式逐列核对：序号(28+16+24=68 / 实际 72)、
 // 订单号(42+16+24+24=106 / 120)、分厂(28+16+24+24=92 / 140)、申请人(42+16+24+24=106 → **由
-// 100 加宽到 120**)、编码(92 / 130)、名称(92 / 180)、预估交期(56+16+24+24=120 → **由 110
+//   100 加宽到 120**)、编码(92 / 130)、名称(92 / 180)、预估交期(56+16+24+24=120 → **由 110
 // 加宽到 130**)、备注(28+16+24=68 / 140)。拖动手柄当前字号 12px（见
 // components/ColumnDragHandle.vue）；打印表的 nowrap 兜底见 components/PrintGroupTable.vue。
+//
+// —— 2026-10-17 客户无限层级：「分厂」列的**值**从「叶子客户单段名」改成「第 2 层到叶子的
+// ` / ` 路径」（`PrintRow.l2_customer`，见该字段的注释：字段名不许改，是模板占位符
+// `{{l2_customer}}` 钉死的）。本表**刻意保持单行**，不与列表页的客户单元格统一成「主行 +
+// L1 次行」两段 —— 它是「打印成品长什么样」的预览，与导出到 xlsx 的单格文本必须逐字一致；
+// 两段化会让预览与实际打出来的纸对不上。
 
 import { h, type VNode } from 'vue';
 import { ElTag } from 'element-plus';
@@ -120,7 +126,14 @@ export function buildDeliveryNotePrintColumnDefs(): ColumnDef[] {
       align: 'center',
       cellRender: ({ row: r }) => h('span', null, row(r).drawing_no || '—'),
     },
-    { key: 'name', label: '名称', minWidth: 180, sortable: true, align: 'center', cellRender: renderName },
+    {
+      key: 'name',
+      label: '名称',
+      minWidth: 180,
+      sortable: true,
+      align: 'center',
+      cellRender: renderName,
+    },
     {
       key: 'system_delivery_date',
       label: '预估交期',
@@ -132,7 +145,8 @@ export function buildDeliveryNotePrintColumnDefs(): ColumnDef[] {
       align: 'center',
       // 展示走 `M月D日`（与导出的送货单一致），排序仍读 `prop` 的 ISO 原值 ——
       // 排序若也按格式化后的串走会跨月错序（`12月1日` 排在 `2月1日` 前）。
-      cellRender: ({ row: r }) => h('span', null, formatDeliveryMonthDay(row(r).system_delivery_date) || '—'),
+      cellRender: ({ row: r }) =>
+        h('span', null, formatDeliveryMonthDay(row(r).system_delivery_date) || '—'),
     },
     {
       key: 'note',

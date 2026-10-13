@@ -7,6 +7,7 @@
 
 import type { Ref } from 'vue';
 import type { Customer } from '@/api/customer';
+import { rootCustomerIdOf } from '@/api/customer.tree';
 
 /** 生成一条记录的本地 uid（条目级 snowflake 不存在，用 crypto.randomUUID 兜底）。 */
 export function makeUid(): string {
@@ -34,24 +35,34 @@ export function todayIso(): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-/** 把客户 id（雪花 ID 字符串）解析成「parent_name / name」可读 label。 */
+/** 把客户 id（雪花 ID 字符串）解析成可读 label。
+ *
+ *  2026-10-17 客户无限层级：改前是前端拼 `parent_name / name`，客户已是任意深度
+ *  （集团 / 分厂 / 车间 / 班组…）后那条拼法必然缺层。现在直接读后端下发的
+ *  `customer_path`（第 2 层到叶子、不含 L1）；`|| name` 兜底空串（客户软删 / 父链成环）。
+ */
 export function findCustomerLabel(customers: Ref<Customer[]>, id: string | null): string {
   if (id === null) return '';
   const c = customers.value.find((x) => x.id === id);
   if (!c) return '';
-  return c.parent_name ? `${c.parent_name} / ${c.name}` : c.name;
+  return c.customer_path || c.name;
 }
 
-/** 把 cascader 选中的客户 id（可能是叶子）解析到所属的一级客户 id。 */
+/**
+ * 把 cascader 选中的客户 id（可能是任意层级的叶子）解析到所属的**根（L1）客户 id**。
+ *
+ * 2026-10-17：本地实现只上溯一层（`picked.parent_id === null ? picked.id : picked.parent_id`），
+ * 客户改成任意深度后对「第 3 层及更深的叶子」会返回它的**直接父**而不是根 ⇒ 序列号前缀
+ * （只有一级客户有）取错。改用 `api/customer.tree.ts::rootCustomerIdOf`（跨任意深度上溯，
+ * 且对孤儿 / 环上节点给出「自身即顶层」的一致口径）。
+ */
 export function resolveRootCustomerId(
   customers: Ref<Customer[]>,
   pickedId: string | null,
 ): string | null {
   if (pickedId === null || pickedId === undefined || pickedId === '') return null;
-  const picked = customers.value.find((c) => c.id === pickedId);
-  if (!picked) return null;
-  if (picked.parent_id === null) return picked.id;
-  return picked.parent_id;
+  if (!customers.value.some((c) => c.id === pickedId)) return null;
+  return rootCustomerIdOf(customers.value, pickedId);
 }
 
 /** 去掉文件名的 .pdf 扩展名（用于合成 PDF 重命名）。 */

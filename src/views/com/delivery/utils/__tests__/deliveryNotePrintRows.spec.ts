@@ -92,7 +92,14 @@ describe('buildL2GroupMap', () => {
   it('同名不同 id → console.warn（不静默合并）', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     buildL2GroupMap({
-      groups: [{ id: '7', name: '厂', version: 1, members: [{ customer_id: '11', customer_name: '陆达' }] }],
+      groups: [
+        {
+          id: '7',
+          name: '厂',
+          version: 1,
+          members: [{ customer_id: '11', customer_name: '陆达' }],
+        },
+      ],
       ungrouped_customers: [{ id: '12', name: '陆达' }],
     });
     expect(warn).toHaveBeenCalledTimes(1);
@@ -132,8 +139,14 @@ describe('groupRefOf（分组键 = L2 客户 id，name 仅兜底）', () => {
         { id: '22', name: '陆达' },
       ],
     });
-    const a = groupRefOf(li({ id: '1', part_id: 'P', customer_id: '21', customer_name: '陆达' }), sameName);
-    const b = groupRefOf(li({ id: '2', part_id: 'P', customer_id: '22', customer_name: '陆达' }), sameName);
+    const a = groupRefOf(
+      li({ id: '1', part_id: 'P', customer_id: '21', customer_name: '陆达' }),
+      sameName,
+    );
+    const b = groupRefOf(
+      li({ id: '2', part_id: 'P', customer_id: '22', customer_name: '陆达' }),
+      sameName,
+    );
     expect(a.groupKey).toBe('c_21');
     expect(b.groupKey).toBe('c_22');
     // sheet 名同名时由 uniqueSheetName 加序号区分，不合并。
@@ -174,7 +187,9 @@ describe('groupRefOf（分组键 = L2 客户 id，name 仅兜底）', () => {
 
   it('改名后 id 不变 → 仍归原组（分组查询与行项两次请求不再分裂）', () => {
     // 行项里的名字是改过之后的（分组结果里的旧名查不到），但 id 一致。
-    expect(groupRefOf(li({ id: '1', part_id: 'P', customer_id: '11', customer_name: '陆达新' }), map)).toEqual({
+    expect(
+      groupRefOf(li({ id: '1', part_id: 'P', customer_id: '11', customer_name: '陆达新' }), map),
+    ).toEqual({
       groupKey: 'g_7',
       groupName: '二五六厂',
     });
@@ -311,13 +326,18 @@ describe('单位（后端 line item 无 unit 字段，前端按行性质推导�
     );
     expect(specs[0]!.rows.map((r) => r.unit)).toEqual(['件', '套']);
   });
-
 });
 
 describe('sortPrintRows', () => {
   const rows = foldSamePart([
     li({ id: '1', part_id: 'A', order_no: 'SO-2', quantity: 5, system_delivery_date: null }),
-    li({ id: '2', part_id: 'B', order_no: 'SO-1', quantity: 3, system_delivery_date: '2026-11-01' }),
+    li({
+      id: '2',
+      part_id: 'B',
+      order_no: 'SO-1',
+      quantity: 3,
+      system_delivery_date: '2026-11-01',
+    }),
     li({ id: '3', part_id: 'C', order_no: 'SO-3', quantity: 9, system_delivery_date: null }),
   ]);
 
@@ -494,5 +514,68 @@ describe('safeSheetName', () => {
 
   it('清空后回落到带 index 的兜底名', () => {
     expect(safeSheetName('///', 2)).toBe('送货单-3');
+  });
+});
+
+// ============================================================================
+// 客户单元格文案（2026-10-17 客户无限层级改造）
+// ============================================================================
+
+describe('客户列取值：PrintRow.l2_customer 装的是「第 2 层到叶子的路径」', () => {
+  // 字段名 l2_customer 是**不可改的契约**（送货单模板占位符 `{{l2_customer}}` 钉死），
+  // 改的只是「单元格里写什么值」—— 见 deliveryNotePrintRows.ts 的字段注释。
+  it('W1：主行取 customer_path（任意深度的 ` / ` 拼接），不再只写叶子单段名', () => {
+    const rows = foldSamePart([
+      li({
+        id: '1',
+        part_id: 'P1',
+        customer_name: '影像组',
+        parent_customer_name: '华强',
+        customer_path: '终端BG / 手机部 / 影像组',
+      }),
+    ]);
+    expect(rows[0]!.l2_customer).toBe('终端BG / 手机部 / 影像组');
+    // 旧实现写的是单段名 —— 显式断掉「退化回两层/单段名」
+    expect(rows[0]!.l2_customer).not.toBe('影像组');
+  });
+
+  it('W2：customer_path 为空串（客户软删 / 父链成环）退回叶子单段名，不留空单元格', () => {
+    const rows = foldSamePart([
+      li({ id: '1', part_id: 'P1', customer_path: '', customer_name: '影像组' }),
+    ]);
+    expect(rows[0]!.l2_customer).toBe('影像组');
+  });
+
+  it('W3：两个字段都空 → 空串（不是 undefined，setCell 收的就是这一列的字符串）', () => {
+    const rows = foldSamePart([
+      li({ id: '1', part_id: 'P1', customer_path: null, customer_name: null }),
+    ]);
+    expect(rows[0]!.l2_customer).toBe('');
+  });
+
+  // 分组口径**不跟着改**：sheet 名与 name 兜底键仍取叶子短名（Excel 31 字符上限 +
+  // 「按收货单位拆单」的语义）。只断它没被路径污染。
+  it('W4：groupRefOf 的 name 兜底仍取叶子短名，不被 customer_path 污染', () => {
+    const row = li({
+      id: '1',
+      part_id: 'P1',
+      customer_id: null,
+      customer_name: '影像组',
+      customer_path: '终端BG / 手机部 / 影像组',
+    });
+    const ref = groupRefOf(row, new Map());
+    expect(ref.groupName).toBe('影像组');
+    expect(ref.groupKey).toBe('c_named_影像组');
+  });
+
+  it('W5：customer_name 是空串时也继续往下取路径末段（`??` 收不住空串）', () => {
+    const row = li({
+      id: '1',
+      part_id: 'P1',
+      customer_id: null,
+      customer_name: '',
+      customer_path: '终端BG / 手机部 / 影像组',
+    });
+    expect(groupRefOf(row, new Map()).groupName).toBe('影像组');
   });
 });

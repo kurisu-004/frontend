@@ -75,11 +75,18 @@
           <div v-if="batch.batch_no">
             <span class="tt-label">批次号</span><span>{{ batch.batch_no }}</span>
           </div>
+          <!-- 2026-10-17 客户无限层级：两行的 label 从「客户(L1) / 客户(L2)」改成
+               「客户(集团) / 客户」。理由：客户从「最多两级」变成任意深度（集团 / 分厂 /
+               车间 / 班组…）后，「L2」这个叫法在实际数据里指的可能是第 2 层也可能是第 5 层，
+               标签写的层级号会直接说谎；而 tooltip 的宽度本来就放得下这两个名字。
+               **取值语义同步变了**：`customer_l1` = 根名（Group），`customer_l2` = 第 2 层
+               到叶子的 ` / ` 拼接（字段名是老名字，刻意不改，见 `types/batchCard.ts`）。
+               两行仍然都在 tooltip —— body 的 4 行 / 200×96 是硬预算，不许加第 5 行。 -->
           <div v-if="batch.customer_l1">
-            <span class="tt-label">客户(L1)</span><span>{{ batch.customer_l1 }}</span>
+            <span class="tt-label">客户(集团)</span><span>{{ batch.customer_l1 }}</span>
           </div>
           <div v-if="batch.customer_l2">
-            <span class="tt-label">客户(L2)</span><span>{{ batch.customer_l2 }}</span>
+            <span class="tt-label">客户</span><span>{{ batch.customer_l2 }}</span>
           </div>
           <div v-if="batch.applicant_name">
             <span class="tt-label">申请人</span><span>{{ batch.applicant_name }}</span>

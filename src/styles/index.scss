@@ -104,6 +104,47 @@ a {
   background-color: #cce0f4 !important;
 }
 
+/* 2026-10-17 新增：客户单元格的**两行形态** —— 主行 `customer_path`（后端下发的
+   第 2 层到叶子的 ` / ` 拼接）+ 次行 muted 小字 `l1_customer_name`。
+
+   渲染函数在 `src/utils/elTableCell.ts::renderCustomerCell`，被 8 个列定义跨 6 个域共用，
+   产出的 VNode 是**纯字符串 class、不带 scoped 标记** ⇒ 样式必须走全局，不能塞进某个
+   消费方组件的 scoped CSS（那样其余 7 处会拿到无样式的裸 class）。
+
+   三条形态（与渲染函数逐条对应）：
+   - `.customer-cell` 两行容器：`flex column` 是**必需**的，不是审美选择 ——
+     EP 给 `showOverflowTooltip: true` 的列发 `.cell.el-tooltip{white-space:nowrap}`，
+     两个裸 span 在 nowrap 下会并排成一行再被 `overflow:hidden` 裁掉；转成 flex 列后
+     两个子节点各自成行。`line-height` 压到 1.3 让次行的行高代价小一点。
+   - `.customer-cell__main` 单行形态（无 L1 / L1 与主行相同时）用同一 class，
+     所以它**必须自带 ellipsis**，否则「单行」这条路会丢掉溢出截断。
+   - 次行 12px（EP 正文字号 14px），灰度 `--text-secondary` 沿用全仓 `.muted` 的取色。 */
+.customer-cell {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+  /* 两行的容器也要能收缩：`.cell` 是 `overflow:hidden`，不收缩子项会被裁掉 */
+  max-width: 100%;
+}
+
+.customer-cell__main,
+.customer-cell__sub {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.customer-cell__sub {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* 客户名全空（软删 / 成环）时的占位，灰度与次行一致 */
+.customer-cell--empty {
+  color: var(--text-secondary);
+}
+
 /* PdfViewer / ImagePager 承载弹窗的高度契约（2026-10-03 修缺陷：预览画面全白）。
    两个预览组件内部是同款 flex 高度链（.pdf-viewer / .image-pager{height:100%}
    → .canvas-wrap{flex:1} → .pdf-viewport / .img-viewport{flex:1;overflow:hidden}），

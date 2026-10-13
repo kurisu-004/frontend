@@ -119,11 +119,24 @@ function parseAssemblyOutToItemCore(flat: AssemblyOutSchema, childCount: number)
  * → parseAssemblyDetail 直接 set assemblyDetail.value，绕过 enrich，导致
  * 装配件链接卡客户列永远显示 `—`。
  *
- * 语义（与旧 enrichAssemblyCustomer 完全一致）：
+ * 语义：
  * - customers 中按 item.customer_id 找匹配客户：
- *   - 找到 → customer_name = name, parent_customer_name = parent_name,
+ *   - 找到 → customer_name = name, parent_customer_name = parent_name（⚠️ 无限层级后
+ *     该字段的**语义**由后端改成「根 L1 名」，见 `types/assembly.ts`）,
  *     customer_path = 「父 / 子」或「name」
  *   - 找不到 → 三字段全置 null（保持 mapper 兜底）
+ *
+ * 2026-10-17 客户无限层级：`customer_path` 改成「**优先取后端 VO 的值，其次用本地
+ *  customers 列表里那份 `Customer.customer_path` 算**」。
+ *
+ * ⚠️ **对后端新契约的依赖**：`AssemblyOut` / `AssemblyListItem` 目前**仍不返**
+ * `customer_path`（`parseAssemblyOutToItemCore` 把三字段一律置 null，本函数是唯一的
+ * 补全点）。后端补齐该列之后，本行的 `item.customer_path ?? …` 分支会自动接管，
+ * 前端零改动 —— 在那之前走本地 customers 分支，**不构成阻塞**。
+ *
+ * 为什么用 `customer.customer_path` 而不是自己拼：客户已是任意深度（集团 / 分厂 / 车间 /
+ * 班组…），「父 / 子」拼法必然缺层（第 3 层往下的中间节点整片消失）。拼接的真源在后端
+ * （`Customer.customer_path` 是本仓已在用的必填字段，见 `api/customer.ts`）。
  *
  * 纯函数：返回新对象，不 mutate 输入；调用方负责把返回值赋回
  * `detail.assembly` / `assemblyDetail.assembly`。
@@ -145,9 +158,10 @@ export function enrichAssemblyItem(item: AssemblyItem, customers: Customer[]): A
     ...item,
     customer_name: customer.name,
     parent_customer_name: customer.parent_name,
-    customer_path: customer.parent_name
-      ? `${customer.parent_name} / ${customer.name}`
-      : customer.name,
+    // `||` 而不是 `??`：要兜「后端补齐后该列落**空串**」（客户软删 / 父链成环）—— 那一行
+    // 用本地 customers 算出的串仍是一条完整可读路径，比显示空白好。与三个批次卡片适配层
+    // 及 utils/elTableCell.ts 的规则 1 同口径。
+    customer_path: item.customer_path || customer.customer_path,
   };
 }
 

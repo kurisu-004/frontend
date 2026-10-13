@@ -4,7 +4,7 @@
 // 断言。
 //
 // 覆盖：
-//   - P1：完整 15 字段行通过解析，且解析结果的键集合与 fixture 逐键对齐
+//   - P1：完整 16 字段行通过解析，且解析结果的键集合与 fixture 逐键对齐
 //     （Zod 默认 strip 会静默丢未声明字段，正向断言键集合才能发现「后端加了列、
 //     前端没声明」）；
 //   - P1b：批次锚点（batch_id / batch_version）**有值**时解析出来；**缺键**时抛错 ——
@@ -34,8 +34,10 @@ function makeRow(overrides: Record<string, unknown> = {}): Record<string, unknow
     is_urgent: true,
     planned_delivery_date: '2026-10-10',
     system_delivery_date: null,
-    customer_name: '客户A-子',
+    customer_name: '手机部',
     parent_customer_name: '客户A',
+    // 2026-10-17 客户无限层级：新增必填 customer_path（第 2 层到叶子、不含 L1）。
+    customer_path: '终端BG / 手机部',
     has_cnc_program: false,
     // 后端 ProgrammingItemOut 的批次锚点两字段**无** `skip_serializing_if` ⇒ 恒返
     // （无 PROGRAMMING 批次时为 null），schema 因此声明成「必填 + 可空」。fixture 必须
@@ -46,19 +48,20 @@ function makeRow(overrides: Record<string, unknown> = {}): Record<string, unknow
   };
 }
 
-describe('pendingProgrammingItemSchema — 待编程行（15 字段）', () => {
+describe('pendingProgrammingItemSchema — 待编程行（16 字段）', () => {
   it('P1：完整行通过解析，且解析结果键集合与 fixture 一一对应', () => {
     const row = makeRow();
-    expect(Object.keys(row)).toHaveLength(15);
+    expect(Object.keys(row)).toHaveLength(16);
     const parsed = pendingProgrammingItemSchema.parse(row);
     expect(Object.keys(parsed).sort()).toEqual(Object.keys(row).sort());
     expect(parsed.id).toBe('190000000000099');
     expect(parsed.version).toBe(3);
     expect(parsed.has_cnc_program).toBe(false);
-    // 客户：L1 = parent_customer_name / L2 = customer_name（**不是** part 域的
-    // l1_customer_name）—— 两个端点的 rows 不可互相 cast。
+    // 客户：L1 = parent_customer_name / 单段名 = customer_name / 路径 = customer_path
+    // （前两个**不是** part 域的 l1_customer_name）—— 两个端点的 rows 不可互相 cast。
     expect(parsed.parent_customer_name).toBe('客户A');
-    expect(parsed.customer_name).toBe('客户A-子');
+    expect(parsed.customer_name).toBe('手机部');
+    expect(parsed.customer_path).toBe('终端BG / 手机部');
     expect((parsed as Record<string, unknown>).l1_customer_name).toBeUndefined();
   });
 

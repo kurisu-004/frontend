@@ -137,7 +137,11 @@ export const useDeliveryNoteListStore = defineStore('delivery-note-list', () => 
     (customersData.value?.items ?? []).map((c) => ({
       id: c.id,
       name: c.name,
-      path: c.parent_name ? `${c.parent_name} / ${c.name}` : c.name,
+      // 2026-10-17 客户无限层级：改前是前端拼 `parent_name / name`。客户已是任意深度，
+      // 那条拼法必然缺层（第 3 层往下的中间节点整片消失）；现在直接读后端下发的
+      // `customer_path`（第 2 层到叶子、不含 L1）。
+      // `|| name` 兜底空串（客户软删 / 父链成环）—— 见 renderCustomerCell 的规则 1。
+      path: c.customer_path || c.name,
     })),
   );
 
@@ -195,15 +199,13 @@ export const useDeliveryNoteListStore = defineStore('delivery-note-list', () => 
     if (urlStatuses.length > 0) {
       statuses.value = urlStatuses;
     } else {
-      const s = restorePersisted() as
-        | {
-            statuses?: DeliveryNoteStatus[];
-            customerId?: string;
-            /** 快照键名（见上方注释），值写进生效态 `search`。 */
-            keyword?: string;
-            autoRefresh?: boolean;
-          }
-        | null;
+      const s = restorePersisted() as {
+        statuses?: DeliveryNoteStatus[];
+        customerId?: string;
+        /** 快照键名（见上方注释），值写进生效态 `search`。 */
+        keyword?: string;
+        autoRefresh?: boolean;
+      } | null;
       if (s) {
         if (Array.isArray(s.statuses)) statuses.value = s.statuses;
         if (typeof s.customerId === 'string') customerId.value = s.customerId;

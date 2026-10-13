@@ -62,12 +62,16 @@ const ElTableStub = {
   emits: ['row-click', 'selection-change'],
   setup(props: { data?: MockRow[] }, ctx: { slots: Slots }) {
     return () =>
-      h('div', { class: 'mock-table' }, (props.data ?? []).map((r) =>
-        h('div', { class: 'mock-row', key: r.id }, [
-          String(r.id),
-          h(MockTableRow, { row: r }, { default: () => ctx.slots['default']?.() ?? [] }),
-        ]),
-      ));
+      h(
+        'div',
+        { class: 'mock-table' },
+        (props.data ?? []).map((r) =>
+          h('div', { class: 'mock-row', key: r.id }, [
+            String(r.id),
+            h(MockTableRow, { row: r }, { default: () => ctx.slots['default']?.() ?? [] }),
+          ]),
+        ),
+      );
   },
 };
 
@@ -150,6 +154,8 @@ function makeDetail(overrides: Record<string, unknown> = {}): Record<string, unk
     name: '零件甲',
     l1_customer_name: 'L1 客户',
     customer_name: '客户甲',
+    // 2026-10-17 客户无限层级：新增 customer_path（第 2 层到叶子、不含 L1）。
+    customer_path: '分厂 / 客户甲',
     status: 'PENDING',
     planned_delivery_date: '2026-10-01',
     system_delivery_date: null,
@@ -222,7 +228,14 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
         components: {
           'el-drawer': {
             name: 'ElDrawer',
-            props: ['modelValue', 'direction', 'size', 'withHeader', 'appendToBody', 'destroyOnClose'],
+            props: [
+              'modelValue',
+              'direction',
+              'size',
+              'withHeader',
+              'appendToBody',
+              'destroyOnClose',
+            ],
             emits: ['update:modelValue'],
             template: '<div class="mock-drawer"><slot /></div>',
           },
@@ -287,7 +300,9 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
   });
 
   it('U3：rows 非空 → el-table 显示 N 行', async () => {
-    fetchDeliveryOrdersMock.mockResolvedValue(makeOut([makeDetail({ id: '180000000000001' }), makeDetail({ id: '180000000000002' })], 2));
+    fetchDeliveryOrdersMock.mockResolvedValue(
+      makeOut([makeDetail({ id: '180000000000001' }), makeDetail({ id: '180000000000002' })], 2),
+    );
 
     const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
 
@@ -381,7 +396,12 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
   const FAR_SYSTEM = '2099-11-30';
 
   it('U8：倒计列按 basis 取字段（planned 取计划交期 / system 取系统交期）', async () => {
-    fetchDeliveryOrdersMock.mockResolvedValue(makeOut([makeDetail({ planned_delivery_date: FAR_PLANNED, system_delivery_date: FAR_SYSTEM })], 1));
+    fetchDeliveryOrdersMock.mockResolvedValue(
+      makeOut(
+        [makeDetail({ planned_delivery_date: FAR_PLANNED, system_delivery_date: FAR_SYSTEM })],
+        1,
+      ),
+    );
 
     const plannedWrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
     await new Promise((resolve) => setTimeout(resolve, 80));
@@ -399,7 +419,9 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
   });
 
   it('U9：system 口径下系统交期为空 → 倒计列留空、不挂逾期样式', async () => {
-    fetchDeliveryOrdersMock.mockResolvedValue(makeOut([makeDetail({ planned_delivery_date: FAR_PLANNED, system_delivery_date: null })], 1));
+    fetchDeliveryOrdersMock.mockResolvedValue(
+      makeOut([makeDetail({ planned_delivery_date: FAR_PLANNED, system_delivery_date: null })], 1),
+    );
 
     const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts({ basis: 'system' }));
     await new Promise((resolve) => setTimeout(resolve, 80));
@@ -436,7 +458,9 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
 
   it('U11：total(9) > 取回条数(2) → 头部件数是 9 且追加「仅显示前 2 条」', async () => {
     // items 被服务端截断到 200 行，rows.length 只是本页拿回来的条数。
-    fetchDeliveryOrdersMock.mockResolvedValue(makeOut([makeDetail({ id: '180000000000001' }), makeDetail({ id: '180000000000002' })], 9));
+    fetchDeliveryOrdersMock.mockResolvedValue(
+      makeOut([makeDetail({ id: '180000000000001' }), makeDetail({ id: '180000000000002' })], 9),
+    );
 
     const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
     await new Promise((resolve) => setTimeout(resolve, 80));
@@ -450,7 +474,9 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
   });
 
   it('U12：total === rows.length → 只出「共 N 件」，不渲染截断提示', async () => {
-    fetchDeliveryOrdersMock.mockResolvedValue(makeOut([makeDetail({ id: '180000000000001' }), makeDetail({ id: '180000000000002' })], 2));
+    fetchDeliveryOrdersMock.mockResolvedValue(
+      makeOut([makeDetail({ id: '180000000000001' }), makeDetail({ id: '180000000000002' })], 2),
+    );
 
     const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
     await new Promise((resolve) => setTimeout(resolve, 80));
@@ -501,7 +527,9 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
     // 已有数据 + 同键 invalidate 触发的后台 refetch：此时 query 已有 data、status 不是
     // pending，只有 fetchStatus 是 fetching。头部件数必须留着 —— 数字是当前且正确的，
     // 整段闪烁反而是大屏噪音。若把 composable 的 isPending 误接成 isFetching，本条红。
-    fetchDeliveryOrdersMock.mockResolvedValue(makeOut([makeDetail({ id: '180000000000001' }), makeDetail({ id: '180000000000002' })], 2));
+    fetchDeliveryOrdersMock.mockResolvedValue(
+      makeOut([makeDetail({ id: '180000000000001' }), makeDetail({ id: '180000000000002' })], 2),
+    );
 
     const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
     await new Promise((resolve) => setTimeout(resolve, 80));

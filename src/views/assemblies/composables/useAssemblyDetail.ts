@@ -101,9 +101,19 @@ export const ASSEMBLY_ADD_CHILD_RULES: FormRules = {
   name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
 };
 
-/** 客户 option label 工具：二级带父级名前缀。 */
-export function formatCustomerOptionLabel(c: { name: string; parent_name: string | null }): string {
-  return c.parent_name ? `${c.parent_name} / ${c.name}` : c.name;
+/**
+ * 客户 option label 工具（2026-10-17 客户无限层级改造后改为直接读后端字段）。
+ *
+ * 改前是「二级带父级名前缀」：`parent_name ? "父 / 名" : 名` —— 客户改成任意深度
+ * （集团 / 分厂 / 车间 / 班组…）后这拼法必然缺层，第 3 层往下的中间节点整片消失。
+ * 现在读 `Customer.customer_path`（后端下发的「第 2 层到叶子、不含 L1」）。
+ *
+ * 入参收的是**最小结构**而不是 `Customer`：调用方（`AssemblyEditDialog` 的客户下拉）
+ * 传的是客户列表项，本函数不该对列表的完整形状提出要求。同时保留 `name` 兜底 ——
+ * `customer_path` 是必填键但**值可能是空串**（客户软删 / 父链成环）。
+ */
+export function formatCustomerOptionLabel(c: { name: string; customer_path: string }): string {
+  return c.customer_path || c.name;
 }
 
 export interface UseAssemblyDetailReturn {

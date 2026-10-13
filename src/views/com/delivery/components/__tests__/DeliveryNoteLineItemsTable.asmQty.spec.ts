@@ -92,6 +92,7 @@ function mkRow(p: Partial<PartTreeRow> & { id: string }): PartTreeRow {
     applicant_name: '',
     customer_name: '',
     customer_path: '',
+    parent_customer_name: '',
     note: '',
     quantity: 1,
     unit: '件',

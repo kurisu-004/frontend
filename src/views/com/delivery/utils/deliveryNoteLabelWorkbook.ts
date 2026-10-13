@@ -27,7 +27,10 @@ export interface LabelColumn {
   label: string;
 }
 
-/** 7 列，**顺序即 xlsx 输出列序**（客户 / 订单号 / 申请人 / 名称 / 图号 / 数量 / 单位）。 */
+/** 7 列，**顺序即 xlsx 输出列序**（客户 / 订单号 / 申请人 / 名称 / 图号 / 数量 / 单位）。
+ *  ⚠️ 2026-10-17 客户无限层级：客户列的**值**升级成「第 2 层到叶子的 ` / ` 路径」，但
+ *  **key `l2_customer` 与 label `客户` 都不动** —— key 与送货单模板占位符同名（同一条
+ *  契约，见 `deliveryNoteTemplateContract.ts`），label 是贴在零件上的小纸条，标签宽有限。 */
 export const DELIVERY_NOTE_LABEL_COLUMNS: readonly LabelColumn[] = [
   { key: 'l2_customer', label: '客户' },
   { key: 'order_no', label: '订单号' },

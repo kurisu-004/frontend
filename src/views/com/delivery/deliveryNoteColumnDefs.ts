@@ -12,6 +12,7 @@
 import { h } from 'vue';
 import { ElTag } from 'element-plus';
 import type { ColumnDef } from '@/composables/useColumnVisibility';
+import { renderCustomerCell } from '@/utils/elTableCell';
 import type { DeliveryNoteStatus } from '@/types/deliveryNote';
 import { DELIVERY_NOTE_STATUS_LABEL, DELIVERY_NOTE_STATUS_TAG } from '@/types/deliveryNote';
 import type { DeliveryNoteItemData } from './composables/deliveryNoteSchema';
@@ -70,7 +71,13 @@ export function buildDeliveryNoteColumnDefs(): ColumnDef[] {
       align: 'center',
       cellRender: (ctx) => {
         const r = row(ctx);
-        return h('span', null, r.customer_path ?? r.customer_name ?? '—');
+        // 2026-10-17 客户无限层级：主行读后端下发的 `customer_path`（第 2 层到叶子、
+        // 不含 L1）。送货单的 `customer_name` 是**单据归属的 L1 客户名**（`customer_id`
+        // 那一列的注释写明「单据归属的 L1 客户 id」），所以它是这里的 L1 次行。
+        // ⚠️ 刻意不把 `customer_name` 也当「单段名兜底」传进去：送货单本体没有「本节点
+        // 单段名」这个概念，`customer_path` 为空时让 L1 顶上主行（渲染器规则 3）比退化成
+        // 一个孤零零的 L1 名更符合「这一格至少要有个客户名」的预期。
+        return renderCustomerCell({ path: r.customer_path, l1: r.customer_name });
       },
     },
     {

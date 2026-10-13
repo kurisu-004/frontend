@@ -29,7 +29,9 @@ vi.mock('element-plus', async (importOriginal) => {
 
 const app = createApp({ render: () => null });
 app.use(createPinia());
-app.use(VueQueryPlugin, { queryClient: new QueryClient({ defaultOptions: { queries: { retry: false } } }) });
+app.use(VueQueryPlugin, {
+  queryClient: new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+});
 // 装配件父行的名称列渲染 RouterLink（跳 /assemblies/:id）：装配件父行的 cellRender
 // 在卡片组件的**模块级**列定义里，跑挂载时也要能拿到注入的 router。
 app.use(createRouter({ history: createMemoryHistory(), routes: [] }));
@@ -47,7 +49,8 @@ const ROWS: PartTreeRow[] = [
     order_no: 'SO-1',
     applicant_name: '张三',
     customer_name: '法拉',
-    customer_path: '法拉电子 / 法拉',
+    customer_path: '一厂 / 法拉',
+    parent_customer_name: '法拉电子',
     note: '',
     quantity: 5,
     unit: '件',
@@ -70,7 +73,11 @@ const ROWS: PartTreeRow[] = [
   },
 ];
 
-const DRAFT = { id: 'N1', delivery_note_no: 'DN-001', status: 'DRAFT' } as unknown as DeliveryNoteItemData;
+const DRAFT = {
+  id: 'N1',
+  delivery_note_no: 'DN-001',
+  status: 'DRAFT',
+} as unknown as DeliveryNoteItemData;
 
 /** 桩 el-table 把 :data 摊到这里，列桩据此逐行渲染 cellRender 列的单元格。 */
 const scopeRows: { value: Record<string, unknown>[] } = { value: [] };
@@ -79,22 +86,31 @@ const scopeRows: { value: Record<string, unknown>[] } = { value: [] };
 const stubs = {
   'el-card': defineComponent({
     name: 'ElCardStub',
-    setup: (_p, { slots }) => () => h('div', { class: 'mock-el-card' }, [slots.header?.(), slots.default?.(), slots.footer?.()]),
+    setup:
+      (_p, { slots }) =>
+      () =>
+        h('div', { class: 'mock-el-card' }, [
+          slots.header?.(),
+          slots.default?.(),
+          slots.footer?.(),
+        ]),
   }),
   'el-button': defineComponent({
     name: 'ElButtonStub',
     props: ['type', 'size', 'disabled', 'loading', 'link', 'plain'],
     emits: ['click'],
-    setup: (p, { slots, emit }) => () =>
-      h(
-        'button',
-        {
-          class: 'mock-el-button',
-          disabled: p.disabled === true,
-          onClick: () => emit('click'),
-        },
-        slots.default?.(),
-      ),
+    setup:
+      (p, { slots, emit }) =>
+      () =>
+        h(
+          'button',
+          {
+            class: 'mock-el-button',
+            disabled: p.disabled === true,
+            onClick: () => emit('click'),
+          },
+          slots.default?.(),
+        ),
   }),
   // 桩 el-table 把 selection-change 当**函数 prop**（真实 EP 的行内事件）暴露出来，
   // 并按 :data 逐行渲染 cellRender 列的默认插槽（真实 EP 就是这么出格子的）。
@@ -110,16 +126,18 @@ const stubs = {
       treeProps: { type: Object as PropType<Record<string, unknown>>, default: () => ({}) },
       defaultExpandAll: { type: Boolean, default: false },
     },
-    setup: (p, { slots }) => () =>
-      h(
-        'div',
-        {
-          class: 'mock-el-table',
-          'data-tree-children': String(p.treeProps.children ?? ''),
-          'data-expand-all': String(p.defaultExpandAll),
-        },
-        slots.default?.(),
-      ),
+    setup:
+      (p, { slots }) =>
+      () =>
+        h(
+          'div',
+          {
+            class: 'mock-el-table',
+            'data-tree-children': String(p.treeProps.children ?? ''),
+            'data-expand-all': String(p.defaultExpandAll),
+          },
+          slots.default?.(),
+        ),
   }),
   'el-table-column': defineComponent({
     name: 'ElTableColumnStub',
@@ -137,7 +155,13 @@ const stubs = {
         );
     },
   }),
-  'el-tag': defineComponent({ name: 'ElTagStub', setup: (_p, { slots }) => () => h('span', null, slots.default?.()) }),
+  'el-tag': defineComponent({
+    name: 'ElTagStub',
+    setup:
+      (_p, { slots }) =>
+      () =>
+        h('span', null, slots.default?.()),
+  }),
   'el-icon': true,
   ElTable: true,
   ColumnVisibilityPopover: true,
@@ -173,7 +197,9 @@ async function mountCard(props: Record<string, unknown> = {}, data: PartTreeRow[
 
 /** footer 里的按钮（按可见文本），取不到返回 undefined。 */
 function footerButton(w: Awaited<ReturnType<typeof mountCard>>, label: string) {
-  return w.findAll('.draft-card-footer button.mock-el-button').find((b) => b.text().includes(label));
+  return w
+    .findAll('.draft-card-footer button.mock-el-button')
+    .find((b) => b.text().includes(label));
 }
 
 describe('DeliveryDraftCard footer 按钮集', () => {

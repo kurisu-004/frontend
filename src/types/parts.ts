@@ -181,9 +181,16 @@ export interface PartListItem {
   note: string | null;
   customer_name: string | null;
   /** 2026-09-27 前后端字段对齐：原 parent_customer_name rename 为 l1_customer_name
-   *  （与后端 Rust PartListOut 字段一致）。customer_path 派生路径 = l1 + name，
-   *  前端不消费该字段（cellRender 内自行拼接）。 */
+   *  （与后端 Rust PartListOut 字段一致）。
+   *  ⚠️ 2026-10-17 客户无限层级：**语义已从「直接父名」改成「根（L1）客户名」**（破坏性
+   *  变更），配套新增本字段 `customer_path`（第 2 层到叶子的 ` / ` 拼接，不含 L1）。
+   *  零件一览客户单元格主行读 `customer_path`、次行读 `l1_customer_name`。 */
   l1_customer_name: string | null;
+  /** 2026-10-17 新增（客户无限层级改造）：第 2 层到叶子的名称用 ` / ` 拼接，**不含 L1**；
+   *  零件自身即 L1 时等于它自己的名字。⚠️ 后端未上线该字段前声明成可选，消费侧
+   *  （`utils/elTableCell.ts::renderCustomerCell`）空串/缺字段时退回 `customer_name`。
+   *  客户软删 / 父链成环时后端落**空串**（不是 null），故展示层必须兜底。 */
+  customer_path?: string | null;
   /** 2026-09-16 起为后端派生（min-progress 活跃批次的 location：
    *  OFFICE/PRODUCTION_SHELF/WORKER/INSPECTION_SHELF/OUTSOURCE_COMPANY），无活跃批次为 null。
    *  t_part 瘦身（PR-2 2026-09-16）：原 delivery_note_id / shelf_code / worker_name /

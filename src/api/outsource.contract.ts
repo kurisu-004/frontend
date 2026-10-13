@@ -129,9 +129,15 @@ export interface OutsourceQueueCandidateDto {
    *  左侧 4px 竖条只看它（语义见 `src/types/batchCard.ts`）。右列在途行
    *  （`OutsourceQueueHeldBatchDto`）**没有**对应字段：外协收发阶段不判链。 */
   has_process_chain: boolean;
-  /** `customer_name` = L2 客户名（叶子），`parent_customer_name` = L1 客户名（集团）。 */
+  /** 客户三字段（2026-10-17 客户无限层级后）：`customer_name` = 本节点单段名、
+   *  `parent_customer_name` = **根 L1** 名（改前是「直接父名」，语义已破坏性变更）、
+   *  `customer_path` = 第 2 层到叶子的 ` / ` 拼接（不含 L1）。 */
   customer_name: string | null;
   parent_customer_name: string | null;
+  /** 2026-10-17 新增（客户无限层级改造）。⚠️ 声明成**可选**：这两个 DTO 没有 Zod 守门层，
+   *  写成必填只是一句编译期谎言（旧后端的 payload 里没有这个键，TS 不校验运行时）。
+   *  适配层 `outsourceItemToCard.ts` 用 `?? customer_name` 兜底，后端上线后自愈。 */
+  customer_path?: string | null;
   /** `t_shelf.code`；批次未上架时 null。 */
   shelf_code: string | null;
   /** `t_part_batch.current_holder_id`（批次所在货架 id）—— 判「该行能否发送」的数据源；
@@ -173,8 +179,11 @@ export interface OutsourceQueueHeldBatchDto {
   system_delivery_date: string | null;
   planned_delivery_date: string | null;
   is_urgent: boolean;
+  /** 客户三字段，语义同 `OutsourceQueueCandidateDto` 的同名三条（2026-10-17 起
+   *  `parent_customer_name` = 根 L1 名、新增可选 `customer_path`）。 */
   customer_name: string | null;
   parent_customer_name: string | null;
+  customer_path?: string | null;
   applicant_name: string | null;
   location: 'OUTSOURCE_COMPANY';
   note: string | null;

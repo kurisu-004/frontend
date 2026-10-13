@@ -125,8 +125,9 @@ export interface QueueWorkerDto {
  *   - 多了 `planned_delivery_date`（已下发的批次期望有计划交期）；
  *   - 没有 `shelf_id` / `shelf_code` / `shelf_name`（批次在工人手里，没有货架位置），
  *     取而代之的是 `location`（`t_part_batch.location` 枚举原始值，held 态恒 'WORKER'）；
- *   - 客户名两级：`customer_name` = L2 客户名（叶子），`parent_customer_name` = L1
- *     客户名（一级集团）。 */
+ *   - 客户三字段（2026-10-17 客户无限层级后）：`customer_name` = 本节点单段名、
+ *     `parent_customer_name` = **根 L1** 名（改前是「直接父名」，语义已破坏性变更）、
+ *     `customer_path` = 第 2 层到叶子的 ` / ` 拼接（不含 L1）。 */
 export interface QueueHeldBatchDto {
   /** `t_part_batch.id`，雪花 ID。 */
   batch_id: string;
@@ -153,7 +154,14 @@ export interface QueueHeldBatchDto {
   /** 是否已上传 G 代码（`t_part_file` EXISTS 派生）；UI 据此渲染「已编程」tag。 */
   has_cnc_program: boolean;
   customer_name: string | null;
+  /** ⚠️ 2026-10-17 客户无限层级：**语义从「直接父名」改成「根（L1）客户名」**（破坏性）。 */
   parent_customer_name: string | null;
+  /** 2026-10-17 新增（客户无限层级改造）：第 2 层到叶子的名称 ` / ` 拼接、**不含 L1**。
+   *  批次卡片 tooltip 的「客户」行读它（`BatchCardModel.customer_l2`）。
+   *  ⚠️ 声明成**可选**：这些 DTO 没有 Zod 守门层，写成必填只是一句编译期谎言（旧后端的
+   *  payload 里根本没有这个键，TS 又不校验运行时）。适配层用 `?? customer_name` 兜底，
+   *  后端上线后自愈、老版本下 tooltip 退化成单段名。 */
+  customer_path?: string | null;
   /** `t_applicant.name`。 */
   applicant_name: string | null;
   /** `t_part_batch.location` 枚举原始值（held 态恒 'WORKER'）。 */
@@ -182,7 +190,11 @@ export interface QueuePoolItemDto {
   /** `t_part.system_delivery_date`；候选池只关心系统交期，没有 planned 字段。 */
   system_delivery_date: string | null;
   customer_name: string | null;
+  /** ⚠️ 2026-10-17 客户无限层级：语义从「直接父名」改成「根（L1）客户名」（破坏性）。 */
   parent_customer_name: string | null;
+  /** 第 2 层到叶子的名称 ` / ` 拼接、**不含 L1**（2026-10-17 新增）。
+   *  可选 + 适配层兜底的理由同 `QueueHeldBatchDto.customer_path`。 */
+  customer_path?: string | null;
   applicant_name: string | null;
   /** `t_part_batch.current_holder_id` = 批次所在货架 id（move 的 `from.shelf_id` 数据源）。 */
   shelf_id: string;
@@ -239,7 +251,11 @@ export interface QueuePendingBatchDto {
   /** 系统推算交付日，nullable。 */
   system_delivery_date: string | null;
   customer_name: string | null;
+  /** ⚠️ 2026-10-17 客户无限层级：语义从「直接父名」改成「根（L1）客户名」（破坏性）。 */
   parent_customer_name: string | null;
+  /** 第 2 层到叶子的名称 ` / ` 拼接、**不含 L1**（2026-10-17 新增）。
+   *  可选 + 适配层兜底的理由同 `QueueHeldBatchDto.customer_path`。 */
+  customer_path?: string | null;
   applicant_name: string | null;
   is_urgent: boolean;
   note: string | null;

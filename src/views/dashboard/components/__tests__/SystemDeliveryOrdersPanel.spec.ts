@@ -133,9 +133,10 @@ function mmdd(iso: string): string {
   return iso.slice(5).replace('-', '/');
 }
 
-/** 交期面板行（SystemDeliveryOrder VO，10 字段）。delivered_quantity 是必填非 null：
+/** 交期面板行（SystemDeliveryOrder VO，11 字段）。delivered_quantity 是必填非 null：
  *  展示值，0 合法（未交过 / 装配件凑不满整一套）；row_type 决定 quantity 与
- *  delivered_quantity 的单位（件 / 套）与数量列 tooltip 文案。 */
+ *  delivered_quantity 的单位（件 / 套）与数量列 tooltip 文案。
+ *  2026-10-17 客户无限层级：新增 customer_path（客户列主行）。 */
 function makeOrder(overrides: Partial<SystemDeliveryOrderData> = {}): SystemDeliveryOrderData {
   return {
     id: '180000000000001',
@@ -145,6 +146,7 @@ function makeOrder(overrides: Partial<SystemDeliveryOrderData> = {}): SystemDeli
     status: 'IN_PROCESS',
     system_delivery_date: isoOffset(2),
     customer_name: '南海路厂区',
+    customer_path: '华南集团 / 南海路厂区',
     is_urgent: true,
     delivered_quantity: 0,
     row_type: 'PART',
@@ -235,7 +237,7 @@ function ruleBody(src: string, selector: string): string {
 }
 
 describe('SystemDeliveryOrdersPanel — 6 列渲染契约（upcoming 变体）', () => {
-  it('P1：行内 6 个子元素，顺序为 序列号 / 名称 / 数量 / 二级客户 / 状态 / 系统交期', () => {
+  it('P1：行内 6 个子元素，顺序为 序列号 / 名称 / 数量 / 客户 / 状态 / 系统交期', () => {
     const wrapper = mountPanel('upcoming', [makeOrder()]);
     const row = wrapper.find('.list-rows .row');
 
@@ -255,7 +257,8 @@ describe('SystemDeliveryOrdersPanel — 6 列渲染契约（upcoming 变体）',
     expect(row.find('.row-serial').text()).toBe('F1016');
     expect(row.find('.row-name').text()).toBe('连杆总成左前');
     expect(row.find('.row-qty').text()).toBe('1791');
-    expect(row.find('.row-customer').text()).toBe('南海路厂区');
+    // 2026-10-17 客户无限层级：客户列读后端 customer_path（不再只读单段名）。
+    expect(row.find('.row-customer').text()).toBe('华南集团 / 南海路厂区');
     expect(row.find('.mock-tag').text()).toBe('生产中');
     expect(row.find('.row-due').text()).toBe(mmdd(isoOffset(2)));
     wrapper.unmount();
@@ -282,8 +285,10 @@ describe('SystemDeliveryOrdersPanel — 6 列渲染契约（upcoming 变体）',
     wrapper.unmount();
   });
 
-  it('P4：二级客户为空 → 渲染 "—"，且该 tooltip disabled（不弹空浮层）', () => {
-    const wrapper = mountPanel('upcoming', [makeOrder({ customer_name: null })]);
+  it('P4：客户名为空 → 渲染 "—"，且该 tooltip disabled（不弹空浮层）', () => {
+    const wrapper = mountPanel('upcoming', [
+      makeOrder({ customer_name: null, customer_path: null }),
+    ]);
     expect(wrapper.find('.row-customer').text()).toBe('—');
 
     const tooltips = rowTooltips(wrapper);
@@ -380,9 +385,7 @@ describe('SystemDeliveryOrdersPanel — 变体文案与红底归属', () => {
 
 describe('SystemDeliveryOrdersPanel — partial 变体数量列', () => {
   it('P8：数量列出「20 / 64」，已交部分单独成节点', () => {
-    const wrapper = mountPanel('partial', [
-      makeOrder({ delivered_quantity: 20, quantity: 64 }),
-    ]);
+    const wrapper = mountPanel('partial', [makeOrder({ delivered_quantity: 20, quantity: 64 })]);
     const qty = wrapper.find('.row-qty');
 
     expect(qty.text()).toBe('20/64');

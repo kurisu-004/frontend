@@ -39,8 +39,10 @@ function makeQueueRow(overrides: Record<string, unknown> = {}): Record<string, u
     system_delivery_date: '2026-10-08',
     is_urgent: false,
     customer_id: '9000000000001',
-    customer_name: '客户A-子',
+    customer_name: '手机部',
     l1_customer_name: '客户A',
+    // 2026-10-17 客户无限层级：新增 customer_path（第 2 层到叶子、不含 L1）。
+    customer_path: '终端BG / 手机部',
     ...overrides,
   };
 }
@@ -78,16 +80,17 @@ function makePart(overrides: Record<string, unknown> = {}): Record<string, unkno
   };
 }
 
-describe('inspectionQueueListItemSchema — 待品检行（13 字段 .strict()）', () => {
-  it('I1：完整 13 字段通过解析，解析结果键集合与 fixture 一一对应', () => {
+describe('inspectionQueueListItemSchema — 待品检行（14 字段 .strict()）', () => {
+  it('I1：完整 14 字段通过解析，解析结果键集合与 fixture 一一对应', () => {
     const row = makeQueueRow();
-    expect(Object.keys(row)).toHaveLength(13);
+    expect(Object.keys(row)).toHaveLength(14);
     const parsed = inspectionQueueListItemSchema.parse(row);
     expect(Object.keys(parsed).sort()).toEqual(Object.keys(row).sort());
     expect(parsed.batch_id).toBe('3000000000001');
     expect(parsed.part_id).toBe('4000000000001');
     expect(parsed.version).toBe(2);
     expect(parsed.l1_customer_name).toBe('客户A');
+    expect(parsed.customer_path).toBe('终端BG / 手机部');
   });
 
   it('I2：多一个键立刻抛错（.strict() 守门：两个 VO 已分家）', () => {

@@ -41,8 +41,14 @@ export function poolItemToCard(it: QueuePoolItemDto): BatchCardModel {
     is_urgent: it.is_urgent,
     has_process_chain: it.has_process_chain,
     has_cnc_program: it.has_cnc_program,
+    // 2026-10-17 客户无限层级：customer_l1 = 根 L1 名；customer_l2 从「叶子单段名」升级成
+    // 「第 2 层到叶子的 ` / ` 路径」。
+    // 兜底用 `||` 而不是 `??`：要兜两种形态 —— ① 后端未上线该列（键整个不存在，这两个
+    // DTO 没有 Zod 守门层，`customer_path` 是**可选**声明，见 contract 的同名注释）；
+    // ② 后端已上线但这一行落**空串**（客户软删 / 父链成环时必填字段落空）。`??` 收不住
+    // ②，会让 tooltip 的客户行整行消失。
     customer_l1: it.parent_customer_name,
-    customer_l2: it.customer_name,
+    customer_l2: it.customer_path || it.customer_name,
     applicant_name: it.applicant_name,
     note: it.note,
     location: it.shelf_code,
@@ -68,8 +74,14 @@ export function heldToCard(it: QueueHeldBatchDto): BatchCardModel {
     is_urgent: it.is_urgent,
     has_process_chain: it.has_process_chain,
     has_cnc_program: it.has_cnc_program,
+    // 2026-10-17 客户无限层级：customer_l1 = 根 L1 名；customer_l2 从「叶子单段名」升级成
+    // 「第 2 层到叶子的 ` / ` 路径」。
+    // 兜底用 `||` 而不是 `??`：要兜两种形态 —— ① 后端未上线该列（键整个不存在，这两个
+    // DTO 没有 Zod 守门层，`customer_path` 是**可选**声明，见 contract 的同名注释）；
+    // ② 后端已上线但这一行落**空串**（客户软删 / 父链成环时必填字段落空）。`??` 收不住
+    // ②，会让 tooltip 的客户行整行消失。
     customer_l1: it.parent_customer_name,
-    customer_l2: it.customer_name,
+    customer_l2: it.customer_path || it.customer_name,
     applicant_name: it.applicant_name,
     note: it.note,
     // held 侧 location 是 t_part_batch.location 枚举（'WORKER' 等），非货架 code
@@ -105,8 +117,14 @@ export function pendingBatchToCard(it: QueuePendingBatchDto): BatchCardModel {
     // 待下发行不带 has_cnc_program：批次尚未下发到工序，谈不上编程；卡片上恒不渲染
     // 「已编程」tag（等价于 false，省掉一个分支）。
     has_cnc_program: false,
+    // 2026-10-17 客户无限层级：customer_l1 = 根 L1 名；customer_l2 从「叶子单段名」升级成
+    // 「第 2 层到叶子的 ` / ` 路径」。
+    // 兜底用 `||` 而不是 `??`：要兜两种形态 —— ① 后端未上线该列（键整个不存在，这两个
+    // DTO 没有 Zod 守门层，`customer_path` 是**可选**声明，见 contract 的同名注释）；
+    // ② 后端已上线但这一行落**空串**（客户软删 / 父链成环时必填字段落空）。`??` 收不住
+    // ②，会让 tooltip 的客户行整行消失。
     customer_l1: it.parent_customer_name,
-    customer_l2: it.customer_name,
+    customer_l2: it.customer_path || it.customer_name,
     applicant_name: it.applicant_name,
     note: it.note,
     // 待下发批次尚未落位（未进任何货架）

@@ -23,6 +23,18 @@ export interface PrintRow {
   /** 行身份：装配件父行是 `ASM_<assembly_id>`，其余是代表批次 id（字符串）。 */
   id: string;
   order_no: string;
+  /**
+   * 客户列的单元格文案。
+   *
+   * ⚠️ **字段名不许改成 `customer_path`**，尽管 2026-10-17 客户无限层级改造后它装的是
+   * 路径：送货单模板是**用户上传的二进制 xlsx**，表头与占位符里写死了 `{{l2_customer}}`
+   * （由 `deliveryNoteTemplate.ts::assertTemplateMatches` 逐格校验），改名会让所有老模板
+   * 在导出时整列留空。**改的只是「单元格里写什么值」**：从「叶子客户单段名」改成
+   * 「第 2 层到叶子的 ` / ` 路径」（`toPrintRow` 里取 `li.customer_path`）。
+   *
+   * 为什么不带 L1：Excel 单元格是单行文本，塞不进主行 + 次行两段；且模板表头那一列写的是
+   * 「分厂」（一个中间层级的叫法），不承诺显示集团名。L1 在预览表的次行里看得到。
+   */
   l2_customer: string;
   applicant_name: string;
   drawing_no: string;
@@ -80,9 +92,7 @@ export interface PrintGroupRef {
  * ⚠️ 后端的 `ungrouped_customers` 是差集（理论上与 groups[].members 不重叠）；真重叠
  * 时未分组覆盖分组，语义是「保守不丢客户」。
  */
-export function buildL2GroupMap(
-  groupRes: DeliveryGroupListResultData,
-): Map<string, PrintGroupRef> {
+export function buildL2GroupMap(groupRes: DeliveryGroupListResultData): Map<string, PrintGroupRef> {
   const map = new Map<string, PrintGroupRef>();
   /** name → ref：只用来识别「同一个客户名被两个不同 id 抢到」。 */
   const nameOwner = new Map<string, PrintGroupRef>();
@@ -118,9 +128,18 @@ export function buildL2GroupMap(
   return map;
 }
 
-/** 行项的 L2 客户名兜底：`customer_name` 空时取 `customer_path` 的最后一段。 */
+/**
+ * 行项的**叶子客户短名**（打印分组的 sheet 名 / name 兜底键用）。
+ *
+ * ⚠️ 这里刻意**不**用 `customer_path`：sheet 名有 Excel 31 字符上限，且分组是「按收货单位
+ * 拆单」，收货人认的是自己那个单位名而不是 `终端BG / 手机部 / 影像组`。所以「主行显示
+ * 路径 / 分组仍按短名」是两条口径，不要合并。
+ *
+ * 判据用 `||` 而不是 `??`：后端对「客户被软删 / 无客户」返 `null`，但老数据里存在 `''`
+ * 形态，`??` 遇到空串不会继续往下走、会返回空名。
+ */
 function fallbackCustomerName(li: DeliveryNoteLineItemData): string {
-  return li.customer_name ?? li.customer_path?.split(' / ').pop() ?? '';
+  return li.customer_name || li.customer_path?.split(' / ').pop() || '';
 }
 
 /**
@@ -200,7 +219,10 @@ function toPrintRow(li: DeliveryNoteLineItemData, quantity: number): PrintRow {
   return {
     id: String(li.id),
     order_no: li.order_no ?? '',
-    l2_customer: li.customer_name ?? '',
+    // 2026-10-17 客户无限层级：单元格文案从「叶子单段名」升级成「第 2 层到叶子的路径」。
+    // 判据用 `||`：`customer_path` 是必填键但**值可空且客户软删 / 成环时落空串**，
+    // 空串退回单段名才能保住一格可读文案（与 utils/elTableCell.ts 的规则 1 同一条）。
+    l2_customer: li.customer_path || li.customer_name || '',
     applicant_name: li.applicant_name ?? '',
     drawing_no: li.drawing_no,
     name: li.name,
@@ -351,7 +373,10 @@ export function groupRows(
   }
   const out: PrintRowsByGroup = new Map();
   for (const [key, bucket] of byGroup) {
-    out.set(key, { ref: bucket.ref, rows: collapseAssemblies(foldSamePart(bucket.rows), mergeMode) });
+    out.set(key, {
+      ref: bucket.ref,
+      rows: collapseAssemblies(foldSamePart(bucket.rows), mergeMode),
+    });
   }
   return out;
 }

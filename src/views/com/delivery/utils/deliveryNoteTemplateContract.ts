@@ -18,6 +18,12 @@
 //             B4:J12 空但有样式
 //   row 13-17 页脚：收货单位 / 地址电话 / 收货人 / 送货单位 / 地址电话 /
 //             「送货人：{{driver_name}}」（F15:J16）/ 「送货日期：{{year}}年{{month}}月{{date}}日」（A17:J17）
+//
+// ⚠️ 2026-10-17 客户无限层级改造**没有动**本文件的任何列位 / 占位符：`columns.l2_customer`
+// 仍是 `'C'`、模板第 3 行仍写死 `{{l2_customer}}`。变的只是**填进去的值**（从叶子客户
+// 单段名改成「第 2 层到叶子的 ` / ` 路径」）。`l2_customer` 这个字段名因此是**不可改的
+// 契约**：它同时是模板占位符名、`PrintRow` 字段名与标签工作簿的列 key，改任何一处都会让
+// 用户已上传的模板整列留空。语义见 `deliveryNotePrintRows.ts::PrintRow.l2_customer`。
 
 export const DELIVERY_NOTE_TEMPLATE_CONTRACT = {
   /** 只用第 0 个工作表（用户上传的模板若有多 sheet，其余忽略）。 */
