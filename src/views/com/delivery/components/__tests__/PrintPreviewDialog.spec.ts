@@ -65,6 +65,72 @@ const { ElMessage } = await import('element-plus');
 
 const BUILTIN = readFileSync('templates/delivery_note_fala.xlsx');
 
+/**
+ * 精确长度的 ArrayBuffer（**不能用 `BUILTIN.buffer`**：那是 node 8MB 池化缓冲的整段，
+ * 字节里混着别的数据，hucre 解 zip 直接报错）。
+ */
+function builtinArrayBuffer(): ArrayBuffer {
+  const exact = new Uint8Array(BUILTIN.byteLength);
+  exact.set(BUILTIN);
+  return exact.buffer as ArrayBuffer;
+}
+
+/** 手动可控的 Promise 闸：resolve 竞态用例（MINOR-7 / MINOR-9）用它卡住某一次请求。 */
+function deferred<T = void>(): { promise: Promise<T>; resolve: (v: T) => void } {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+/**
+ * `GET /print-templates/resolve` 命中的出参（后端 `PrintTemplateResolveOut` 逐字形状）。
+ *
+ * ⚠️ 2026-10-16 review 第 2 轮 C-1：**嵌套**（一个信封套一行），原先的平铺 fixture
+ * 是「前端自己手写的想象」，害得自动选用 100% 失效。
+ * ⚠️ **没有 `content_url`** —— 后端从头到尾没有这个字段。命中后取字节打的是
+ * `/print-templates/T1/content`（见 `defaultGet`），不是任何拼出来的 URL。
+ */
+const BOUND_TEMPLATE_OUT = {
+  template: {
+    id: 'T1',
+    customer_id: 'C1',
+    kind: 'DELIVERY_TEMPLATE',
+    file_type: 'XLSX',
+    original_filename: 'fala_bound.xlsx',
+    file_size: BUILTIN.byteLength,
+    content_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    content_sha256: 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90',
+    version: 2,
+    created_at: '2026-10-16 09:00:00',
+    updated_at: '2026-10-16 09:00:00',
+    customer_name: '法拉电子',
+  },
+  customer_name: '法拉电子',
+};
+
+/**
+ * 该一级客户是否绑了模板：控制 `resolve` 端点是抛业务码 21109（默认，绝大多数客户未配）
+ * 还是命中。做成**变量**而不是「换一个 mockImplementation」—— 后者会让各用例的桩互相覆盖
+ * （`withDriverOptions` 就是那种写法），一旦顺序变了一处就静默失效。
+ */
+let boundMode: 'missing' | 'bound' = 'missing';
+
+/** GET 的默认实现：送货车用端点返空、resolve 按 `boundMode` 分流、content 返内置模板字节。 */
+async function defaultGet(url: string): Promise<{ data: unknown }> {
+  if (url.includes('/print-templates/resolve')) {
+    if (boundMode === 'missing') {
+      // 未绑定 = **业务码 21109 的信封**（不是 HTTP 错误）：响应拦截器会把它抛成
+      // ApiError(21109)，对话框据此回落成「请手动选择」。
+      throw Object.assign(new Error('该一级客户未绑定打印模板'), { code: 21109 });
+    }
+    return { data: BOUND_TEMPLATE_OUT };
+  }
+  if (url.includes('/print-templates/T1/content')) return { data: builtinArrayBuffer() };
+  return { data: { items: [] } };
+}
+
 function li(p: Record<string, unknown> = {}) {
   return {
     id: '1',
@@ -229,9 +295,7 @@ async function uploadFile(w: VueWrapper, file: { raw: File; name: string }): Pro
  *  ⚠️ 必须从 Buffer 重新构造一个**精确长度**的 ArrayBuffer：直接用 `BUILTIN.buffer`
  *  会拿到 node 8MB 池化缓冲的整段（字节里混着别的数据，hucre 解 zip 直接报错）。 */
 function builtinFile(name = 'delivery_note_fala.xlsx'): { raw: File; name: string } {
-  const exact = new Uint8Array(BUILTIN.byteLength);
-  exact.set(BUILTIN);
-  return { raw: new File([exact.buffer as ArrayBuffer], name), name };
+  return { raw: new File([builtinArrayBuffer()], name), name };
 }
 
 /** 由内置模板造一个改坏 C3（列位错位）的 File：用 hucre 改一格再序列化，
@@ -248,19 +312,24 @@ async function brokenTemplateFile(): Promise<{ raw: File; name: string }> {
 
 beforeEach(() => {
   apiGetMock.mockReset();
-  apiGetMock.mockResolvedValue({ data: { items: [] } });
+  apiGetMock.mockImplementation(async (url: string) => defaultGet(url));
   apiPostMock.mockReset();
   apiPostMock.mockResolvedValue({ data: null });
+  boundMode = 'missing';
   downloads.length = 0;
   localStorage.clear();
   (ElMessage.error as unknown as { mock: { calls: unknown[] } }).mock.calls.length = 0;
 });
 
 describe('PrintPreviewDialog 导出闸门', () => {
-  it('没传模板 → 「导出」disabled，tooltip 说明「请先上传送货单模板」', async () => {
+  it('该客户未绑定模板（21109）→ 「导出」disabled，tooltip 说清去哪儿配模板', async () => {
     const w = await mountDialog();
     expect(exportDisabled(w)).toBe(true);
-    expect(w.find('.mock-el-tooltip').attributes('title')).toContain('请先上传送货单模板');
+    // ⚠️ 2026-10-16 起这一支的文案**不是**「请先上传送货单模板」：默认桩里 resolve 抛的是
+    // 「该一级客户未绑定模板」这个业务态（21109），提示必须指向「模板编辑」页，而不是让
+    // 用户误以为每次打印都要现场传一份。
+    expect(w.find('.mock-el-tooltip').attributes('title')).toContain('未绑定打印模板');
+    expect(w.find('.mock-el-tooltip').attributes('title')).toContain('模板编辑');
   });
 
   it('模板通过 + 单据上已有司机 → 「导出」可点', async () => {
@@ -287,7 +356,7 @@ describe('PrintPreviewDialog 导出闸门', () => {
 
   it('阻断原因有优先级：模板 > 行项 > 司机（都缺时先说模板）', async () => {
     const w = await mountDialog({ driver_worker_name: null, line_items: [] });
-    expect(w.find('.mock-el-tooltip').attributes('title')).toBe('请先上传送货单模板');
+    expect(w.find('.mock-el-tooltip').attributes('title')).toContain('未绑定打印模板');
   });
 
   it('有行项时页脚显示条数与 sheet 数', async () => {
@@ -421,7 +490,7 @@ function withDriverOptions(): void {
         },
       };
     }
-    return { data: { items: [] } };
+    return defaultGet(url);
   });
 }
 
@@ -567,5 +636,276 @@ describe('PrintPreviewDialog 司机绑定时机', () => {
     expect(driverPosts()).toHaveLength(0);
     expect(downloads).toHaveLength(0);
     expect(w.emitted('update:modelValue')?.at(-1)).toEqual([false]);
+  });
+});
+
+// ============================================================
+// 一级客户绑定模板的自动选用（2026-10-16）
+// ============================================================
+// 打开对话框时按 `note.customer_id` 调 `GET /print-templates/resolve`：命中即自动选中并
+// **复验字节**；未绑定（业务码 21109）回落成「请手动选择」，且**保留**「选择模板」按钮。
+//
+// ⚠️ 守的是两条不能省的：
+//   1. 命中后必须**取字节 + 逐格校验**，不能拿 resolve 的元信息就当模板可用（坏模板飘到
+//      客户签字的收货凭证上是不可逆的）—— 用 `bound_template_bytes_are_revalidated`；
+//   2. 自动选型**不得覆盖**用户刚手动选的模板 —— 用 `auto_select_never_overrides_manual`。
+
+/** 等 resolve 链（取字节 + 动态 import hucre + 逐格校验）落定。 */
+async function waitAutoSelected(w: VueWrapper): Promise<void> {
+  await waitUntil(() => w.text().includes('该客户绑定模板'), '自动选用落定');
+}
+
+describe('PrintPreviewDialog 自动选用一级客户绑定的模板', () => {
+  it('命中 → 自动选中，零用户操作即可导出', async () => {
+    withDriverOptions();
+    boundMode = 'bound';
+    const w = await mountDialog(); // note() 默认 driver_worker_name = '李四'
+    await waitAutoSelected(w);
+
+    expect(w.text()).toContain('fala_bound.xlsx');
+    expect(w.text()).toContain('已校验');
+    expect(w.text()).toContain('该客户绑定模板');
+    expect(exportDisabled(w)).toBe(false);
+    // 打开本身不该有任何写操作
+    expect(apiPostMock).not.toHaveBeenCalled();
+  });
+
+  it('命中后取字节走的是 `/print-templates/{id}/content`（带鉴权的 axios 端点）', async () => {
+    withDriverOptions();
+    boundMode = 'bound';
+    await mountDialog();
+    await waitUntil(
+      () => apiGetMock.mock.calls.some((c) => String(c[0]).includes('/print-templates/T1/content')),
+      '取模板字节',
+    );
+    // resolve 打的是带 query 的 resolve 端点，customer_id 来自 note.customer_id（C1）
+    const resolveCall = apiGetMock.mock.calls.find((c) => String(c[0]).includes('/resolve'));
+    expect(resolveCall?.[0]).toBe('/print-templates/resolve');
+    expect((resolveCall?.[1] as { params?: Record<string, unknown> })?.params).toEqual({
+      customer_id: 'C1',
+    });
+  });
+
+  // 2026-10-16 review 第 2 轮 C-1 / 裁决 2：C-1 那五处不符**真的发生过**，而它的现场表现
+  // 是「一行 12px 黄色小字 + 零 toast + 零日志」—— 生产上完全不可发现。这条守的就是那层
+  // 可观测性：解析失败必须同时**上屏**（autoHint）且**进日志**（console.warn），二者缺一
+  // 就等于静默降级。
+  //
+  // ⚠️ 故意喂**本域第 1 轮那个平铺形状**（真后端从来没返回过它）：它是「后端形状变了 /
+  // schema 没跟上」最真实的替身，比随手编个缺字段的对象更有回归价值。
+  it('C-1：resolve 出参形状不对（少字段）⇒ 提示上屏 + console.warn，绝不静默降级', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      withDriverOptions();
+      boundMode = 'bound';
+      apiGetMock.mockImplementation(async (url: string) => {
+        if (url.includes('/print-templates/resolve')) {
+          // 旧版的**平铺**形状：后端 `PrintTemplateResolveOut` 是嵌套的，顶层这些键不存在
+          // ⇒ `printTemplateResolveSchema.parse` 抛 ⇒ 走 catch 的 else 分支。
+          return {
+            data: {
+              id: 'T1',
+              customer_id: 'C1',
+              customer_name: '法拉电子',
+              original_filename: 'fala_bound.xlsx',
+              file_size: BUILTIN.byteLength,
+              content_sha256: null,
+              version: 2,
+              updated_at: '2026-10-16 09:00:00',
+            },
+          };
+        }
+        return defaultGet(url);
+      });
+
+      const w = await mountDialog();
+      await waitUntil(() => w.find('.auto-hint').exists(), '自动选型失败的提示上屏');
+
+      // ① 上屏（不是静默）：文案要说清「自动选用出问题」而不是「没配模板」。
+      expect(w.find('.auto-hint').text()).toContain('自动选用该客户模板失败');
+      // ② 进日志：零日志的话生产上无从查起。
+      expect(warnSpy).toHaveBeenCalled();
+      // ③ 不谎报成「已绑定 / 已校验」，导出仍然禁用。
+      expect(w.text()).not.toContain('该客户绑定模板');
+      expect(exportDisabled(w)).toBe(true);
+      // ④ 不误标成「未绑定」（那是 21109 的形态，两者提示要让用户去不同的地方解决）。
+      expect(w.text()).not.toContain('未绑定打印模板');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('bound_template_bytes_are_revalidated：库里那份字节坏掉时，不选中并把差异上屏', async () => {
+    // 让 content 端点返回一份「C3 被改坏」的 xlsx：resolve 照样命中（后端只存字节不校验
+    // 结构），但打开对话框这一步的复验必须把它挡住。
+    const { openXlsx, saveXlsx } = await import('hucre');
+    const wb = await openXlsx(new Uint8Array(BUILTIN));
+    wb.sheets[0]!.rows[2]![2] = '{{L2_customer}}';
+    const broken = await saveXlsx(wb);
+    const brokenExact = new Uint8Array(broken.byteLength);
+    brokenExact.set(broken);
+    const brokenBuf = brokenExact.buffer as ArrayBuffer;
+
+    withDriverOptions();
+    boundMode = 'bound';
+    apiGetMock.mockImplementation(async (url: string) => {
+      if (url.includes('/print-templates/resolve')) return { data: BOUND_TEMPLATE_OUT };
+      if (url.includes('/print-templates/T1/content')) return { data: brokenBuf };
+      return defaultGet(url);
+    });
+
+    const w = await mountDialog();
+    await waitUntil(() => w.text().includes('C3 期望 {{l2_customer}}'), '复验差异上屏');
+    expect(w.text()).not.toContain('该客户绑定模板');
+    expect(exportDisabled(w)).toBe(true);
+  });
+
+  it('auto_select_never_overrides_manual：未绑定回落 + 「选择模板」按钮保留，用户手动选后能导出', async () => {
+    withDriverOptions();
+    boundMode = 'missing';
+    const w = await mountDialog({ driver_worker_name: null });
+
+    // 21109 态：提示指向「模板编辑」页，而不是让用户以为每次都要现场传
+    await waitUntil(() => exportDisabled(w), '未绑定回落');
+    expect(w.find('.mock-el-tooltip').attributes('title')).toContain('未绑定打印模板');
+    // 兜底入口不能撤（产品拍板）
+    expect(w.text()).toContain('选择模板');
+
+    await uploadFile(w, builtinFile());
+    expect(w.text()).toContain('已校验');
+    // 手动选的优先级只在「用户已经选过之后」才生效，这里还没选过，先确认自动选型没来抢：
+    expect(w.text()).not.toContain('该客户绑定模板');
+    await selectDriver(w, 'W2');
+    expect(exportDisabled(w)).toBe(false);
+  });
+
+  it('用户手动选完模板后，迟到的自动选型不得把它换掉', async () => {
+    withDriverOptions();
+    boundMode = 'bound';
+    const w = await mountDialog();
+    // 自动选型尚未落定就先手动选一份（用户比 resolve 快）
+    await uploadFile(w, builtinFile('manual.xlsx'));
+    // 等自动选型**跑完**（取字节那一次请求已经发出）：它解析完的那一刻正是会覆盖用户选择的
+    // 那一刻，所以必须等到它，而不是等一个「没被覆盖」的静态断言（那样会假绿）。
+    await waitUntil(
+      () => apiGetMock.mock.calls.some((c) => String(c[0]).includes('/print-templates/T1/content')),
+      '自动选型取字节',
+    );
+    await flush();
+    expect(w.text()).not.toContain('该客户绑定模板');
+    expect(w.text()).not.toContain('fala_bound.xlsx');
+    expect(w.text()).toContain('manual.xlsx');
+    expect(w.text()).toContain('已校验');
+  });
+
+  // 2026-10-16 review 第 1 轮 MINOR-7：resolve 在途期间 tooltip 必须说「正在自动选用」。
+  it('MINOR-7：resolve 在途期间 tooltip 是「正在自动选用…」，不是「请先上传送货单模板」', async () => {
+    // 那段窗口 = 2 次往返 + 一次完整 xlsx 解析，是每次打开都必然经过的常态。原实现三条
+    // 分支都不命中 ⇒ 落到最后一行「请先上传送货单模板」，把常态说成故障。
+    const gate = deferred();
+    apiGetMock.mockImplementation(async (url: string) => {
+      if (url.includes('/print-templates/resolve')) await gate.promise;
+      return defaultGet(url);
+    });
+    boundMode = 'bound';
+    const w = await mountDialog();
+    await waitUntil(
+      () => apiGetMock.mock.calls.some((c) => String(c[0]).includes('/print-templates/resolve')),
+      'resolve 已发出',
+    );
+    expect(w.find('.mock-el-tooltip').attributes('title')).toContain('正在自动选用');
+
+    gate.resolve();
+    await waitAutoSelected(w);
+    expect(w.find('.mock-el-tooltip').attributes('title')).not.toContain('正在自动选用');
+  });
+
+  // 2026-10-16 review 第 1 轮 MINOR-8：详情页组件常驻，「关 → 再开」不得把手动选的模板清空。
+  it('MINOR-8：关对话框再打开 ⇒ 手动选的模板仍在（不重置、不重跑 resolve）', async () => {
+    withDriverOptions();
+    const w = await mountDialog();
+    await uploadFile(w, builtinFile('manual.xlsx'));
+    expect(w.text()).toContain('manual.xlsx');
+
+    await w.setProps({ modelValue: false });
+    await flush();
+    apiGetMock.mockClear();
+    await w.setProps({ modelValue: true });
+    await flush();
+
+    // 改前这里会被无条件清空、重新等一轮自动选型 —— 与用户拍板的决策 2「保留手动上传兜底」相反。
+    expect(w.text()).toContain('manual.xlsx');
+    expect(w.text()).toContain('已校验');
+    expect(
+      apiGetMock.mock.calls.filter((c) => String(c[0]).includes('/print-templates/resolve')),
+    ).toHaveLength(0);
+  });
+
+  // MINOR-8 的「保留」前提是「同一张单」：详情页可以在对话框**关着**的时候换单
+  // （v-if 前后都为真、组件不卸载、modelValue 不变）⇒ 只看 modelValue 的 watch 不会触发。
+  it('MINOR-8b：换一张送货单 ⇒ 手动选的模板不跟着飘过去', async () => {
+    withDriverOptions();
+    const w = await mountDialog();
+    await uploadFile(w, builtinFile('for_note_a.xlsx'));
+    expect(w.text()).toContain('for_note_a.xlsx');
+
+    await w.setProps({ modelValue: false });
+    await flush();
+    // 对话框关着的时候换单：只有 note.id 变了。
+    await w.setProps({ note: note({ id: 'N2' }) });
+    await flush();
+    await w.setProps({ modelValue: true });
+    await flush();
+
+    expect(w.text()).not.toContain('for_note_a.xlsx');
+  });
+
+  // 2026-10-16 review 第 1 轮 MINOR-9：`userPickedTemplate` 守不了「开→关→再开」时两次
+  // resolve 并飞的场景（#1 落地时该标志已被打开沿的 watch 重置为 false）。代次守卫才守得住。
+  it('MINOR-9：常驻挂载下「开→关→再开」，迟到的第一次 resolve 不得覆盖第二次的结果', async () => {
+    withDriverOptions();
+    boundMode = 'bound';
+    // 第一次 resolve 卡在闸上；第二次放行且返回**另一个**文件名，便于区分谁落地了。
+    const firstGate = deferred();
+    let resolveCalls = 0;
+    apiGetMock.mockImplementation(async (url: string) => {
+      if (url.includes('/print-templates/resolve')) {
+        // ⚠️ 序号必须**就地捕获**：第一次 resolve 卡在闸上期间计数器已经涨到 2，在 await 之后
+        // 再读它会让两次都返回「第二个」的名字，用例就变成恒绿（它自己假绿过一次）。
+        const n = (resolveCalls += 1);
+        if (n === 1) await firstGate.promise;
+        return {
+          data: {
+            ...BOUND_TEMPLATE_OUT,
+            // ⚠️ 改文件名必须改**嵌套那一层**（C-1：resolve 出参是 `{template, customer_name}`）。
+            template: {
+              ...BOUND_TEMPLATE_OUT.template,
+              original_filename: n === 1 ? 'slow_first.xlsx' : 'fast_second.xlsx',
+            },
+          },
+        };
+      }
+      return defaultGet(url);
+    });
+
+    const w = await mountDialog();
+    await waitUntil(() => resolveCalls === 1, '第一次 resolve 已发出');
+    await w.setProps({ modelValue: false });
+    await flush();
+    await w.setProps({ modelValue: true });
+    await waitUntil(() => resolveCalls === 2, '第二次 resolve 已发出');
+    // 第二次先落地（慢的那条仍卡在闸上）。
+    await waitAutoSelected(w);
+    expect(w.text()).toContain('fast_second.xlsx');
+
+    // 现在放行迟到的那条：没有代次守卫时它会把上面那个结果覆盖掉。
+    firstGate.resolve();
+    await waitUntil(
+      () => apiGetMock.mock.calls.filter((c) => String(c[0]).includes('/print-templates/T1/content')).length >= 2,
+      '迟到的第一次 resolve 取字节',
+    );
+    await flush();
+    expect(w.text()).toContain('fast_second.xlsx');
+    expect(w.text()).not.toContain('slow_first.xlsx');
   });
 });

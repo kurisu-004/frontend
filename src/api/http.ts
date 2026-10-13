@@ -15,9 +15,12 @@
 //       /iam/refresh；跨标签页用 Web Locks（`hsh-erp:token-refresh`）互斥，因为后端
 //       refresh token 一次性轮转 + reuse detection 会连带清掉该用户所有会话。
 //    d) code !== 0 → 抛 `ApiError(code, message)`，调用方用 try/catch 即可拿到业务错误码。
-//    e) blob 错误体分支：`responseType: 'blob'` 的端点（4 个打印端点）错误 body 也是
-//       Blob，必须先读成文本再 JSON.parse，否则 isEnvelope 判 false → 打印端点的 40102
-//       自动 refresh 静默失效（直接抛 network error）。
+//    e) 二进制错误体分支：`responseType: 'blob'`（4 个打印端点）与 `responseType:
+    //       'arraybuffer'`（`GET /print-templates/{id}/content` 取模板字节）这两类端点的
+    //       error body 也是二进制对象而不是普通对象，必须先读成文本再 JSON.parse，否则
+    //       isEnvelope 判 false → 这两类端点的 40102 自动 refresh **静默失效**（直接抛成
+    //       network error，用户被踢登录且零提示）。**新增 `responseType` 非 json 的端点时，
+    //       记得同步看这一段有没有对应分支**（2026-10-16 review 第 1 轮 MAJOR-4）。
 //
 // 3) `refreshClient`：无任何拦截器的裸 axios 实例（baseURL `/api/v2`），专门给
 //    /api/v2/iam/refresh 用，避免响应拦截器里的 40102 → refresh 链路递归触发。
@@ -570,20 +573,42 @@ function envelopeResponseInterceptor(response: AxiosResponse): AxiosResponse {
 }
 
 /**
- * 错误拦截工厂：blob body 解析 → 40102 自动 refresh + 重试 → refresh 失败
- * dispatch auth:logout。
+ * 错误拦截工厂：二进制（Blob / ArrayBuffer）body 解析 → 40102 自动 refresh + 重试 →
+ * refresh 失败 dispatch auth:logout。
  *
  * 用工厂 + 闭包持有 client，是为了让重试走 `client.request(retryCfg)` 而不是模块级
  * `api`，调用方即使换实例接线也不会让重试落到另一条拦截器链上。
  */
 function makeEnvelopeErrorInterceptor(client: AxiosInstance) {
   return async (error: AxiosError) => {
-    // blob 响应的 error body 也是 Blob；isEnvelope(blob) 返回 false 会让
-    // 401 自动刷新失效。先把 Blob body 读成文本再尝试 JSON parse。
+    // 二进制响应（`responseType: 'blob'` / `'arraybuffer'`）的 error body 也是二进制，
+    // 不是 JS 对象 ⇒ isEnvelope 判 false。必须先把它读成文本再 JSON.parse，否则
+    // 「40102 自动 refresh 静默失效」（直接抛成 network error，用户被踢登录且无提示）。
+    //
+    // ⚠️ **两个分支都要有**（2026-10-16 review 第 1 轮 MAJOR-4）：原先只有 `Blob` 一支，
+    // 而 `responseType:'arraybuffer'` 的端点（`api/printTemplates.ts::fetchPrintTemplateContent`
+    // 取模板 xlsx 字节）落不到它 ⇒ 后端返 `{code:40102,...}` + HTTP 401 时直接
+    // `throw ApiError(401, ...)`、**不进 reactive refresh**。两者读法不同：Blob 走
+    // `payload.text()`，ArrayBuffer 走 `new TextDecoder().decode(buf)`。
+    //
+    // ⚠️ **ArrayBuffer 这一支只覆盖浏览器 XHR 适配器**（2026-10-16 review 第 2 轮 M-5 登记）：
+    // axios 的 **Node 适配器**在 `responseType:'arraybuffer'` 下返的是 **`Buffer`**（`Uint8Array`
+    // 的子类），`instanceof ArrayBuffer` 为 **false** ⇒ 落不到本分支，会被 `isEnvelope` 判 false
+    // 而抛成 `ApiError(401, …)`。本仓是纯浏览器 SPA（vite build + nginx，无 SSR / 无
+    // Node 侧调用 `api` 实例的路径），生产不受影响。⚠️ **别因为「读起来更通用」就把这里改成
+    // `ArrayBuffer.isView(payload)`** —— 那会让本文件对「Node 下要不要也走 envelope 判定」这个
+    // 本仓根本没回答的问题提前表态。
     let payload: unknown = error.response?.data;
     if (payload instanceof Blob) {
       try {
         const text = await payload.text();
+        payload = text ? JSON.parse(text) : null;
+      } catch {
+        payload = null;
+      }
+    } else if (payload instanceof ArrayBuffer) {
+      try {
+        const text = new TextDecoder().decode(payload);
         payload = text ? JSON.parse(text) : null;
       } catch {
         payload = null;

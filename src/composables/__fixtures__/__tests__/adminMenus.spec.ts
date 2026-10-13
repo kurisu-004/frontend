@@ -51,6 +51,14 @@ function flatten(nodes: MenuNode[]): MenuNode[] {
  *     `mail_digest` → `mail`（邮件类型改用页内 tab 区分，不再占菜单层级，path 随之
  *     /mail/digest → /mail）。**改了 code 就必须改这里**：漏改的症状是用例红在
  *     `covers all menuCodes exactly` 上。
+ *   - 2026-10-16（review 第 1 轮 MAJOR-1）：`template_management` + `print_templates_designer`
+ *     **复活**（2026-09-14 首次落地 → 09-24 随 x-data-spreadsheet 弃用从 fixture 删除 →
+ *     10-16 送货单打印模板上传页重新占用同一个 URL 与菜单节点）。
+ *     ⚠️ 这对 code 的删除与复活**两侧都没漏**（fixture 删了、这里也删了）⇒ 那一轮
+ *     `covers all menuCodes exactly` 依然全绿：本用例只能守住「fixture 与本清单一致」，
+ *     **守不住「fixture 与后端 seeds/menu.sql 一致」** —— 后者靠文件头「每次后端菜单树变更
+ *     必须同步」的纪律 + 本文件下方那组定位断言（它们把 id / path / sort_order / icon 逐字
+ *     钉死，缺节点时「定位断言整个 describe 找不到节点即红」）。
  *
  * ⚠️ **不再维护「总数 N」这个数字**：自本轮起数量已由穷尽比较隐含（清单多一个、少一个
  * 都会红），原先的 `has exactly 32 codes` 与注释里的 `30 → 32` 箭头一并删除 —— 再维护
@@ -74,11 +82,18 @@ const COVERED_CODES: readonly string[] = [
   'process_work_type',
   'part_process_chain',
   'pending_programming',
-  // 2026-08-26 补回 / 2026-09-11 复查：router /production/worker-queue 无 allowRoles
+  // 2026-10-13 补回 / 2026-09-11 复查：router /production/worker-queue 无 allowRoles
   // 短路 ⇒ dummy 模式必须保留此 code（少它会让该路由在 dummy 下进不去）。
   'worker_queue',
   'workers_list',
   'inspection_pending',
+  // 2026-10-16（review 第 1 轮 MAJOR-1）：模板管理分组 + 模板编辑子菜单**复活**。
+  // ⚠️ 后端 seeds/rbac.sql 只把它授给 MANAGER（CLERK / INSPECTOR / CNC_PROGRAMMER /
+  // SHELF_ACCOUNT 四段都没有），而 ADMIN_MENUS 是 ADMIN 的菜单树 —— 守卫第 3 条
+  // `treeContainsCode(auth.menus, 'print_templates_designer')` 为 false 时会把用户踢回
+  // 首个有 path 的菜单，所以**少这两个 code 不是「少两项侧栏」而是「页面在 dummy 下不可达」**。
+  'template_management',
+  'print_templates_designer',
   'auth_group',
   'users_list',
   'shelves_list',
@@ -219,6 +234,63 @@ describe('ADMIN_MENUS', () => {
       const codes = all().map((n) => n.code);
       expect(codes).not.toContain('mail_group');
       expect(codes).not.toContain('mail_digest');
+    });
+  });
+
+  // 2026-10-16（review 第 1 轮 MAJOR-1）：`template_management` / `print_templates_designer`
+  // 两个节点的定位断言。照 `roles_list` 那组的形态写 —— 上面那条穷尽比较只管「code 集合」，
+  // 管不到「挂在哪个分组下 / path 逐字对不对 / icon 渲染得出来吗 / 数组物理位置对不对」，
+  // 而这四件事里任何一件错位在 dummy 模式下的症状都是同一个：页面进不去或侧栏顺序错。
+  // 缺节点时下面 `group()` / `leaf()` 的 `!` 会抛 TypeError（而不是静默通过），这是刻意的：
+  // 「节点被删了」必须红，不能变成一组恒真断言。
+  describe('template_management / print_templates_designer 节点（送货单打印模板）', () => {
+    const all = () => flatten(ADMIN_MENUS);
+    const group = () => all().find((n) => n.code === 'template_management')!;
+    const leaf = () => all().find((n) => n.code === 'print_templates_designer')!;
+
+    it('一级分组 template_management「模板管理」path 为 null（渲染成 el-sub-menu）', () => {
+      expect(group().title).toBe('模板管理');
+      expect(group().path).toBeNull();
+      expect(group().children.map((c) => c.code)).toEqual(['print_templates_designer']);
+    });
+
+    it('二级 print_templates_designer「模板编辑」path 为 /print-templates（与 router 的 `path: \'print-templates\'` 逐字一致）', () => {
+      // ⚠️ path 与 router 逐字一致是**硬约束**：不一致时守卫第 3 条把用户踢走，
+      // 现象是「点菜单闪一下又回到别的页」，不是编译错误（router 侧没有反向测试）。
+      expect(leaf().title).toBe('模板编辑');
+      expect(leaf().path).toBe('/print-templates');
+      expect(leaf().parent_id).toBe(group().id);
+    });
+
+    it('两个 icon 都在 MenuTreeItem 的 ICON_MAP 白名单内（查不到会静默不显示）', () => {
+      expect(ICON_MAP[group().icon!]).toBeDefined();
+      expect(ICON_MAP[leaf().icon!]).toBeDefined();
+    });
+
+    it('id 与 backend-rust seeds/menu.sql 逐字一致（9000000000000008 / …701）', () => {
+      // 后端从未软删这两行（2026-09-24 只是前端 fixture 删了），id 是唯一能把
+      // 「后端仍是同一行」与「后端换了新行」区分开的标识。
+      expect(group().id).toBe('9000000000000008');
+      expect(leaf().id).toBe('9000000000000701');
+    });
+
+    it('**数组物理位置**落在 production_group 与 auth_group 之间（侧栏按数组顺序渲染）', () => {
+      const codes = ADMIN_MENUS.map((n) => n.code);
+      expect(codes.indexOf('template_management')).toBe(codes.indexOf('production_group') + 1);
+      expect(codes.indexOf('template_management') + 1).toBe(codes.indexOf('auth_group'));
+    });
+
+    // ⚠️ **用例名里刻意不写死 sort_order 的数值**（2026-10-16 review 第 2 轮 M-2）：原先叫
+    // 「sort_order 落在 production_group(26) 与 auth_group(30) 之间」，那个 `26` 是 fixture
+    // 自身与后端 `seeds/menu.sql` 的**已知漂移**（后端是 27），断言比的是 fixture 内部值、
+    // 自洽能过，但用例名把漂移值当权威传播了。断言保持读 fixture 值不变。
+    it('sort_order 落在 production_group 与 auth_group 之间', () => {
+      expect(group().sort_order).toBeGreaterThan(
+        all().find((n) => n.code === 'production_group')!.sort_order,
+      );
+      expect(group().sort_order).toBeLessThan(
+        all().find((n) => n.code === 'auth_group')!.sort_order,
+      );
     });
   });
 

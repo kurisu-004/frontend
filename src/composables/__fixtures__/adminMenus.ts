@@ -1,4 +1,18 @@
 // src/composables/__fixtures__/adminMenus.ts
+// 2026-10-16 review 第 1 轮 MAJOR-1 同步 backend-rust seeds/menu.sql（送货单打印模板）：
+//   - **复活** `template_management` 一级分组（2026-09-24 随 x-data-spreadsheet 弃用整段
+//     从本 fixture 删除，但后端 t_menu 里那两行从未被软删、rbac.sql 也一直给 MANAGER 授
+//     权 —— 于是 dummy 模式下侧栏不出现该菜单、直接敲 `/print-templates` 会被路由守卫
+//     第 3 条踢回首菜单。生产模式用后端真实菜单树不受影响，但 fixture 与后端脱节本身就是
+//     本文件纪律（见下方「维护纪律」）要防的事）。
+//   - 其下子菜单 `print_templates_designer`，path `/print-templates`（与 router 的
+//     `path: 'print-templates'` 逐字一致）、sort_order 10、icon Document。
+//   - ⚠️ **数组物理位置插在 production_group 与 auth_group 之间**（sort_order 28 落在两者
+//     之间）：侧栏按数组顺序渲染、不排 sort_order，「menu tree is in ascending sort_order」
+//     守的正是数组物理序。
+//   - ⚠️ **id 用后端 seed 字面量**（`9000000000000008` / `9000000000000701`），同
+//     `scheduled_task` 那两个节点的既有做法：id 是唯一能把「2026-09-24 只是从 fixture 里
+//     删掉、后端从未软删」与「后端换了新行」区分开的标识。
 // 2026-10-16 同步 backend-rust seeds/menu.sql（定时任务域改名 + 邮件多账号）：
 //   - 一级分组 **改 code**：`mail_group` → `scheduled_task`，title 由「定时任务/邮件」
 //     收敛为「定时任务」，sort_order 仍 45、icon 仍 Clock、path 仍 NULL。
@@ -72,7 +86,7 @@
 // 改动后必须验证：
 //   1. 每个 MenuNode.code 是 router/index.ts 里某条路由的 meta.menuCode
 //   2. 每个 MenuNode.icon 在 MenuTreeItem.vue 的 ICON_MAP 中存在
-// 3. leaf 节点（path 非 null 且 children 为空）数 = 路由可点击菜单数 = 25
+//   3. leaf 节点（path 非 null 且 children 为空）数 = 路由可点击菜单数 = 26
 
 import type { MenuNode } from '@/types/menu';
 
@@ -124,6 +138,10 @@ export const ADMIN_MENUS: MenuNode[] = [
     code: 'scan_badge',
     title: '扫码台',
     path: '/scan/badge',
+    // ⚠️ **与后端 seed 的已知漂移（本轮刻意不改）**（2026-10-16 review 第 2 轮裁决 1 登记）：
+    // 后端 `seeds/menu.sql` 给这一行的是 `Promotion`，这里写的是 `Operation`。改与不改都不
+    // 影响可达性或排序（icon 只是菜单前面的装饰字符），**刻意留白**：改它会把一个与本任务
+    // 无关的改动混进 diff。对齐时连同下面 `production_group` 的 sort_order 一起做。
     icon: 'Operation',
     sort_order: 13,
     children: [],
@@ -241,6 +259,10 @@ export const ADMIN_MENUS: MenuNode[] = [
     title: '生产管理',
     path: null,
     icon: 'Operation',
+    // ⚠️ **与后端 seed 的已知漂移（本轮刻意不改）**（2026-10-16 review 第 2 轮裁决 1 登记）：
+    // 后端 `seeds/menu.sql` 给 `production_group` 的是 **27**，这里写的是 **26**。
+    // 对页面无影响（同级分组之间的相对次序没变），**刻意留白**：改它会把一个与本任务无关的
+    // 改动混进 diff。对齐时连同上面 `scan_badge` 的 icon 一起做。
     sort_order: 26,
     children: [
       {
@@ -326,7 +348,52 @@ export const ADMIN_MENUS: MenuNode[] = [
       },
     ],
   },
-  // 7. auth_group — 权限管理（分组，3 children）
+  // 7. template_management — 模板管理（分组，1 children）
+  // 2026-10-16 review 第 1 轮 MAJOR-1 **复活**（2026-09-24 随 x-data-spreadsheet 弃用整段
+  // 删除，本轮送货单打印模板上传页重新占用同一个 URL / 菜单节点）。
+  //
+  // ⚠️ **为什么必须同步而不是登记成已知偏差**：本文件的维护纪律（见文件头）写着「每次后端
+  // 菜单树（t_menu）变更，必须把生产最新响应粘到这里同步」，且 2026-10-13 / 10-14 / 10-16
+  // 三轮菜单变更都同步了；本轮是第四轮。不同步的直接后果不是「侧栏少一项」这么轻——路由
+  // 守卫第 3 条（`if (code && !treeContainsCode(auth.menus, code))` → 踢到
+  // `findFirstMenuPath(auth.menus) ?? '/login'`）会让 dummy 模式下**直接敲 URL 也进不去**
+  // 本页，现象是「点菜单闪一下又回到别的页」，与真实故障无法区分。
+  //
+  // ⚠️ **数组物理位置插在 production_group 与 auth_group 之间**：sort_order 28 落在两者
+  // 之间（后端 seed：production_group=27 / template_management=28 / auth_group=30），而
+  // MenuTreeItem 与 MainLayout 都是直接 v-for 数组、渲染链路上**没有排序** ⇒ 数组物理序
+  // 必须与 sort_order 升序一致（`__tests__/adminMenus.spec.ts` 的「menu tree is in
+  // ascending sort_order」守着）。
+  //
+  // ⚠️ 图标 `Document` 必须在 `MenuTreeItem.vue` 的 ICON_MAP 内（查不到会**静默不显示**、
+  // 不报错）。分组与子菜单同名 `Document` 是后端 seed 的原样取值（分组与叶子同图标在本
+  // fixture 里有先例：outsource_list / outsource_send_receive_list 都是 Promotion）。
+  {
+    id: '9000000000000008',
+    version: 0,
+    parent_id: null,
+    code: 'template_management',
+    title: '模板管理',
+    path: null,
+    icon: 'Document',
+    sort_order: 28,
+    children: [
+      {
+        // path 与 router 的 `path: 'print-templates'` 逐字一致；`meta.menuCode` 是
+        // `print_templates_designer`（见 router/index.ts 的同名注释），两者互为对账。
+        id: '9000000000000701',
+        version: 0,
+        parent_id: '9000000000000008',
+        code: 'print_templates_designer',
+        title: '模板编辑',
+        path: '/print-templates',
+        icon: 'Document',
+        sort_order: 10,
+        children: [],
+      },
+    ],
+  },
+  // 8. auth_group — 权限管理（分组，3 children）
   // 2026-09-11：worker_queue 迁到 production_group。
   // 2026-09-16：shelves_list 从 floor_group 迁入。
   // 2026-10-04：workers_list 迁到 production_group（业务侧归类随菜单分组调整）。
@@ -392,7 +459,7 @@ export const ADMIN_MENUS: MenuNode[] = [
       },
     ],
   },
-  // 8. outsource_list — 外协管理（分组，3 children）
+  // 9. outsource_list — 外协管理（分组，3 children）
   {
     id: id(7),
     version: 0,
@@ -438,7 +505,7 @@ export const ADMIN_MENUS: MenuNode[] = [
       },
     ],
   },
-  // 9. floor_group — 车间（软删分组，0 children）
+  // 10. floor_group — 车间（软删分组，0 children）
   // 2026-09-16 停用，业务归入权限管理；保留行便于回滚 + __tests__ 断言。
   // backend-rust 025 对应 `is_active=false`；前端 MenuNode 类型无 is_active 字段，
   // 软删语义靠「无 children」+ 无路由 meta.menuCode 自然失效来兜底。
@@ -453,7 +520,7 @@ export const ADMIN_MENUS: MenuNode[] = [
     sort_order: 40,
     children: [],
   },
-  // 10. scheduled_task — 定时任务（分组，1 children）
+  // 11. scheduled_task — 定时任务（分组，1 children）
   // 定时任务域的一级分组：管**所有**后台定时作业，邮件是它的第一个（当前唯一）子域。
   // 分组节点 path=null（渲染成 el-sub-menu，**不需要**前端路由，照 order_group /
   // auth_group 等既有分组节点的既有做法）；子菜单 mail 的 path 与 router 的
@@ -494,7 +561,7 @@ export const ADMIN_MENUS: MenuNode[] = [
       },
     ],
   },
-  // 11. settings_root — 设置（分组，3 children）
+  // 12. settings_root — 设置（分组，3 children）
   {
     id: id(9),
     version: 0,
