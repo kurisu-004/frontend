@@ -1,4 +1,21 @@
 // src/composables/__fixtures__/adminMenus.ts
+// 2026-10-16 同步 backend-rust seeds/menu.sql（定时任务域改名 + 邮件多账号）：
+//   - 一级分组 **改 code**：`mail_group` → `scheduled_task`，title 由「定时任务/邮件」
+//     收敛为「定时任务」，sort_order 仍 45、icon 仍 Clock、path 仍 NULL。
+//     **为什么换 code**：菜单 code 是**权限与路由的连接键**（`meta.menuCode` 必须与它逐字
+//     一致，不一致会被路由守卫第 3 条踢回首一个有 path 的节点）。旧 code 的名字
+//     `mail_group` 把「一级分组」与「子域」混成了一团 —— 分组管的是**定时任务**这一整类
+//     后台作业（邮件只是它的第一个子域），叫 mail_group 会让下一个子域（比如未来的报表
+//     推送）挂在一个名不副实的分组下。改名也让标题从「定时任务/邮件」这种拼接式写法里
+//     解脱出来：分组标题就是分类名，二级标题才是具体功能。
+//   - 二级子菜单 **改 code + 改 path**：`mail_digest` → `mail`，title「交期汇总邮件」→
+//     「邮件」，path `/mail/digest` → `/mail`（与 router 的 `path: 'mail'` 逐字一致）。
+//     **为什么二级叫「邮件」而不是「交期汇总」**：邮件类型改用**页内 tab** 区分（当前
+//     只有「交期汇总」一种），邮件类型不再是菜单层级 ⇒ 侧栏没必要为每种类型各占一项。
+//     老书签 `/mail/digest` 由 router 里一条 `redirect: '/mail'` 的路由保住。
+//   - 两个节点的 **id 用后端 seed 的新 id**（`9000000000000014` / `9000000000000902`），
+//     **不复用** fixture 原先的 `id(13)` / `id(131)`：后端已软删旧两行，旧 id 在生产
+//     库里仍指向软删行，沿用会让「fixture 与后端逐行对账」这件事失去意义。
 // 2026-10-14 同步 backend-rust seeds/menu.sql（RBAC 控制面板）：
 //   - auth_group 新增子菜单 roles_list「角色权限」，path /iam/roles（与 router 的
 //     `path: 'iam/roles'` 逐字一致）、sort_order 40、icon Lock（与生产 t_menu.icon 对齐）。
@@ -9,6 +26,7 @@
 //     路由），sort_order 45，插在 floor_group(40) 与 settings_root(50) 之间；
 //   - 其下子菜单 mail_digest「交期汇总邮件」，path /mail/digest（与 router 的
 //     `path: 'mail/digest'` 逐字一致）、sort_order 10、icon Message（分组 icon Clock）。
+//     ⚠️ 本条已被下一条（2026-10-16）取代：code 改 scheduled_task / mail、path 改 /mail。
 // 2026-10-04 同步 backend-rust seeds/menu.sql：
 //   - workers_list 从 auth_group children 迁入 production_group children，
 //     path /workers → /production/worker-list，sort_order 10 → 25；
@@ -436,11 +454,11 @@ export const ADMIN_MENUS: MenuNode[] = [
     sort_order: 40,
     children: [],
   },
-  // 10. mail_group — 定时任务/邮件（分组，1 children）
-  // 2026-10-13 新增：交期汇总邮件定时任务管理页（后端 mail_digest 域，5 个端点全部
-  // MANAGER 独占）。分组节点 path=null（渲染成 el-sub-menu，**不需要**前端路由，照
-  // order_group / auth_group 等既有分组节点的既有做法）；子菜单 mail_digest 的 path
-  // 与 router 的 `path: 'mail/digest'` 逐字一致。
+  // 10. scheduled_task — 定时任务（分组，1 children）
+  // 定时任务域的一级分组：管**所有**后台定时作业，邮件是它的第一个（当前唯一）子域。
+  // 分组节点 path=null（渲染成 el-sub-menu，**不需要**前端路由，照 order_group /
+  // auth_group 等既有分组节点的既有做法）；子菜单 mail 的 path 与 router 的
+  // `path: 'mail'` 逐字一致。
   //
   // ⚠️ **sort_order=45 的插入位是硬约束**：数组物理顺序必须与 sort_order 升序一致
   // （MenuTreeItem / MainLayout 都是直接 v-for 数组、渲染链路上没有排序），所以本块
@@ -448,24 +466,29 @@ export const ADMIN_MENUS: MenuNode[] = [
   // 的「menu tree is in ascending sort_order」用例会守住这个位置。
   //
   // ⚠️ 图标必须在 `MenuTreeItem.vue` 的 ICON_MAP 内（查不到会**静默不显示**，不报错）：
-  // mail_group → Clock、mail_digest → Message（2026-10-13 已补命名导入）。
+  // scheduled_task → Clock、mail → Message（两者 2026-10-13 已补命名导入，零改动）。
+  //
+  // ⚠️ **id 写死字面量、不走 `id(n)` 生成器**：本仓 fixture 的 id 通常是假雪花，但
+  // 这两个节点**刻意**与 backend-rust `seeds/menu.sql` 的新 id 逐字一致 —— 后端已软删
+  // 旧两行（`mail_group` / `mail_digest`），id 是唯一能把「软删」与「改名」区分开的标识，
+  // 沿用旧 id 会让对账脚本看不出这其实是两行新记录。
   {
-    id: id(13),
+    id: '9000000000000014',
     version: 0,
     parent_id: null,
-    code: 'mail_group',
-    title: '定时任务/邮件',
+    code: 'scheduled_task',
+    title: '定时任务',
     path: null,
     icon: 'Clock',
     sort_order: 45,
     children: [
       {
-        id: id(131),
+        id: '9000000000000902',
         version: 0,
-        parent_id: id(13),
-        code: 'mail_digest',
-        title: '交期汇总邮件',
-        path: '/mail/digest',
+        parent_id: '9000000000000014',
+        code: 'mail',
+        title: '邮件',
+        path: '/mail',
         icon: 'Message',
         sort_order: 10,
         children: [],
