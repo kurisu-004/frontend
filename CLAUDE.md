@@ -162,12 +162,69 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 - **URL 用模块级 `shallowRef<string | undefined>` + 显式 `syncWsUrl()`，不用 `computed`**（computed 会缓存住旧 token，logout→重登后仍握吊销 token → `40105` 死循环）。
 - **`undefined` 是「无 token 不要连」的哨兵**。禁止无 token 时拿裸 URL 握手（后端必回 `40100`，是无意义重试刷屏的来源）。
 - **重试不封顶**（`retries: -1`，退避 1s→10s 封顶），失败日志前 3 次完整诊断、之后每 30 次一行。WS 是 dashboard 唯一更新通道，封顶重试会让页面静默停更。诊断输出：脱敏 URL（`token=***`）/ closeCode + reason / hadErrorEvent / tokenExpired。
-- **关闭码分流**（逐行契约表在后端 `docs/api/dashboard.md` §7.1「关闭码表」：code × reason × 发出点 × 前端应做什么；`4001` 的判定收在 `src/modules/dashboard/handler.rs` 的纯函数 `reauth_close_code`（`TOKEN_EXPIRED` 40102 → `(4001, "access token expired")`；`UNAUTHORIZED` 40100 / `SESSION_REVOKED` 40105 → `(4001, "auth expired")`；其余 → `(1011, "re-auth unavailable")`），`1011` / `1012` / `4003` 见该文件内各 `close_with(&mut sender, <code>, …)` 发出点旁的注释）：`1000` / `1001` / `1006` / `1011` / `1012` → 继续无限重试；`4001`（连接期间 re-auth 失败）→ **停重连（URL 置 undefined）+ 不清 session**，只派发 `auth:session-lost` 交 app 层处置（清会话的职责在 app 层，`access token expired` 时本地 refresh token 仍然有效，WS 层删 localStorage 等于直接踢人）；`4003`（慢消费方丢了 n 条事件）→ 继续重试 **+ 派发 `dashboard:full-refetch` 立即全量 invalidate**（该事件由 `views/dashboard/composables/useDashboardInvalidation.ts` 接收；必须走立即路径而非 500ms 防抖，且重连首帧 snapshot 在 `dispatch()` 里被 no-op 丢弃、Query 无轮询，丢的事件没有补偿通道）。
+- **关闭码分流**（逐行契约表在后端 `docs/api/dashboard.md` §7.1「关闭码表」：code × reason × 发出点 × 前端应做什么；`4001` 的判定收在 `src/modules/dashboard/handler.rs` 的纯函数 `reauth_close_code`（`TOKEN_EXPIRED` 40102 → `(4001, "access token expired")`；`UNAUTHORIZED` 40100 / `SESSION_REVOKED` 40105 → `(4001, "auth expired")`；其余 → `(1011, "re-auth unavailable")`），`1011` / `1012` / `4003` 见该文件内各 `close_with(&mut sender, <code>, …)` 发出点旁的注释）：`1000` / `1001` / `1006` / `1011` / `1012` → 继续无限重试；`4001`（连接期间 re-auth 失败）→ **停重连（URL 置 undefined）+ 不清 session**，只派发 `auth:session-lost` 交 app 层处置（清会话的职责在 app 层，`access token expired` 时本地 refresh token 仍然有效，WS 层删 localStorage 等于直接踢人）；`4003`（慢消费方丢了 n 条事件）→ 继续重试 **+ 派发 `dashboard:full-refetch` 立即全量 invalidate**（该事件由 `views/dashboard/composables/useDashboardInvalidation.ts` 接收；必须走立即路径而非 500ms 防抖，丢的事件在服务端已不可追溯）。**`1006` 不在关闭那一刻派全量重取** —— 那时连接还没恢复，重取只能拿回断连前的同一份事实；它的补偿点在重连之后（见「重连 snapshot 的补偿语义」）。
 - **`4001` 的两段 reason 由 app 层（`src/router/index.ts` 的 `auth:session-lost` listener）分流**，字面量必须与后端 `handler.rs::reauth_close_code` 的产出逐字对齐（reason 拆分那次改动在后端仓，本仓只消费不解释）：`access token expired` = 只是这枚 access JWT 自然过期、`TOKEN_EXPIRED` 40102 ⇒ `auth.refreshOrLogout(router)`，成功后必须 `reconnectDashboard()` 恢复长连接（refreshOrLogout 走 `/iam/me`，成功响应不触发 40102，不一定发生 refresh，没人派发 `auth:session-changed`，漏掉这句 WS 会永远停在 `undefined`）；`auth expired` = 会话真被吊销、`UNAUTHORIZED` 40100 / `SESSION_REVOKED` 40105 ⇒ `auth.forceLogout(router)`；`null` 按「可能只是过期」走 refresh 分支，其它未知的非空 reason 保守 forceLogout。
 - **主动关闭的判定绑在 socket 实例上**：`useWebSocket` 的 `ws.onclose` 无条件调 `onDisconnected`（`explicitlyClosed` 只挡 `autoReconnect` 分支），所以 token 刷新换连接那次 `code 1000` 必须靠「待关闭的 socket 实例」这一等值比较剔除，不能按 code 吞。**`useWebSocket` 传 `autoConnect: false`**：它只关掉 VueUse 自己的 `watch(urlRef, open)`，`immediate` 首次建连不受影响；不关掉的话那条 watch 与本文件的 `watch(wsUrl, …)` 同 flush 且注册更早，会先跑 `open()` 把 wsRef 换成新 socket，导致取不到「即将关闭的旧实例」。因实例绑定，标记滞留也不会吞掉别的连接的失败（一个 WebSocket 只派发一次 close 事件）。
 - **分层禁令**：WS 层**禁止** import `stores/auth`、`vue-router`、`@tanstack/vue-query`，全部走 CustomEvent 解耦。
 - **`4001` 只在已建立的连接上有效**，握手阶段的鉴权失败只会表现为 `1006`（后端 upgrade 前直接回 HTTP `401`，浏览器 WS API 不暴露握手期 status）。所以会话真死的最终兜底是 HTTP 侧 `40105 → auth:logout`，不是 WS 侧的 `4001`；也**不要**加「握手失败几次就登出」的启发式，那会把代理 / 后端故障误判成会话失效。
 - **dev 环境必须有 `/ws` 反代**（`vite.config.ts` `server.proxy`）。Vite 8 的 dev upgrade 监听器只对匹配到的 proxy context 转发，缺了表现为「页面数据正常但控制台一直刷 WS 报错」。生产 / 预发由 nginx 的 `location ^~ /ws/` 负责。
+
+#### 为什么没有「全事件横幅」
+
+本仓**刻意不消费「除 `SCAN_BANNER` 外的 WS 事件」做展示**。曾经的 `components/NotificationBanner.vue` 整条下线，理由是三条契约漂移叠在一起（不要照 v1 的文档把它复活）：
+
+1. **它支持的 8 个 kind 里 6 个是 v1 遗留**（`PICKED_UP` / `RETURNED` / `INSPECTED` / `PLACED_ON_SHELF` / `RELEASED` / `RECALLED`），`/ws/` 只反代到 backend-rust，后端**零产出方**，永远收不到；
+2. **v2 事件的 payload 不带展示字段** —— 约 40 个 kind 全是 id / 计数（旧横幅要的 `drawing_no` / `name` / `customer_path` / `is_urgent` / `planned_delivery_date` / `worker_name` 一个都拿不到），唯一例外是 `PART_TO_INSPECTION` 带 `shelf_code`，而那不是展示文案；
+3. **它对 `onDashboardEvent` 无白名单** ⇒ 每条 WS 事件都弹一条：`drawing_no=''` + `name=''` 落到兜底分支渲染成 `「 · 已进入货架等待加工」`，装配体事件走专用分支渲染成 `「装配体  已取消」`。
+
+⇒ 现在的形态是「一条**只消费 `SCAN_BANNER`** 的事件条」，不是「把 `DashboardEventType` 逐个 case 的横幅」。要新增展示事件，先确认后端真的产出它、且它的 payload 真的带展示字段，再加 schema 字段与一个组件分支 —— 别改成一个无白名单的通用横幅。
+
+#### 两条浮层组件
+
+| 组件 | 位置 | 消费的事件 |
+|---|---|---|
+| `views/dashboard/components/ScanBanner.vue` | 右下角浮层（`Teleport to="body"`） | `onDashboardEvent` 里 `event_type === 'SCAN_BANNER'` |
+| `views/dashboard/components/WsConnectionIndicator.vue` | `MainLayout` 顶栏 `.header-right` 内、`UserDropdown` 左侧 | `onDashboardConnection` |
+
+两条都放**域内** `views/dashboard/components/`，不上提 `src/components/`：它们依赖 dashboard 域的 WS 契约与守门 schema（域内依赖），且只有 MainLayout 一个消费方，不满足「零个域内依赖 + 多域复用」的上提判据 —— 与 `BatchCard.vue` 那种 6 个跨域消费方才上提的判据**相反**。
+
+**⚠️ `ScanBanner` 的 `bottom: 72px` 是硬值，不是随手取的数**：`components/PagedTable.vue` 的 `.pagination` 是右对齐的，恰好就在页面右下角（全部列表页都是这个壳）。贴底（24px）会盖住「下一页」按钮 4 秒。同理，入场动画从 `translateX`（右上角那版）改成 `translateY` —— 贴右下角的层从下方滑入。
+
+#### `SCAN_BANNER`：唯一带展示字段的事件
+
+v2 后端约 40 个事件里，**只有 `SCAN_BANNER` 的 payload 带展示字段**（6 键，守门 schema 在 `views/dashboard/composables/bannerSchema.ts`）：
+
+| 字段 | 语义 | 可空 |
+|---|---|---|
+| `action` | 报工台上刚发生的动作：`PICKED_UP` / `RETURNED` / `INSPECTED` | 否（枚举） |
+| `worker_name` | 作业工人姓名 | 否 |
+| `serial_no` | 工单序列号，终态工单为 NULL | 是 |
+| `drawing_no` | 图纸号（`serial_no` 的兜底来源） | 否 |
+| `quantity` | 本次动作涉及的件数 | 否 |
+| `system_delivery_date` | 系统交期，展示层只取 `M-DD` | 是 |
+
+`system_delivery_date` 刻意用宽松的 `z.string().nullable()` 而非日期格式闸：后端用 `NaiveDate` 还是 `NaiveDateTime` 序列化会决定 wire 上是 `2026-10-27` 还是 `2026-10-27T00:00:00`，格式闸加严只会把两种合法形态里的一种变成「事件被静默丢弃」，对展示正确性零收益。
+
+**它不进 `AFFECTS_DASHBOARD` 白名单** —— 纯展示事件。dashboard 三张报表的数据事实由同一次扫码提交产生的既有状态翻转事件（`PART_PICKED_UP` / `WORKER_SCAN_*` …）承载，把它加进白名单等于每次扫码多刷一遍大屏。守卫：`composables/__tests__/useDashboardInvalidation.spec.ts` 的 I1 用例断言白名单元素数（**加它那条断言就会红**）。
+
+**Zod 守门的第三种形态：推送通道**。本仓的守门点共有三种落点 —— ① queryFn（HTTP 首取的三个 dashboard 端点）；② 没有 queryFn 承载的单次拉取（api 层直接 `parse`）；③ **推送通道** —— `SCAN_BANNER` 既没有 queryFn 承载，也不是 api 层的函数调用，WS 层只负责把帧原样 fan-out，⇒ `.safeParse()` 落在**组件的 `onDashboardEvent` 回调内**（`ScanBanner.vue` 的 `onEvent`）。坏事件**丢弃 + 一行 warn**，绝不让异常冒泡把整条订阅链带走（`dispatch()` 里虽有一层 try/catch，但那样会静默吞掉整条事件，连日志都没有）。**守卫**：`components/__tests__/ScanBanner.spec.ts` 的 S3 / S4 —— 把 `safeParse` 整段摘掉时它们必须变红，否则这次守门是零测试信号。
+
+#### 连接状态订阅：即刻回放 + `expected` 分流
+
+- **`onDashboardConnection` 订阅即刻回放当前状态**（`onDashboardStatus` 是它的三态薄封装，共享同一份订阅集合）。连接状态是组件的**初始渲染输入**，不是「发生了什么」的增量通知 —— push-only 订阅对后挂的组件等于零信息：大屏常驻时 WS 早就连上了，指示器若恰好没等到一次状态变更，就会一直停在初始值。**新增任何状态类订阅接口时都要带这一下回放。**
+- **`DashboardConnectionState` 四字段**：`status`（`connecting` / `open` / `closed`）/ `expected` / `retries` / `lastError`。`retries` 复用 WS 层既有的失败计数（连上后归零，退避不封顶所以会一直涨）；`lastError` 取 `reportFailure` 里已算好的 closeCode / reason，4001 分支不算失败（那是终止性事件，不是可重试的失败）。
+- **`expected` 的判据绑在「待关闭 socket 实例」的等值比较上**（`api/dashboard.ts` 的 `expectedClosingWs`），**不是按 close code 猜**：code 1000 也可能由服务端 / 中间层主动发出，那是真实断开。**指示器四态必须按它分流** —— 主动关闭（登出 / token 刷新换连接）与真实断开落在同一个 `'closed'` 上，对 UI 含义恰好相反：`open` 绿「已连接」/ `connecting` 黄点呼吸「重连中…」/ `closed` + `expected` 灰「已连接」/ `closed` + 非 `expected` 红「已断开」。诊断信息（重试次数 / close code / reason）留在 tooltip 里，顶栏只留四态那一句。
+
+#### 重连 snapshot 的补偿语义
+
+后端 `handle_socket` **每次连接（含每次重连）**都会推一帧新鲜的 snapshot。`dispatch()` 的 `snapshot` 分支据此分两种处理：
+
+- **首次连接**（`connectedCount === 1`）→ 显式 no-op。那一帧与首屏 HTTP 全量首取重复，触发补偿等于让三个 dashboard query 白刷一遍（首屏还会闪一次 loading）。
+- **重连之后** → 派 `dashboard:full-refetch`，复用 `useDashboardInvalidation.ts` 的立即失效通道（与 4003 共用信号、共用接收方，两者零改动）。
+
+**为什么必须有这一步**：dashboard 三个 query 是 `gcTime: POSITIVE_INFINITY` + **无 `refetchInterval`**（`staleTime` 只决定「下次取数放不放行」，不产生定时器），WS 又是它们唯一的增量通道 ⇒ 断连期间丢的事件没有任何补偿通道，大屏会**静默停更**。首帧 snapshot 在首次连接下仅作就绪信号，在重连时承担断线期数据补偿 —— 这是同一个分支按「是不是首次连接」分的流，不是两套机制。
+
+守卫：`api/dashboard.spec.ts` 的 C5（首次不派）/ C6（重连派）/ C7（换连接也算重连）。
 
 ### 图表
 
