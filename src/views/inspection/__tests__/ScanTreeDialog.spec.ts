@@ -97,6 +97,7 @@ const ASSEMBLY = {
   is_urgent: true,
   system_delivery_date: '2026-10-20',
   customer_name: '二级客户',
+  customer_path: '终端BG / 手机部',
 };
 
 const PART_A = {
@@ -109,6 +110,7 @@ const PART_A = {
   is_urgent: false,
   system_delivery_date: '2026-10-20',
   customer_name: '二级客户',
+  customer_path: '终端BG / 手机部',
   // 零件的 version 是 t_part.version，与批次的 version 是两个计数器（用例 6 断这个）。
   version: 3,
   children: [
@@ -690,6 +692,58 @@ describe('ScanTreeDialog', () => {
     expect(cell('BATCH_9000000000101')).toBe('2026-10-20');
     expect(cell('BATCH_9000000000102')).toBe('2026-10-20');
     wrapper.unmount();
+  });
+
+  // 2026-10-17 客户无限层级：客户列读 `customer_path`（第 2 层到叶子、不含 L1），
+  // 批次行从父零件继承（与系统交期同一条继承链）。锁三档：整条路径 / 空串退回单段名 /
+  // 装配件行读它自己的那一列。
+  it('客户列读 customer_path：整条路径直出，空串退回单段名，批次行从父零件继承', async () => {
+    const tree: ScanTreeOut = {
+      hit_kind: 'PART',
+      scanned_serial_no: 'F1006-01',
+      assembly: null,
+      children: [
+        {
+          ...PART_A,
+          customer_path: '终端BG / 手机部 / 影像组',
+          children: [PART_A.children[0], PART_A.children[1]],
+        },
+        // 兄弟子件：后端落空串（客户软删 / 父链成环）⇒ 整棵子树退回单段名，不给空白
+        {
+          ...PART_B,
+          customer_name: '影像组',
+          customer_path: '',
+          children: [{ ...PART_B.children[0], id: '9000000000105' }],
+        },
+      ],
+    };
+    const { wrapper } = await mountDialog(tree);
+    const cell = (key: string) =>
+      rowBy(wrapper, key)
+        ?.findAll('.mock-column')
+        .find((c) => c.attributes('data-label') === '客户')
+        ?.text();
+    expect(cell('PART_9000000000011')).toBe('终端BG / 手机部 / 影像组');
+    // 继承：批次行自己没有这一列，取父零件的
+    expect(cell('BATCH_9000000000101')).toBe('终端BG / 手机部 / 影像组');
+    expect(cell('BATCH_9000000000102')).toBe('终端BG / 手机部 / 影像组');
+    // 空串 ⇒ 退回 customer_name（不是空、也不是 undefined），同样一路继承到批次行
+    expect(cell('PART_9000000000012')).toBe('影像组');
+    expect(cell('BATCH_9000000000105')).toBe('影像组');
+    wrapper.unmount();
+
+    // 装配件行读它自己那一列（不继承子件）
+    const { wrapper: w2 } = await mountDialog({
+      ...TREE_ASSEMBLY,
+      assembly: { ...ASSEMBLY, customer_path: '终端BG / 装配部' },
+    });
+    expect(
+      rowBy(w2, 'ASSEMBLY_9000000000001')
+        ?.findAll('.mock-column')
+        .find((c) => c.attributes('data-label') === '客户')
+        ?.text(),
+    ).toBe('终端BG / 装配部');
+    w2.unmount();
   });
 
   it('IN_PROCESS 批次的送检按钮受 location 白名单约束（工人手上的、空的都不给）', async () => {

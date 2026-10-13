@@ -94,6 +94,7 @@ function makeWorker(workerId = '1900000000001') {
         has_cnc_program: false,
         customer_name: null,
         parent_customer_name: null,
+        customer_path: '',
         applicant_name: null,
         location: 'WORKER',
         note: null,

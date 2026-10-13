@@ -704,6 +704,7 @@ describe('useInspectionListStore', () => {
           is_urgent: false,
           system_delivery_date: null,
           customer_name: '二级客户',
+          customer_path: '终端BG / 手机部',
           version: 3,
           children: [
             {

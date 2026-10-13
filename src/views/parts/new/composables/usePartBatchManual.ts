@@ -41,7 +41,7 @@ import { parseFileExt } from '@/utils/fileExt';
 import type { Applicant } from '@/types/applicant';
 import type { FileBinding } from '@/types/part_file';
 import type { Customer } from '@/api/customer';
-import { buildCustomerTree, type CustomerTreeNode } from '@/api/customer.tree';
+import { buildCustomerTree, leafCustomersOf, type CustomerTreeNode } from '@/api/customer.tree';
 // 2026-09-28 子任务 #5：useUploadSession 已删除，requestDrawingUpload 改走
 // grantStsTmpKeyFiles 单批签名路径；CosUploader 契约 (File[]) => Promise<CosUploadGrant>
 // 完全保留，仅 caller 实现从「共享 STS session」变为「批量新签 STS + item 拼 grant」。
@@ -622,8 +622,11 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
     // 为什么不放进 partEntrySchema：schema 是纯字段校验，那层拿不到客户树结构，
     // 「有没有子节点」只能在持有 customers 的调用点判定（与「客户存在性」同款，
     // schema 文件头的口径：依赖动态状态的检查不进 schema）。
-    // 判定按 `parent_id` 反查（与 `api/customer.tree.ts::leafCustomersOf` 同一判据）。
-    if (customers.value.some((x) => x.parent_id === matched.id)) {
+    // 判据走共享函数 `leafCustomersOf`（CLAUDE.md「客户无限层级」一节：「任何根客户 /
+    // 叶子客户判定都走它，不要就地写 `parent_id !== null`」）——就地反查「有没有节点
+    // 以我为父」与它逐字等价，但会漏掉它那份按 id 去重的脏数据口径。
+    const isLeaf = leafCustomersOf(customers.value).some((x) => x.id === matched.id);
+    if (!isLeaf) {
       formErrors.value = {
         ...formErrors.value,
         customerId: `「${matched.customer_path || matched.name}」还有下级部门，单据只能挂在末级部门`,

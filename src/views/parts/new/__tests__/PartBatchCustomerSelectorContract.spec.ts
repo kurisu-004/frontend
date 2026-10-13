@@ -79,13 +79,20 @@ describe('「单据只能挂叶子」的闸放在哪一层', () => {
   const manualSrc = stripComments(readFileSync(MANUAL, 'utf8'));
   const schemaSrc = stripComments(readFileSync(SCHEMA, 'utf8'));
 
-  it('onAddConfirm 里按「有没有子节点」拒掉中间层', () => {
+  it('onAddConfirm 里按「有没有子节点」拒掉中间层，且判据走共享函数 leafCustomersOf', () => {
     expect(
       manualSrc,
       'onAddConfirm 不再校验「客户必须是叶子」：中间层节点会被放进待新增列表，' +
         '提交时被后端 20104 拒',
-    ).toMatch(/parent_id === matched\.id/);
+    ).toMatch(/leafCustomersOf\(customers\.value\)\.some\(\(x\) => x\.id === matched\.id\)/);
     expect(manualSrc).toContain('还有下级部门');
+    // 就地反查 `parent_id === matched.id` 与共享函数逐字等价，但漏掉它那份按 id 去重的
+    // 脏数据口径 —— CLAUDE.md「客户无限层级」一节要求一律走共享函数，故显式禁掉。
+    expect(
+      manualSrc,
+      '「是不是叶子」又退回就地写 `parent_id` 反查：与 api/customer.tree.ts 的' +
+        'leafCustomersOf 分叉后，两处的脏数据口径迟早不一致',
+    ).not.toMatch(/parent_id === matched\.id/);
   });
 
   it('这条闸不在 partEntrySchema 里（Zod 那层拿不到客户树结构）', () => {

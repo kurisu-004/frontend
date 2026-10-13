@@ -47,9 +47,13 @@ export interface InspectionQueueItem {
   /** 2026-10-17 新增（客户无限层级改造）：第 2 层到叶子的名称用 ` / ` 拼接，**不含 L1**；
    *  零件所属客户自身即 L1 时等于它自己的名字。客户软删 / 父链成环时后端落**空串**
    *  （不是 null），展示层必须兜底（`utils/elTableCell.ts::renderCustomerCell`）。
-   *  ⚠️ 后端未上线前声明成可选 —— 行类型与 `inspectionQueueListItemSchema` 是**双声明**，
-   *  两处都要改（见下方分页信封注释）。 */
-  customer_path?: string | null;
+   *  **键必填**（少键 parse 抛 —— 本行 schema 是 `.strict()` 的 14 键白名单）、值可空：
+   *  后端 `InspectionQueueItemOut.customer_path` 是必填 `String`（解析不出客户行时落
+   *  空串），本行类型与 `inspectionQueueListItemSchema` 逐字保持「键必填 / 值 nullable」
+   *  这个组合 —— 可空那一档是给「未升级的后端在这条 VO 上仍是 `Option<String>`」留的，
+   *  收窄会让部署窗口内的真实响应整页炸掉。行类型与 schema 是**双声明**，两处都要改
+   *  （见下方分页信封注释）。 */
+  customer_path: string | null;
 }
 
 // 分页信封不另起一份手写声明：形状 = `InspectionQueueItem[]` + 三个 JSON string 计数，
@@ -137,6 +141,11 @@ export interface ScanAssemblyOut {
   /** `YYYY-MM-DD`；DB NULL → JSON null。 */
   system_delivery_date: string | null;
   customer_name: string | null;
+  /** 第 2 层到叶子的名称 ` / ` 拼接、**不含 L1**（2026-10-17 客户无限层级，后端
+   *  `ScanAssemblyOut.customer_path: String`）。**必填键、值非 null** —— 客户行解析不出
+   *  （软删 / 父链成环）时后端落空串；扫码树弹窗的「客户」列主行读它。
+   *  与 `inspectionScanAssemblySchema` 的同名声明逐字一致，两处都要改。 */
+  customer_path: string;
 }
 
 /** 树里的零件节点（`ScanPartOut`）：装配件的子件，或独立件本身。 */
@@ -151,6 +160,9 @@ export interface ScanPartOut {
   is_urgent: boolean;
   system_delivery_date: string | null;
   customer_name: string | null;
+  /** 同 `ScanAssemblyOut.customer_path`（口径 / 必填性逐字一致）—— 两个 VO 由同一次
+   *  `shared::customer::paths_of` 调用产出，不存在「一边有一边没有」的形态。 */
+  customer_path: string;
   /** `t_part.version` —— **不是**批次版本，只作展示；三个写端点的 OCC 锚是批次的 version。 */
   version: number;
   children: ScanBatchOut[];

@@ -130,14 +130,21 @@ function parseAssemblyOutToItemCore(flat: AssemblyOutSchema, childCount: number)
  *     （⚠️ 无限层级后该字段的**语义**由后端改成「根 L1 名」，见 `types/assembly.ts`；
  *     本函数仍按客户行自身的直接父名填，装配件 VO 不返根名，需要时由调用方换源）,
  *     customer_path = 后端 VO 的值优先，其次本地 customers 算出的路径
- *   - 找不到 → 三字段全置 null（保持 mapper 兜底）
+ *   - 找不到 → **两个名字字段**置 null，`customer_path` 原样保留（见下面那一节）
  *
  * 2026-10-17 客户无限层级：`customer_path` 改成「**优先取后端 VO 的值，其次用本地
  * customers 列表里那份 `Customer.customer_path` 算**」。后端 `AssemblyOut` 已把这个
  * 列为必填键（`vo/assembly.rs` 的第 20 个字段，详情 / 建单回读 / 更新 / 取消 /
  * start / force-complete 六个调用点都填），mapper 已在 `parseAssemblyOutToItemCore`
- * 里透传 ⇒ 上面第一分支是**正常路径**，本地 customers 分支只兜「客户列表还没到达」
- * 与「后端落空串」两种情况。
+ * 里透传 ⇒ 本地分支只兜两种场景：**客户列表还没到达**（`useCustomersQuery` 未 settle
+ * 时 `customers = []`，此时两条本地字段名算不出来）与**客户已软删**（本地列表查不到
+ * 这一行，后端却仍带着路径）。
+ *
+ * ⚠️ 由此推出一条容易被忽略的事实：查不到客户的那一支**只覆盖两个名字字段、不碰
+ * `customer_path`** —— 早期实现在这里把三个字段一起置 null，于是 `await getAssembly()`
+ * 之后立刻 enrich 的首帧（customers 还没回来）会把后端下发的那条必填路径抹成 null，
+ * 靠 `watchEffect` 二次补回来；客户软删时那一列就永久为 null。现在 not-found 分支保留
+ * mapper 透传下来的 `customer_path`，首帧即完整。
  *
  * ⚠️ **部署顺序：后端必须先上** —— 旧版本不返 `customer_path` ⇒
  * `assemblyOutSchema` / `assemblyDetailFlatSchema` 的 `required` 抛 ZodError，
@@ -150,8 +157,9 @@ function parseAssemblyOutToItemCore(flat: AssemblyOutSchema, childCount: number)
  * 纯函数：返回新对象，不 mutate 输入；调用方负责把返回值赋回
  * `detail.assembly` / `assemblyDetail.assembly`。
  *
- * customers 接受空数组（useCustomersQuery 缓存未到达时），找不到客户时三字段
- * 全置 null——与上游 mapper 默认值一致。
+ * customers 接受空数组（useCustomersQuery 缓存未到达时），找不到客户时**两个名字字段**
+ * 置 null（与上游 mapper 默认值一致），`customer_path` 保留后端下发的值 —— 见文件头
+ * 那一节的「首帧」说明。
  */
 export function enrichAssemblyItem(item: AssemblyItem, customers: Customer[]): AssemblyItem {
   const customer = customers.find((c) => c.id === item.customer_id);
@@ -160,7 +168,9 @@ export function enrichAssemblyItem(item: AssemblyItem, customers: Customer[]): A
       ...item,
       customer_name: null,
       parent_customer_name: null,
-      customer_path: null,
+      // `customer_path` **原样保留** mapper 透传下来的后端值（见文件头那一节）：这条分支
+      // 在首帧（customers 未到达）与「客户已软删」两种场景都会命中，把必填路径抹成 null
+      // 等于让展示层退回单段名且当场查不出原因。
     };
   }
   return {

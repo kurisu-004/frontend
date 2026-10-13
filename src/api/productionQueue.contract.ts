@@ -119,7 +119,7 @@ export interface QueueWorkerDto {
   held_batches: QueueHeldBatchDto[];
 }
 
-/** `QueueWorkerDto.held_batches[]` 元素（rust QueueHeldBatch）。18 字段。
+/** `QueueWorkerDto.held_batches[]` 元素（rust QueueHeldBatch）。19 字段。
  *  字段集与 QueuePoolItemDto 的差别（都经 `views/production/queue/utils/queueItemToCard.ts`
  *  适配成同一个 BatchCardModel，组件零 DTO 依赖）：
  *   - 多了 `planned_delivery_date`（已下发的批次期望有计划交期）；
@@ -158,10 +158,11 @@ export interface QueueHeldBatchDto {
   parent_customer_name: string | null;
   /** 2026-10-17 新增（客户无限层级改造）：第 2 层到叶子的名称 ` / ` 拼接、**不含 L1**。
    *  批次卡片 tooltip 的「客户」行读它（`BatchCardModel.customer_l2`）。
-   *  ⚠️ 声明成**可选**：这些 DTO 没有 Zod 守门层，写成必填只是一句编译期谎言（旧后端的
-   *  payload 里根本没有这个键，TS 又不校验运行时）。适配层用 `?? customer_name` 兜底，
-   *  后端上线后自愈、老版本下 tooltip 退化成单段名。 */
-  customer_path?: string | null;
+   *  **必填键、值非 null**（后端是 `String`，客户行解析不出时落空串）—— 与守门 schema
+   *  `queueHeldBatchSchema` 的同名声明逐字一致，两处都要改。⚠️ 部署顺序：后端必须先上，
+   *  否则 `useQueueBoard` 的 queryFn parse 抛 ZodError ⇒ 工序板（候选池 + 工人列）全空；
+   *  反过来（漏声明）parse 全绿、客户行静默退回单段名。 */
+  customer_path: string;
   /** `t_applicant.name`。 */
   applicant_name: string | null;
   /** `t_part_batch.location` 枚举原始值（held 态恒 'WORKER'）。 */
@@ -172,7 +173,7 @@ export interface QueueHeldBatchDto {
   version: number;
 }
 
-/** `QueueBoardDto.items[]` 元素（rust QueuePoolItem）。19 字段。
+/** `QueueBoardDto.items[]` 元素（rust QueuePoolItem）。20 字段。
  *  候选 = `IN_PROCESS` + `PRODUCTION_SHELF` + 未删除，按批次当前工序维度匹配。
  *
  *  `shelf_id` 保留的理由：`POST /queue/move` 的 `from: {kind:'POOL', shelf_id}`
@@ -193,8 +194,8 @@ export interface QueuePoolItemDto {
   /** ⚠️ 2026-10-17 客户无限层级：语义从「直接父名」改成「根（L1）客户名」（破坏性）。 */
   parent_customer_name: string | null;
   /** 第 2 层到叶子的名称 ` / ` 拼接、**不含 L1**（2026-10-17 新增）。
-   *  可选 + 适配层兜底的理由同 `QueueHeldBatchDto.customer_path`。 */
-  customer_path?: string | null;
+   *  必填性 / 部署顺序的理由同 `QueueHeldBatchDto.customer_path`。 */
+  customer_path: string;
   applicant_name: string | null;
   /** `t_part_batch.current_holder_id` = 批次所在货架 id（move 的 `from.shelf_id` 数据源）。 */
   shelf_id: string;
@@ -229,7 +230,7 @@ export interface QueuePendingBatchListDto {
   offset: number;
 }
 
-/** `QueuePendingBatchListDto.items[]` 元素（rust PendingBatchItem）。17 字段。
+/** `QueuePendingBatchListDto.items[]` 元素（rust PendingBatchItem）。18 字段。
  *
  *  `planned_delivery_date` 是**非 null** 字符串：待下发批次必然已制定计划交期，
  *  后端对 NULL 兜底为 `1970-01-01`（不要拿它做「无交期」判据）；
@@ -254,8 +255,8 @@ export interface QueuePendingBatchDto {
   /** ⚠️ 2026-10-17 客户无限层级：语义从「直接父名」改成「根（L1）客户名」（破坏性）。 */
   parent_customer_name: string | null;
   /** 第 2 层到叶子的名称 ` / ` 拼接、**不含 L1**（2026-10-17 新增）。
-   *  可选 + 适配层兜底的理由同 `QueueHeldBatchDto.customer_path`。 */
-  customer_path?: string | null;
+   *  必填性 / 部署顺序的理由同 `QueueHeldBatchDto.customer_path`。 */
+  customer_path: string;
   applicant_name: string | null;
   is_urgent: boolean;
   note: string | null;

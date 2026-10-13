@@ -54,7 +54,9 @@ export function poolCandidateToCard(
     has_process_chain: dto.has_process_chain,
     has_cnc_program: dto.has_cnc_program,
     // 2026-10-17 客户无限层级：同 queueItemToCard.ts 的两条注释 —— customer_l1 = 根 L1 名，
-    // customer_l2 = 第 2 层到叶子的路径，`||` 兜底「后端未上线」与「落空串」两种形态。
+    // customer_l2 = 第 2 层到叶子的路径；`||` 只兜「这一行落空串」（客户软删 / 父链成环）。
+    // 「键不存在」不是合法形态：两个 DTO 都有 queryFn 层守门（`useOutsourceQueueProcessQuery`
+    // 的 `*Schema.parse`），`customer_path` 已声明成必填键。
     customer_l1: dto.parent_customer_name,
     customer_l2: dto.customer_path || dto.customer_name,
     applicant_name: dto.applicant_name,
@@ -108,7 +110,9 @@ export function heldBatchToCard(
     has_process_chain: false,
     has_cnc_program: dto.has_cnc_program,
     // 2026-10-17 客户无限层级：同 queueItemToCard.ts 的两条注释 —— customer_l1 = 根 L1 名，
-    // customer_l2 = 第 2 层到叶子的路径，`||` 兜底「后端未上线」与「落空串」两种形态。
+    // customer_l2 = 第 2 层到叶子的路径；`||` 只兜「这一行落空串」（客户软删 / 父链成环）。
+    // 「键不存在」不是合法形态：两个 DTO 都有 queryFn 层守门（`useOutsourceQueueProcessQuery`
+    // 的 `*Schema.parse`），`customer_path` 已声明成必填键。
     customer_l1: dto.parent_customer_name,
     customer_l2: dto.customer_path || dto.customer_name,
     applicant_name: dto.applicant_name,

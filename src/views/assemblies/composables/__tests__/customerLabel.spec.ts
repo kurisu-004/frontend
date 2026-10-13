@@ -83,12 +83,22 @@ describe('enrichAssemblyItem —— 客户三字段的补全', () => {
     expect(out.customer_path).toBe('某某集团');
   });
 
-  it('A5：customers 未到达（空数组）/ 查无此客户 ⇒ 三字段全 null（保持 mapper 兜底）', () => {
+  // 2026-10-17（review 第 2 轮 N-6）：查不到客户的那一支**只覆盖两个名字字段**。
+  // 旧实现把 `customer_path` 一起置 null，而 `useAssemblyDetail.fetchData` 与
+  // `usePartDetail.fetchAssembly` 都在 `await getAssembly()` 之后立刻调 enrich ——
+  // 那一刻 `useCustomersQuery` 常常还没回来（`customers = []`）⇒ 后端下发的那条必填路径
+  // 在**首帧**被抹成 null，靠 `watchEffect` 二次补回来；客户软删时则永久为 null。
+  it('A5：customers 未到达（空数组）/ 查无此客户 ⇒ 两个名字字段置 null，customer_path 保留后端值', () => {
     expect(enrichAssemblyItem(assembly(), [])).toMatchObject({
       customer_name: null,
       parent_customer_name: null,
-      customer_path: null,
     });
+    // mapper 透传下来的后端路径原样保留（首帧即完整，不等第二次 enrich）
+    expect(enrichAssemblyItem(assembly({ customer_path: '后端给的路径' }), []).customer_path).toBe(
+      '后端给的路径',
+    );
+    // 入参本身没有路径（mapper 之前的旧形态）时也不会被编造出值
+    expect(enrichAssemblyItem(assembly(), []).customer_path).toBeNull();
     expect(
       enrichAssemblyItem(assembly({ customer_id: 'no-such' }), [customer()]).customer_path,
     ).toBeNull();

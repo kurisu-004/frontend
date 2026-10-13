@@ -119,10 +119,19 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
   | 同上 `::partSchema`（`GET /com/union-list`） | 零件一览整页数据恒空 |
   | 同上 `::assemblyOutSchema` / `::assemblyDetailFlatSchema` | 装配件详情页 / `PartAssemblyLinkCard` 白屏 |
   | `views/parts/detail/composables/partDetailSchema.ts` | 零件详情页 |
-  | `views/inspection/composables/inspectionSchema.ts` | 待品检页 |
+  | `views/inspection/composables/inspectionSchema.ts` | 待品检页（队列行 `.strict()`）+ **品检扫码树**（`inspectionScanPartSchema` / `inspectionScanAssemblySchema`，守门在 `api/inspection.ts::scanInspection` 的 parse ⇒ 缺键时扫码弹窗整个打不开） |
   | `views/cnc/composables/pendingProgrammingSchema.ts` | 待编程一览 |
   | `views/dashboard/composables/dashboardSnapshotSchema.ts` | 大屏聚合 + 两张抽屉 |
   | `views/com/delivery/composables/deliveryNoteSchema.ts` | 送货单域 |
+  | `views/production/queue/composables/productionQueueSchema.ts` | 生产队列域：`queuePoolItemSchema` / `queueHeldBatchSchema` / `queuePendingBatchSchema` 三条 ⇒ 工序板（候选池 + 工人列）与待下发面板全空 |
+  | `views/outsource/composables/outsourceQueueSchema.ts` | 外协看板：`outsourceQueueCandidateSchema` / `outsourceQueueHeldBatchSchema` 两条 ⇒ 单工序看板（候选池 + 公司列）全空 |
+
+  ⚠️ **「反着来」（漏声明）同样是事故，只是没有任何报错**：本批第一轮就把上表最后两行的
+  `customer_path` 漏在了 schema 之外 —— Zod 默认 strip 把它静默丢掉、parse 全绿，
+  `queueItemToCard.ts` / `outsourceItemToCard.ts` 的 `customer_path || customer_name`
+  于是永远走右半边，五条卡片链路的 tooltip「客户」行集体退回单段名，**typecheck 与 lint
+  都绿**（当时 DTO 侧还声明成可选，两边形状对不上也无人报错）。补声明的同一次改动里要
+  一并把「缺键 → 抛」与「parse 后拿得到值」两条断言写上，否则下一次漏声明仍然是零信号。
 
 - **`.strict()` 的对称代价**：`assemblyDetailFlatSchema` 是 `.strict()` 的，**后端每给行 VO 加一个键而前端没同步补声明，整条链路当场白屏**（2026-10-17 的 `customer_path` 就这么漏过一次：详情页 / `PartAssemblyLinkCard` 全挂）。strict 的其它行 VO 同理。守卫见 `schemas.spec.ts` 的 S15b（少键必抛）/ S17b（多键必抛）—— 两条都在，这轮回归才被当场抓住。
 - **漏声明 = 静默降级，不是报错**：非 strict 的 schema 漏声明 `customer_path` 时 parse 全绿，只是展示位无声退回「单段名 + L1 次行」。新增必填列要在同一次改动里把 schema、TS 类型、展示层三条一起对齐。
@@ -131,18 +140,27 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 
 这批改的是**列 label / placeholder / hint / 报错文案**，理由是「二级」「分厂」「一级 / 二级」这类带层级数或中间层名的叫法在任意深度树上直接说谎。**产品要回退，看这张表逐条改回即可**（列 `key` / localStorage 快照 key 一律没动，回退 label 零风险）。
 
+⚠️ **表里每一行的「改前」都能在 `git show 9e4fd15:<文件>` 里检索到**（本分支的真实基线）—— 写这张表的唯一用途是让产品照着改回去，出现「改前」根本不是历史字符串的行等于这条回退路径不可操作。同一条改动在不同文件里的字符串**不要求逐字相同**（下面第 2 行就是两段），按文件分列。
+
 | 位置 | 改前 | 改后 |
 |---|---|---|
 | `components/BatchCard.vue` tooltip 两行 label | `客户(L1)` / `客户(L2)` | `客户(集团)` / `客户` |
-| `views/parts/list/partsListColumnDefs.ts` / `views/inspection/inspectionColumnDefs.ts` / `views/outsource/outsourceQuoteColumnDefs.ts` 客户筛选 hint | 选一级客户自动级联其下二级客户（后端按客户子树展开） | 选中任一层级的客户，自动包含它与其下全部子客户（后端按客户子树展开） |
+| `views/parts/list/partsListColumnDefs.ts` / `views/inspection/inspectionColumnDefs.ts` 客户筛选 hint | `选一级客户自动级联其下二级客户` | `选中任一层级的客户，自动包含它与其下全部子客户（后端按客户子树展开）` |
+| `views/outsource/outsourceQuoteColumnDefs.ts` 客户筛选 hint | `选一级客户自动级联其下二级客户（后端按客户子树展开）` | `选中任一层级的客户，自动包含它与其下全部子客户（后端按客户子树展开）` |
 | `views/parts/new/components/PartBatchPdfTab.vue` 客户列头 / placeholder | `分厂` / `选分厂` | `客户` / `选末级部门` |
-| `views/parts/new/components/PartEntryFormDialog.vue` placeholder | `选择二级客户` | `选择末级客户` |
+| `views/parts/new/components/PartEntryFormDialog.vue` placeholder | `选择一级 / 二级客户` | `选择客户（末级部门）` |
 | `views/assemblies/components/AssemblyEditDialog.vue` placeholder | `选择二级客户` | `选择末级客户` |
 | `views/com/delivery/deliveryNoteLineItemsColumnDefs.ts` 列 label | `客户（二级）` | `客户` |
 | `views/com/delivery/deliveryNotePrintColumnDefs.ts` 列 label | `分厂` | `客户` |
-| `views/customers/CustomerList.vue` 新建/编辑弹窗 placeholder | `选择一级 / 二级客户`、`不选 = 一级客户；选了一个一级客户 = 二级` | `选择客户（末级部门）`；「父客户」下拉整项删除（客户层级不可移动，要移动请删除后在目标父节点下重建） |
+| `views/customers/CustomerList.vue` 新建/编辑弹窗「父客户」行 | 可编辑 `el-select`，placeholder `不选 = 一级客户；选了一个一级客户 = 二级`（编辑模式下能改父客户） | 只读 `el-input` + hint `客户层级不可移动；如需调整请删除后在目标父节点下重建。`（编辑模式不再能改父层级，newChild 模式显示完整祖先路径） |
 | `views/customers/CustomerList.vue` 删除确认框后代计数 | `（一级客户「X」仍有 N 个二级子节点，删除将一起拒绝）` | `（客户「X」下仍有 N 个子节点，删除将被拒绝）` |
-| `views/parts/new/composables/usePartBatchPdf.ts` 三处报错 | `N 个分厂组请求失败` / `第 i-j 行（分厂 xxx）` / `未指定分厂（二级客户）` | `N 个客户组请求失败` / `第 i-j 行（客户 xxx）` / `未指定客户（单据只能挂在末级部门）` |
+| `views/parts/new/composables/usePartBatchPdf.ts` 三处报错 | `以下 N 行未指定分厂（二级客户），请补全后再提交：` / `第 i-j 行（分厂 xxx）：` / `N 个分厂组请求失败` | `以下 N 行未指定客户（单据只能挂在末级部门），请补全后再提交：` / `第 i-j 行（客户 xxx）：` / `N 个客户组请求失败` |
+
+**本批新增、改前无对应字符串的用户可见文案**（回退它们等于回退行为，不在上面的「改文案」表里，单列在此免得漏看）：
+
+| 位置 | 文案 | 为什么是新增 |
+|---|---|---|
+| `views/parts/new/composables/usePartBatchManual.ts` 提交校验 | `「X」还有下级部门，单据只能挂在末级部门` | 改前**没有**前端这道闸：中间层客户能选中、能提交，由后端返 20104 拒收。回退 = 删掉这段校验（连带 `leafCustomersOf` 那一次判定），不是换个说法。 |
 
 ⚠️ **有一处 hint 刻意没跟**：外协发出零件的表头 hint 仍是「只判零件直属客户等值」—— 那个端点的筛选语义确实是等值，不是子树，跟着展示一起改会把筛选语义讲错。
 

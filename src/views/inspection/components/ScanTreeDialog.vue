@@ -23,6 +23,11 @@
   没有独立 flag，按「这个零件就是被扫中的那个」点亮（批次一个都没有的件也要亮，否则
   扫了码却零视觉反馈）。
 
+  2026-10-17（客户无限层级）：「客户」列改读后端下发的 `customer_path`（第 2 层到叶子、
+    不含 L1），与全仓其它客户列同一份 `utils/elTableCell.ts::renderCustomerCell`；批次行
+    从父零件继承（装配件跨子件时树的每一行都要看得出是哪家的活）。两个节点 VO 都不带
+    L1 字段 ⇒ 不传 `l1`，不出次行。
+
   ⚠️ 规模上限：扫码端点**无分页、不过滤状态**（含终态批次），这里 `default-expand-all`
   全展开且没有虚拟滚动。装配件 N 子件 × M 批次到上千行会卡；后端一旦在该端点加分页，
   本组件要换虚拟表格（并把展开态改成按需拉子节点）。
@@ -105,7 +110,7 @@
       </el-table-column>
       <el-table-column prop="customer_name" label="客户" min-width="120" show-overflow-tooltip>
         <template #default="{ row }">
-          <span :class="{ muted: !row.customer_name }">{{ row.customer_name || '—' }}</span>
+          <component :is="customerCellVNode(row as ScanTreeRow)" />
         </template>
       </el-table-column>
 
@@ -177,10 +182,11 @@
 <script setup lang="ts">
 // views/inspection/components/ScanTreeDialog.vue —— 见文件头。
 
-import { computed, reactive, ref } from 'vue';
+import { computed, reactive, ref, type VNode } from 'vue';
 import { ORDER_STATUS_LABEL, ORDER_STATUS_TAG_TYPE, type OrderStatus } from '@/types/parts';
 import type { ScanBatchOut, ScanPartOut, ScanTreeOut } from '@/api/inspection';
 import { useDialogSize } from '@/composables/useDialogSize';
+import { renderCustomerCell } from '@/utils/elTableCell';
 import { useInspectionListStore } from '../composables/useInspectionListStore';
 
 defineProps<{
@@ -228,6 +234,9 @@ interface ScanTreeRow {
   status: string;
   system_delivery_date: string | null;
   customer_name: string | null;
+  /** 第 2 层到叶子的路径（后端下发，必填非 null；客户行解析不出时为空串）。批次行从
+   *  父零件继承，与 `customer_name` / `system_delivery_date` 同一条继承链。 */
+  customer_path: string;
   /** 加急标记：批次行从父零件继承（批次表本身没有该列）。 */
   is_urgent: boolean;
   // 批次行专有
@@ -269,6 +278,14 @@ const LOCATION_LABEL: Record<string, string> = {
 
 /** 零件节点 → 表格行。`tree` 只用来判「这个零件是不是被扫中的那个」（零件层高亮，
  *  批次层一律照抄后端 flag）。 */
+/** 「客户」列的单元格：与全仓其它客户列共用一份渲染（主行 `customer_path`，空串退回
+ *  单段名）。两个节点 VO 都不带 L1 字段 ⇒ 不传 `l1`、不出次行。
+ *  ⚠️ 本表是手写 `el-table` 插槽模板（没有列定义数组、没有 cellRender），所以用
+ *  `<component :is>` 承接 render 函数返回的 VNode。 */
+function customerCellVNode(row: ScanTreeRow): VNode {
+  return renderCustomerCell({ path: row.customer_path, name: row.customer_name });
+}
+
 function partRow(part: ScanPartOut, tree: ScanTreeOut): ScanTreeRow {
   return {
     node_kind: 'PART',
@@ -280,6 +297,7 @@ function partRow(part: ScanPartOut, tree: ScanTreeOut): ScanTreeRow {
     status: part.status,
     system_delivery_date: part.system_delivery_date,
     customer_name: part.customer_name,
+    customer_path: part.customer_path,
     is_urgent: part.is_urgent,
     batch_no: null,
     is_repairing: false,
@@ -309,6 +327,7 @@ function batchRow(batch: ScanBatchOut, parent: ScanPartOut): ScanTreeRow {
     // 树的每一行都要能看出交期与客户，否则扫装配件时无从判断这批活是哪家的、赶不赶得上。
     system_delivery_date: parent.system_delivery_date,
     customer_name: parent.customer_name,
+    customer_path: parent.customer_path,
     is_urgent: parent.is_urgent,
     batch_no: batch.batch_no,
     is_repairing: batch.is_repairing,
@@ -342,6 +361,7 @@ const rows = computed<ScanTreeRow[]>(() => {
         status: t.assembly.status,
         system_delivery_date: t.assembly.system_delivery_date,
         customer_name: t.assembly.customer_name,
+        customer_path: t.assembly.customer_path,
         is_urgent: t.assembly.is_urgent,
         batch_no: null,
         is_repairing: false,

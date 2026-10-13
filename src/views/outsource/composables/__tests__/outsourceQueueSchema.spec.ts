@@ -11,12 +11,15 @@
 //     抛 ZodError」+「parse 后键集 == fixture 键集」两条上；
 //   - **声明了后端已删的字段**：parse 在真实响应上 100% 失败 ⇒ 页面永久「加载失败」。
 //     断言落在「后端真实形态能 parse」+「后端删掉的键（status_label / source_status /
-//     batch_quantity / customer_path）不被要求」。
+//     batch_quantity）不被要求」。
+//   - **`customer_path` 是漏声明的对照样本**（2026-10-17 客户无限层级）：后端把它恢复成
+//     必填 `String` 之后，两个 VO 的 schema 都没跟上 ⇒ zod strip 静默丢掉 ⇒ 卡片 tooltip
+//     永远退回单段名。OQ-C7 / OQ-H6b 两条按「parse 后拿得到 + 缺键必抛」钉死。
 //
 // 覆盖（键集与字段数断言用 `Object.keys(fixture)` 双向比对，见每组末尾）：
-//   - OQ-C*：候选行（outsourceQueueCandidateSchema，26 字段）：APPROVAL / DIRECT 两形态、
-//     必填字段缺失必抛、雪花 ID 必须是字符串、已删的 4 个字段不再出现。
-//   - OQ-H*：在途批次行（outsourceQueueHeldBatchSchema，22 字段）：**sent_at / price 必须
+//   - OQ-C*：候选行（outsourceQueueCandidateSchema，27 字段）：APPROVAL / DIRECT 两形态、
+//     必填字段缺失必抛、雪花 ID 必须是字符串、已删的 3 个字段不再出现。
+//   - OQ-H*：在途批次行（outsourceQueueHeldBatchSchema，23 字段）：**sent_at / price 必须
 //     接受 null**（后端 Option + LEFT JOIN）、`receive_next_process_id` 非 nullable
 //     （"0" = 无下一道工序）、location 字面量锁死。
 //   - OQ-CO*：公司列（outsourceQueueCompanySchema，4 字段）：held_batches 内联。
@@ -35,8 +38,8 @@ import {
 } from '../outsourceQueueSchema';
 
 /** 候选行 fixture：APPROVAL 形态（已批准报价、单一公司）。
- *  ⚠️ 后端已删的 4 个字段（`status_label` / `source_status` / `batch_quantity` /
- *  `customer_path`）**故意不给** —— fixture 就是响应形态。 */
+ *  ⚠️ 后端已删的 3 个字段（`status_label` / `source_status` / `batch_quantity`）
+ *  **故意不给** —— fixture 就是响应形态。 */
 const candidateFixture = {
   version: 3,
   send_mode: 'APPROVAL',
@@ -52,6 +55,7 @@ const candidateFixture = {
   has_process_chain: true,
   customer_name: '某某零件厂',
   parent_customer_name: '某某集团',
+  customer_path: '某某分厂 / 某某零件厂',
   shelf_code: 'A-01',
   shelf_id: '5000000000001',
   outsource_company_id: '9000000000001',
@@ -80,6 +84,7 @@ const heldBatchFixture = {
   is_urgent: true,
   customer_name: '某某零件厂',
   parent_customer_name: null,
+  customer_path: '某某分厂 / 某某零件厂',
   applicant_name: null,
   location: 'OUTSOURCE_COMPANY',
   note: null,
@@ -130,9 +135,9 @@ const detailFixture = {
 };
 
 describe('outsourceQueueSchema —— 外协看板候选行', () => {
-  it('OQ-C1：APPROVAL 形态逐字段解析通过，键集与 fixture 逐字段相等（26 字段）', () => {
+  it('OQ-C1：APPROVAL 形态逐字段解析通过，键集与 fixture 逐字段相等（27 字段）', () => {
     const parsed = outsourceQueueCandidateSchema.parse(candidateFixture);
-    expect(Object.keys(candidateFixture)).toHaveLength(26);
+    expect(Object.keys(candidateFixture)).toHaveLength(27);
     expect(Object.keys(parsed).sort()).toEqual(Object.keys(candidateFixture).sort());
     expect(parsed.can_send).toBe(true);
     expect(parsed.version).toBe(3);
@@ -189,19 +194,17 @@ describe('outsourceQueueSchema —— 外协看板候选行', () => {
     ).toThrow();
   });
 
-  it('OQ-C5：后端已删的 4 个字段不在契约里（多出来也要能 parse，不被要求）', () => {
+  it('OQ-C5：后端已删的 3 个字段不在契约里（多出来也要能 parse，不被要求）', () => {
     const parsed = outsourceQueueCandidateSchema.parse({
       ...candidateFixture,
       status_label: 'sendable',
       source_status: 'PENDING',
       batch_quantity: 12,
-      customer_path: '某某集团 / 某某零件厂',
     });
-    // strip 后这 4 个键不应出现在结果里 —— 它们已不是本 VO 的字段
+    // strip 后这 3 个键不应出现在结果里 —— 它们已不是本 VO 的字段
     expect(Object.keys(parsed)).not.toContain('status_label');
     expect(Object.keys(parsed)).not.toContain('source_status');
     expect(Object.keys(parsed)).not.toContain('batch_quantity');
-    expect(Object.keys(parsed)).not.toContain('customer_path');
   });
 
   it('OQ-C6：send_mode 只认 APPROVAL / DIRECT 两个字面量', () => {
@@ -209,12 +212,32 @@ describe('outsourceQueueSchema —— 外协看板候选行', () => {
       outsourceQueueCandidateSchema.parse({ ...candidateFixture, send_mode: 'PENDING' }),
     ).toThrow();
   });
+
+  // 2026-10-17 客户无限层级：后端把 `customer_path` 恢复成必填 `String`（客户树任意深度
+  // 后前端拼不出第 3 层及以下）。漏声明 ⇒ zod strip 静默丢掉 ⇒ `outsourceItemToCard.ts`
+  // 的 `customer_path || customer_name` 恒走右半边，看板 tooltip 的「客户」行永远退回
+  // 单段名且零报错。故钉两件事：parse 后拿得到值、缺键必抛。
+  it('OQ-C7：customer_path parse 后拿得到值，缺键 / 给 null 都抛 ZodError', () => {
+    expect(outsourceQueueCandidateSchema.parse(candidateFixture).customer_path).toBe(
+      '某某分厂 / 某某零件厂',
+    );
+    // 空串是合法值：客户行软删 / 父链成环时后端落空串，展示层兜底退回单段名
+    expect(
+      outsourceQueueCandidateSchema.parse({ ...candidateFixture, customer_path: '' }).customer_path,
+    ).toBe('');
+    const noPath: Record<string, unknown> = { ...candidateFixture };
+    delete noPath.customer_path;
+    expect(() => outsourceQueueCandidateSchema.parse(noPath)).toThrow();
+    expect(() =>
+      outsourceQueueCandidateSchema.parse({ ...candidateFixture, customer_path: null }),
+    ).toThrow();
+  });
 });
 
 describe('outsourceQueueSchema —— 外协看板在途批次行', () => {
-  it('OQ-H1：逐字段解析通过，键集与 fixture 逐字段相等（22 字段）', () => {
+  it('OQ-H1：逐字段解析通过，键集与 fixture 逐字段相等（23 字段）', () => {
     const parsed = outsourceQueueHeldBatchSchema.parse(heldBatchFixture);
-    expect(Object.keys(heldBatchFixture)).toHaveLength(22);
+    expect(Object.keys(heldBatchFixture)).toHaveLength(23);
     expect(Object.keys(parsed).sort()).toEqual(Object.keys(heldBatchFixture).sort());
     expect(parsed.location).toBe('OUTSOURCE_COMPANY');
   });
@@ -279,6 +302,22 @@ describe('outsourceQueueSchema —— 外协看板在途批次行', () => {
       delete rest[key];
       expect(() => outsourceQueueHeldBatchSchema.parse(rest)).toThrow();
     }
+  });
+
+  // 同 OQ-C7：在途行的 `customer_path` 与候选行逐字同口径（同一段投影产出），守卫也成对。
+  it('OQ-H6b：customer_path parse 后拿得到值，缺键 / 给 null 都抛 ZodError', () => {
+    expect(outsourceQueueHeldBatchSchema.parse(heldBatchFixture).customer_path).toBe(
+      '某某分厂 / 某某零件厂',
+    );
+    expect(
+      outsourceQueueHeldBatchSchema.parse({ ...heldBatchFixture, customer_path: '' }).customer_path,
+    ).toBe('');
+    const noPath: Record<string, unknown> = { ...heldBatchFixture };
+    delete noPath.customer_path;
+    expect(() => outsourceQueueHeldBatchSchema.parse(noPath)).toThrow();
+    expect(() =>
+      outsourceQueueHeldBatchSchema.parse({ ...heldBatchFixture, customer_path: null }),
+    ).toThrow();
   });
 });
 

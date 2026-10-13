@@ -80,7 +80,7 @@ export const queueSnapshotSchema = z.object({
 
 export type QueueSnapshotSchema = z.infer<typeof queueSnapshotSchema>;
 
-/** `QueueWorker.held_batches[]` 元素（rust QueueHeldBatch）。18 字段全声明。
+/** `QueueWorker.held_batches[]` 元素（rust QueueHeldBatch）。19 字段全声明。
  *  与 queuePoolItemSchema 的差别：多 `planned_delivery_date`、多 `location`，
  *  **没有** shelf_id / shelf_code / shelf_name（批次在工人手里，没有货架位置）。
  *  `location` 恒 'WORKER'（后端按 held 态判定），仍按 `z.string()` 收，不锁字面量 ——
@@ -106,6 +106,14 @@ export const queueHeldBatchSchema = z.object({
   has_cnc_program: z.boolean(),
   customer_name: z.string().nullable(),
   parent_customer_name: z.string().nullable(),
+  /** 第 2 层到叶子的名称 ` / ` 拼接、**不含 L1**（2026-10-17 客户无限层级，后端
+   *  `QueueHeldBatch.customer_path: String`）。**必填键、值非 null** —— 客户行解析不出
+   *  （软删 / `parent_id` 链成环）时后端落**空串**，故空串是合法值，展示层兜底退回
+   *  `customer_name`（`utils/queueItemToCard.ts` 的 `||` 兜底）。
+   *  ⚠️ **部署顺序：后端必须先上线** —— 旧版本不返该键 ⇒ 本 schema `required` 抛
+   *  ZodError ⇒ 单工序看板（候选池 + 工人列）与本页其它队列面全空。漏声明的后果相反：
+   *  parse 全绿、卡片 tooltip 的「客户」行静默退回单段名（strip 陷阱）。 */
+  customer_path: z.string(),
   applicant_name: z.string().nullable(),
   location: z.string(),
   note: z.string().nullable(),
@@ -136,7 +144,7 @@ export const queueWorkerSchema = z.object({
 
 export type QueueWorkerSchema = z.infer<typeof queueWorkerSchema>;
 
-/** `QueueBoard.items[]` 元素（rust QueuePoolItem）。19 字段全声明。
+/** `QueueBoard.items[]` 元素（rust QueuePoolItem）。20 字段全声明。
  *
  *  ⚠️ `shelf_id` 是承重字段：`POST /queue/move` 的 `from: {kind:'POOL', shelf_id}`
  *  必须等于批次真实所在货架（候选池跨所有货架，不能拿用户当前激活货架凑），填错后端
@@ -157,6 +165,9 @@ export const queuePoolItemSchema = z.object({
   system_delivery_date: z.string().nullable(),
   customer_name: z.string().nullable(),
   parent_customer_name: z.string().nullable(),
+  /** 同 `queueHeldBatchSchema.customer_path`（口径 / 必填性 / 部署顺序逐字一致）——
+   *  两个 VO 由同一段 SQL 投影产出，后端不存在「一边有一边没有」的形态。 */
+  customer_path: z.string(),
   applicant_name: z.string().nullable(),
   shelf_id: z.string(),
   shelf_code: z.string(),
@@ -188,7 +199,7 @@ export const queueBoardSchema = z.object({
 
 export type QueueBoardSchema = z.infer<typeof queueBoardSchema>;
 
-/** `QueuePendingBatch` 元素（rust PendingBatchItem）。17 字段全声明。
+/** `QueuePendingBatch` 元素（rust PendingBatchItem）。18 字段全声明。
  *
  *  `planned_delivery_date` 是**非 null** 字符串：待下发批次必然已制定计划交期，
  *  后端对 DB NULL 兜底为 `1970-01-01`。故前端**不能**拿它判「无交期」（会把兜底值
@@ -210,6 +221,10 @@ export const queuePendingBatchSchema = z.object({
   system_delivery_date: z.string().nullable(),
   customer_name: z.string().nullable(),
   parent_customer_name: z.string().nullable(),
+  /** 同 `queueHeldBatchSchema.customer_path`（口径 / 必填性 / 部署顺序逐字一致）。
+   *  待下发面板的卡片 tooltip 走同一套适配层（`pendingBatchToCard`），漏声明会静默
+   *  退回单段名 —— 而这一列恰好恒有值（待下发批次必有零件、零件必有客户行）。 */
+  customer_path: z.string(),
   applicant_name: z.string().nullable(),
   is_urgent: z.boolean(),
   note: z.string().nullable(),

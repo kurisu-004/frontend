@@ -14,7 +14,10 @@
 //   - I5：system_delivery_date = null 也能 parse（DB NULL ⇒ JSON null，列表页
 //     渲染 '—'；不能因为「多数行有值」就锁成非空）；
 //   - I6：扫码树三层结构（assembly 节点 + part 节点 + children 批次节点）能解析，
-//     hit_kind 用 enum 守门。
+//     hit_kind 用 enum 守门；
+//   - I6f：扫码树的两个节点（part / assembly）的 `customer_path` 必填非 null ——
+//     parse 后拿得到值、缺键与给 null 都抛（与待品检队列行那条 `.nullable()` 声明
+//     方向相反，见 `inspectionSchema.ts` 的同名注释）。
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -74,6 +77,7 @@ function makePart(overrides: Record<string, unknown> = {}): Record<string, unkno
     is_urgent: false,
     system_delivery_date: '2026-10-08',
     customer_name: '客户A-子',
+    customer_path: '终端BG / 手机部 / 影像组',
     version: 3,
     children: [makeBatch()],
     ...overrides,
@@ -177,6 +181,7 @@ describe('扫码树三层 schema', () => {
       is_urgent: false,
       system_delivery_date: null,
       customer_name: '客户A-子',
+      customer_path: '终端BG / 手机部 / 影像组',
     };
     const parsed = inspectionScanTreeSchema.parse({
       hit_kind: 'ASSEMBLY',
@@ -214,6 +219,7 @@ describe('扫码树三层 schema', () => {
         is_urgent: false,
         system_delivery_date: null,
         customer_name: null,
+        customer_path: '终端BG / 手机部',
       }),
     ).toThrow();
   });
@@ -223,6 +229,37 @@ describe('扫码树三层 schema', () => {
       const batch = makeBatch();
       delete batch[key];
       expect(() => inspectionScanBatchSchema.parse(batch), `缺 ${key} 应当抛错`).toThrow();
+    }
+  });
+
+  // 2026-10-17 客户无限层级：后端给扫码树的两个节点都补了 `customer_path`（必填
+  // `String`）。漏声明 ⇒ zod strip 静默丢掉 ⇒ `ScanTreeDialog.vue` 的「客户」列
+  // 恒退回单段名且零报错；这条与 I6d 一起把「声明」与「值不被 strip」都钉住。
+  it('I6f：两个节点的 customer_path 必填非 null（parse 后拿得到值）', () => {
+    expect(inspectionScanPartSchema.parse(makePart()).customer_path).toBe(
+      '终端BG / 手机部 / 影像组',
+    );
+    const assembly = {
+      id: '5000000000001',
+      serial_no: null,
+      name: '装配件A',
+      drawing_no: 'DWG-ASM',
+      status: 'INSPECTION',
+      quantity: 5,
+      is_urgent: false,
+      system_delivery_date: null,
+      customer_name: null,
+      customer_path: '终端BG / 手机部',
+    };
+    expect(inspectionScanAssemblySchema.parse(assembly).customer_path).toBe('终端BG / 手机部');
+    // 空串是合法值（客户行软删 / 父链成环时后端落空串，展示层兜底退回单段名）
+    expect(inspectionScanPartSchema.parse(makePart({ customer_path: '' })).customer_path).toBe('');
+    for (const schema of [inspectionScanPartSchema, inspectionScanAssemblySchema]) {
+      const base = schema === inspectionScanPartSchema ? makePart() : assembly;
+      const noPath: Record<string, unknown> = { ...base };
+      delete noPath.customer_path;
+      expect(() => schema.parse(noPath)).toThrow();
+      expect(() => schema.parse({ ...base, customer_path: null })).toThrow();
     }
   });
 });

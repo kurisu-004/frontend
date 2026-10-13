@@ -12,10 +12,21 @@
 //     `process_chain_id !== '0'` 推导 —— 后端那列的口径在 pending 上会恒 false
 //     （待下发批次按定义没 dispatch 过，指针恒 NULL），所以推导不是「抄一遍」。
 //
+// ⚠️ **fixture 一律先过一遍守门 schema 再喂适配器**（2026-10-17）：三个 DTO 在生产链路
+// 上都由 queryFn 层的 `*Schema.parse` 产出，手搓对象等于把最关键的一段（Zod 默认 strip）
+// 从测试里摘掉 —— 漏声明 `customer_path` 时 parse 全绿、值被静默丢掉，适配层于是永远走
+// `customer_path || customer_name` 的右半边，而**这个 spec 仍然全绿**。过 parse 之后，
+// 「谁把 schema 的声明删了」立刻让本文件变红。
+//
 // 测试策略：纯函数，无 Vue / Query / api 依赖，直接 import 被测模块。
 
 import { describe, expect, it } from 'vitest';
 import { heldToCard, pendingBatchToCard, poolItemToCard } from '../queueItemToCard';
+import {
+  queueHeldBatchSchema,
+  queuePendingBatchSchema,
+  queuePoolItemSchema,
+} from '@/views/production/queue/composables/productionQueueSchema';
 import type {
   QueueHeldBatchDto,
   QueuePendingBatchDto,
@@ -23,7 +34,7 @@ import type {
 } from '@/api/productionQueue.contract';
 
 function makePoolItem(over: Partial<QueuePoolItemDto> = {}): QueuePoolItemDto {
-  return {
+  return queuePoolItemSchema.parse({
     batch_id: '3000000000001',
     part_id: '4000000000001',
     batch_no: 1024,
@@ -43,12 +54,13 @@ function makePoolItem(over: Partial<QueuePoolItemDto> = {}): QueuePoolItemDto {
     has_cnc_program: true,
     note: null,
     version: 3,
+    customer_path: '某某分厂 / 某某零件厂',
     ...over,
-  };
+  });
 }
 
 function makeHeld(over: Partial<QueueHeldBatchDto> = {}): QueueHeldBatchDto {
-  return {
+  return queueHeldBatchSchema.parse({
     batch_id: '3000000000002',
     part_id: '4000000000002',
     batch_no: 1025,
@@ -67,12 +79,13 @@ function makeHeld(over: Partial<QueueHeldBatchDto> = {}): QueueHeldBatchDto {
     location: 'WORKER',
     note: null,
     version: 4,
+    customer_path: '某某分厂 / 某某零件厂',
     ...over,
-  };
+  });
 }
 
 function makePending(over: Partial<QueuePendingBatchDto> = {}): QueuePendingBatchDto {
-  return {
+  return queuePendingBatchSchema.parse({
     batch_id: '3000000000003',
     part_id: '4000000000003',
     batch_no: 1026,
@@ -91,8 +104,9 @@ function makePending(over: Partial<QueuePendingBatchDto> = {}): QueuePendingBatc
     // 后端非 Option i64 + unwrap_or(0)：未挂 / 未制定都是字符串 "0"
     current_process_step_id: '0',
     process_chain_id: '8000000000001',
+    customer_path: '某某分厂 / 某某零件厂',
     ...over,
-  };
+  });
 }
 
 describe('queueItemToCard — 工序候选池 / 工人持有：透传后端派生列', () => {
@@ -154,16 +168,21 @@ describe('客户：customer_l1 = 根名，customer_l2 = 第 2 层到叶子的路
     expect(poolItemToCard(makePoolItem(withPath)).customer_l1).toBe('某某集团');
   });
 
-  it('Q2：customer_path 缺失（后端未上线 / 该键被 strip）时退回叶子单段名', () => {
-    // DTO 里 customer_path 是**可选**声明（这两个 contract 没有 Zod 守门层），
-    // 所以「后端还没上」在运行时就是「这个键不存在」—— 兜底不是可选项。
+  // 守的是**漏声明**这一类失败：三个 VO 的 `customer_path` 都由后端下发，前端 schema 一旦
+  // 漏声明，zod 默认 strip 会在 parse 阶段把它静默丢掉 —— fixture 照样构造得出来、Q1 以前
+  // 照样绿（因为旧版断言钉的是「键不存在」这个**错误前提**）。现在 fixture 过 parse，
+  // 声明一删：`parse` 结果里键消失 ⇒ 本条与 Q1 立刻变红。
+  it('Q2：守门 schema 不 strip customer_path（三个 VO 过 parse 后都拿得到值）', () => {
+    expect(makePoolItem().customer_path).toBe('某某分厂 / 某某零件厂');
+    expect(makeHeld().customer_path).toBe('某某分厂 / 某某零件厂');
+    expect(makePending().customer_path).toBe('某某分厂 / 某某零件厂');
     for (const item of [makePoolItem(), makeHeld(), makePending()]) {
-      expect('customer_path' in item).toBe(false);
+      expect('customer_path' in item).toBe(true);
+      // 且适配层真的读到了它（不是又退回单段名）
+      expect(item.customer_path).not.toBe('');
     }
-    expect(poolItemToCard(makePoolItem()).customer_l2).toBe('某某零件厂');
-    expect(heldToCard(makeHeld()).customer_l2).toBe('某某零件厂');
-    // 待下发行的既有 fixture 本就无客户名 ⇒ 路径也退化为 null（不是 undefined 也不是 ''）
-    expect(pendingBatchToCard(makePending()).customer_l2).toBeNull();
+    // 待下发行 fixture 的 customer_name 是 null，路径仍以其为准（不该被单段名覆盖）
+    expect(pendingBatchToCard(makePending()).customer_l2).toBe('某某分厂 / 某某零件厂');
   });
 
   it('Q3：customer_path 为空串（客户软删 / 父链成环）也退回单段名', () => {

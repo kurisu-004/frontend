@@ -242,6 +242,7 @@ function makeHeld(overrides: Partial<QueueHeldBatchDto> = {}): QueueHeldBatchDto
     is_urgent: false,
     has_process_chain: false,
     customer_name: '某某零件厂',
+    customer_path: '某某分厂 / 某某零件厂',
     parent_customer_name: '某某集团',
     applicant_name: '张三',
     location: 'WORKER',
@@ -342,8 +343,12 @@ describe('WorkerColumn（拖拽落点分发）', () => {
       processId: '2000000000001',
       shelfId: '5000000000009',
     });
-    (options.onStart as (e: unknown) => void)(dragEvent({ batchId: '3000000000009', version: CARD_VERSION }));
-    await (options.onAdd as (e: unknown) => Promise<void>)(dragEvent({ batchId: '3000000000009', version: CARD_VERSION }));
+    (options.onStart as (e: unknown) => void)(
+      dragEvent({ batchId: '3000000000009', version: CARD_VERSION }),
+    );
+    await (options.onAdd as (e: unknown) => Promise<void>)(
+      dragEvent({ batchId: '3000000000009', version: CARD_VERSION }),
+    );
 
     expect(moveBatchToWorker).toHaveBeenCalledTimes(1);
     expect(moveBatchToWorker).toHaveBeenCalledWith(
@@ -371,9 +376,7 @@ describe('WorkerColumn（拖拽落点分发）', () => {
       processId: '2000000000001',
       shelfId: '5000000000009',
     });
-    await (options.onAdd as (e: unknown) => Promise<void>)(
-      dragEvent({ batchId: '3000000000009' }),
-    );
+    await (options.onAdd as (e: unknown) => Promise<void>)(dragEvent({ batchId: '3000000000009' }));
 
     expect(moveBatchToWorker).toHaveBeenCalledTimes(1);
     expect(moveBatchToWorker.mock.calls[0]![1]).toBeNaN();
@@ -387,7 +390,10 @@ describe('WorkerColumn（拖拽落点分发）', () => {
     const options = capturedOptions();
 
     // 源容器 = 另一个工人列（data-worker-id = 源工人）
-    const evt = dragEvent({ batchId: '3000000000009', version: CARD_VERSION }, { workerId: '1900000000001' });
+    const evt = dragEvent(
+      { batchId: '3000000000009', version: CARD_VERSION },
+      { workerId: '1900000000001' },
+    );
     (options.onStart as (e: unknown) => void)(evt);
     await (options.onAdd as (e: unknown) => Promise<void>)(evt);
 
@@ -408,7 +414,10 @@ describe('WorkerColumn（拖拽落点分发）', () => {
     const wrapper = mountColumn([makeHeld()], { moveBatchToWorker, moveBatchBetweenWorkers });
     const options = capturedOptions();
 
-    const evt = dragEvent({ batchId: '3000000000009', version: CARD_VERSION }, { workerId: SELF_WORKER_ID });
+    const evt = dragEvent(
+      { batchId: '3000000000009', version: CARD_VERSION },
+      { workerId: SELF_WORKER_ID },
+    );
     (options.onStart as (e: unknown) => void)(evt);
     await (options.onAdd as (e: unknown) => Promise<void>)(evt);
 
@@ -423,7 +432,9 @@ describe('WorkerColumn（拖拽落点分发）', () => {
     const wrapper = mountColumn([makeHeld()], { moveBatchToWorker, moveBatchBetweenWorkers });
     const options = capturedOptions();
 
-    await (options.onAdd as (e: unknown) => Promise<void>)(dragEvent({ batchId: '3000000000009', version: CARD_VERSION }));
+    await (options.onAdd as (e: unknown) => Promise<void>)(
+      dragEvent({ batchId: '3000000000009', version: CARD_VERSION }),
+    );
 
     expect(moveBatchBetweenWorkers).not.toHaveBeenCalled();
     expect(moveBatchToWorker).not.toHaveBeenCalled();
@@ -651,8 +662,12 @@ describe('WorkerColumn（拖拽落点分发）', () => {
       processId: '2000000000001',
       shelfId: '5000000000009',
     });
-    (options.onStart as (e: unknown) => void)(dragEvent({ batchId: '3000000000009', version: CARD_VERSION }));
-    await (options.onAdd as (e: unknown) => Promise<void>)(dragEvent({ batchId: '3000000000009', version: CARD_VERSION }));
+    (options.onStart as (e: unknown) => void)(
+      dragEvent({ batchId: '3000000000009', version: CARD_VERSION }),
+    );
+    await (options.onAdd as (e: unknown) => Promise<void>)(
+      dragEvent({ batchId: '3000000000009', version: CARD_VERSION }),
+    );
     await wrapper.findAll('.batch-card')[1]!.trigger('contextmenu', { clientX: 10, clientY: 20 });
 
     // 空列再挂一次：空列是 POOL→WORKER 的主落点，复发多半落在空列分支上

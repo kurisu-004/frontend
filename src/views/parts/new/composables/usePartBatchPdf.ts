@@ -361,6 +361,13 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
    * `api/customer.tree.ts::buildCustomerTree` 同一份脏数据口径：成环靠 `seen` 断开，
    * 不静默丢节点）。「叶子」= 没有子节点的节点，孤儿节点（父不在集合里）走不到本栈
    * 上（它不在所选根的子树内），与「按子树筛」的口径一致。
+   *
+   * ⚠️ **刻意不复用 `api/customer.tree.ts::leafCustomersOf`**：那个函数给的是**全树**
+   * 的叶子，本处要的是「**所选根的子树内**的叶子」—— 本函数入参就是 `rootId`，作用域
+   * 收窄是它的职责；套 `leafCustomersOf` 之后再按 `root_id` 过滤要先把整棵树拼出来
+   * （`buildCustomerTree`），比直接走一遍栈贵一个量级，而两者产出在这条链路上等价。
+   * 脏数据口径因此是**各写一份**：`seen` 断环只在这里、`buildCustomerTree` 里也有一份，
+   * 两处都要保住「成环不无限循环、不静默丢节点」这个性质（改一处记得看另一处）。
    */
   const leafCustomerOptions = computed(() => {
     const rootId = pdfForm.customerL1Id;
