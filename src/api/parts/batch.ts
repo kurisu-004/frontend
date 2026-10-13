@@ -147,9 +147,12 @@ export interface PartBatchCreatePayload extends PartCreatePayload {
  * 不带这两个字段。`model3d_file` 目前全仓没有填它的调用点。两者的差别只在文件
  * 到达建单请求之前还是之后，字段本身是后端契约字段，保留。
  *
- * 后端 multipart 端点 `POST /parts/batch-with-pdfs` 的语义是「单 PDF 多页 → 拆成装配件」，
- * 入参里没有 `items` 数组，服务端自己造一个 `装配件-{今天}` 并按 PDF 页数拆子件，
- * **不能**用来承载 Tab 2 的逐行录入。
+ * 2026-10-13：**后端 multipart 端点 `POST /parts/batch-with-pdfs` 已下线、无 alias**
+ * （后端把它连同 `GET /parts/by-work-type/{id}` 一并作为「零消费方」端点摘除 —— 全仓
+ * 只有注释提及、零调用）。它的历史语义是「单 PDF 多页 → 拆成装配件」，入参里没有
+ * `items` 数组、服务端自己造一个 `装配件-{今天}` 并按 PDF 页数拆子件 —— 即便当时存在，
+ * 也**不能**用来承载 Tab 2 的逐行录入。留档是为说明「Tab 2 从来不是靠它建单」，
+ * 不是指向一个可调端点。
  *
  * 后端契约（`PartBatchCreateRequest { customer_id, items }`）要求 top-level
  * `customer_id`、item 不带 `customer_id`；本函数按 customer_id 分组提交，
@@ -288,9 +291,11 @@ function toPartBatchCreateItem(it: PartBatchCreatePayload): PartBatchCreateItemF
   };
 }
 
-// `POST /parts/batch-with-pdfs` 是「单 PDF 多页 → 拆装配件」的树形创建端点：入参没有
-// `items` 数组、服务端自己造一个 `装配件-{今天}` 并按页数拆子件，承载不了 Tab 2 的
-// 逐行录入。逐行建单一律走上面的 `batchCreateParts` + 后置上传。
+// 历史留档（2026-10-13 该端点已在后端下线、无 alias）：`POST /parts/batch-with-pdfs`
+// 曾是「单 PDF 多页 → 拆装配件」的树形创建端点，入参没有 `items` 数组、服务端自己造
+// 一个 `装配件-{今天}` 并按页数拆子件，承载不了 Tab 2 的逐行录入 —— 本条注释就是
+// 前端侧「零消费方」的佐证，故后端摘除它时这条证据链仍要留着。逐行建单一律走上面的
+// `batchCreateParts` + 后置上传。
 
 // ============================================================
 // 批次（2026-07-29 批次化）

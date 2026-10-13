@@ -472,9 +472,10 @@ export function buildPartsListColumnDefs(deps: {
     // 「后端未返」渲染成 0 会被读成「一件都没交」，是静默错值；`??` 只在 nullish
     // 时兜底，后端补齐后会自动回真数字。
     //
-    // **`GET /parts` 已填，下面的兜底仍是必需的**：其余复用同一 VO 的端点
-    // （parts/by-work-type/{id} / assemblies/{id}/children）恒返 null。报工台两条 list
-    // 不返本 VO（出参是 ScanListItem），故也不在此列。
+    // **`GET /parts` 已填，下面的兜底仍是必需的**：其余复用同一 VO 的端点恒返 null ——
+    // `POST /assemblies/{id}/children` 仍是来源之一；`GET /parts/by-work-type/{id}`
+    // 已于 2026-10-13 在后端下线、无 alias（它也是本兜底当初写下的原因之一，留档）。
+    // 报工台两条 list 不返本 VO（出参是 ScanListItem），故也不在此列。
     // ASSEMBLY '—' 短路同理是兜底而非已知现状：装配件行的已送数是「套数」、
     // 零件行按「件」计，单位不同不宜在同一列并排，故装配件走 '—'。
     {

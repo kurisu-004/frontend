@@ -395,9 +395,16 @@ export interface ForceCompletePayload {
  * 请求 / 响应契约逐字未变：body `{ note?: string | null }`、**无 version**（后端 OCC
  * 豁免端点），响应仍是 `R<PartOut>`（→ `PartOutDto`）。
  *
- * ⚠️ **部署顺序：后端必须先上。** 后端未部署时 MANAGER 点零件行的「完成」就是一次
- * 404（装配件行不受影响，它自 2026-10-11 起就在 `prod` 前缀下）。失败发生在网络层：
- * 现场只看到一句 axios 错误，用户视角是「点了没反应」。
+ * ⚠️ **部署顺序：任意顺序都有 404 窗口，两侧对称。** 后端先上 ⇒ 旧前端打旧 URL
+ * `/parts/{id}/force-complete`，新后端已摘除 ⇒ 404；前端先上 ⇒ 新 URL
+ * `/prod/parts/{id}/force-complete` 在旧后端不存在（旧后端的 `prod` 域只有
+ * `/assemblies` 这一个 nest，没有 `/parts`）⇒ 同样 404。**必须把两侧上线压进同一
+ * 维护窗**；要真正零窗口只能两段式（后端先同时接受新旧 URL → 前端上线 → 后端摘旧），
+ * 而本轮刻意不做 alias —— 旧路径必须干净 404 才好验证这次硬切。
+ *
+ * 故障表现：MANAGER 点零件行的「完成」→ axios 错误、无任何业务信封，用户视角是
+ * 「点了没反应」（失败发生在网络层，拦截器拿不到 `{code,message}` 可展示）。装配件行
+ * **不受影响**：它自 2026-10-11 起就在 `prod` 前缀下，新旧后端都命中。
  *
  * URL 由 `src/api/__tests__/part.forceComplete.spec.ts` 钉死 —— 零件域其余端点全在
  * `/parts/*`，照邻居抄一条 `/parts/{id}/force-complete` 是零报错信号的错。

@@ -172,7 +172,8 @@ export interface PartListItem {
    *  截断，子件总量为 0 者不参与，无子件为 0。
    *
    *  **填充端点只有 `GET /com/union-list` 与 `GET /parts`**；其余复用同一 VO 的端点
-   *  （`GET /parts/by-work-type/{id}` / `POST /assemblies/{id}/children`）恒 null。
+   *  恒 null —— `POST /assemblies/{id}/children` 仍成立，`GET /parts/by-work-type/{id}`
+   *  已于 2026-10-13 在后端下线、无 alias，故当前只剩前者一个来源。
    *  报工台两条 list（`GET /prod/scan/pickable?work_type_id={id}` /
    *  `GET /prod/scan/held`）**不返本 VO** —— 出参是 `ScanListItem`
    *  （`@/api/productionScan.contract.ts`），故不在此列。本字段因此必须 optional + 可空。 */
