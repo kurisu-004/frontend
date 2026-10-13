@@ -11,6 +11,8 @@
 //      （调用方据此决定要不要先发 POST /{id}/driver）。
 // 另钉两条关闭语义：「取消」与右上角 × 都不发 confirm 且清掉本地选中态；el-dialog 的
 // `closed` 透传给调用方（单据快照在那之后才清，见 store 的 onDeliverDialogClosed）。
+// 以及「已有司机 + 又选了别人」那一格的三态文案与清空可达性（clearable + valueOnClear
+// 钉成空串；收到 undefined 不算「选好」）。
 //
 // 组件自身零写端点：两条 POST 的编排在 store（见 useDeliveryNoteListStore.spec.ts）。
 //
@@ -69,7 +71,15 @@ const stubs = {
   },
   'el-select': {
     name: 'ElSelectStub',
-    props: ['modelValue', 'loading', 'disabled'],
+    // 声明类型（不是数组形式）：`clearable` 是裸属性，只有 Boolean 类型的 prop 才会被
+    // Vue 归一成 true，用例才能断言「清空口子在」而不是断言一个属性值字符串。
+    props: {
+      modelValue: String,
+      loading: Boolean,
+      disabled: Boolean,
+      clearable: Boolean,
+      valueOnClear: String,
+    },
     emits: ['update:modelValue', 'change'],
     template: '<div class="mock-el-select"><slot /></div>',
   },
@@ -139,6 +149,14 @@ async function selectDriver(w: VueWrapper, id: string): Promise<void> {
   await flush();
 }
 
+/** 点下拉上的「清空」（走 el-select 的 clearable 路径：`update:modelValue` 发出
+ *  `valueOnClear`，模板已把它钉成空串；这里显式发空串，与真机同值）。 */
+async function clearDriver(w: VueWrapper): Promise<void> {
+  const sel = w.findComponent({ name: 'ElSelectStub' });
+  sel.vm.$emit('update:modelValue', sel.props('valueOnClear'));
+  await flush();
+}
+
 beforeEach(() => {
   apiGetMock.mockReset();
   apiGetMock.mockResolvedValue({ data: { items: [] } });
@@ -181,6 +199,52 @@ describe('DeliveryDriverPickerDialog', () => {
     await selectDriver(w, 'W2');
     await w.find('button[data-role="confirm"]').trigger('click');
     expect(w.emitted('confirm')).toEqual([['W2']]);
+  });
+
+  // ⚠️ 「已有司机 + 又选了别人」这一格曾经渲染成空 div（两个分支都不命中），唯一那条
+  // 「不选则沿用」的指引凭空消失；而下拉当时又没有 clearable，用户再也回不到沿用模式。
+  // 三态文案 + 清空可达性由下面这三条钉。
+  it('已有司机 + 又选了别人 → 提示「本次将改绑为 X；清空下拉即退回沿用 Y」，不留空白窗口', async () => {
+    withDriverOptions();
+    const w = await mountDialog({ driverWorkerName: '李四' });
+    await selectDriver(w, 'W2');
+    const note = w.find('.driver-note').text();
+    expect(note).toContain('本次将改绑为 王五');
+    expect(note).toContain('退回沿用');
+    expect(note).toContain('李四');
+    // 三态都要有文案：这一格绝不能渲染成空 div
+    expect(note.trim().length).toBeGreaterThan(0);
+  });
+
+  it('下拉 clearable + 清空值钉成空串（清空即退回「沿用」，不是 undefined）', async () => {
+    withDriverOptions();
+    const w = await mountDialog({ driverWorkerName: '李四' });
+    const sel = w.findComponent({ name: 'ElSelectStub' });
+    expect(sel.props('clearable')).toBe(true);
+    expect(sel.props('valueOnClear')).toBe('');
+  });
+
+  it('误选别人后清空下拉 → 回到沿用模式：提示复原、emit 空串（不重发 driver POST）', async () => {
+    withDriverOptions();
+    const w = await mountDialog({ driverWorkerName: '李四' });
+    await selectDriver(w, 'W2');
+    await clearDriver(w);
+    expect(w.find('.driver-note').text()).toContain('本单已指定：李四');
+    await w.find('button[data-role="confirm"]').trigger('click');
+    expect(w.emitted('confirm')).toEqual([['']]);
+  });
+
+  // 清空值若漏成 undefined，「单据本来没司机」那一格会被 canConfirm 的 `!== ''` 误判成
+  // 「选好了」⇒ emit undefined 当司机 id 去发 POST /{id}/driver。
+  it('单据上没有司机 + 下拉收到 undefined ⇒ 仍算「没选」，「确认」保持 disabled', async () => {
+    withDriverOptions();
+    const w = await mountDialog();
+    await waitDrivers(w);
+    w.findComponent({ name: 'ElSelectStub' }).vm.$emit('update:modelValue', undefined);
+    await flush();
+    expect(confirmDisabled(w)).toBe(true);
+    await w.find('button[data-role="confirm"]').trigger('click');
+    expect(w.emitted('confirm')).toBeUndefined();
   });
 
   it('点「取消」→ 只关对话框，不发 confirm（零请求）', async () => {

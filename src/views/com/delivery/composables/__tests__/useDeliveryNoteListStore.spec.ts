@@ -409,13 +409,21 @@ describe('onDeliver 一键送货：司机流程', () => {
     store.actions.onDeliver(noteRow());
     // 不 await：confirm 第一行就把对话框置为关闭，而 close 走 leave 过渡（内容仍在
     // DOM 里可见约 300ms）⇒ 此刻 target 必须还在，否则标题 / 正文闪成空值。
-    void store.actions.onDeliverConfirm('W2');
+    // ⚠️ 这条 Promise 必须在用例结束前排干（下面的 settle），否则它会带着 mutationFn
+    // → onSuccess → 失效 + toast 的迟到副作用跑进后续用例。**不能**改成直接 await
+    // confirm —— 那会让本用例守的「closed 之前 target 仍在」窗口彻底消失。
+    const submitting = store.actions.onDeliverConfirm('W2');
     expect(store.actions.deliverDialogOpen).toBe(false);
     expect(store.actions.deliverTarget?.delivery_note_no).toBe('DN-001');
     expect(store.actions.deliverTarget?.part_count).toBe(2);
 
     store.actions.onDeliverDialogClosed();
     expect(store.actions.deliverTarget).toBeNull();
+
+    // 排干提交链：mutationFn 两条 POST + onSuccess 的失效都 settle 之后再结束用例。
+    await submitting;
+    await settle();
+    expect(store.actions.isDelivering('N1')).toBe(false);
   });
 
   it('关闭对话框（视图的 :closed 回调）才丢 target 快照，下次 onDeliver 重新取行上的 version', async () => {
