@@ -24,8 +24,15 @@
 //   本文件用**真实 zod schema + 喂坏数据**来判这三段（而不是 parse 计数桩）：坏响应时
 //   N1 / N2b 照常 resolve、N2 照常 reject —— 这是消费方真正看到的现象。
 //
-// mock 手法：`vi.mock('@/api/http')` 只换掉 `api.get` / `api.post`（`cleanParams` /
-// `normalizeListResult` 走真实现，否则「空值不上 wire」那条断言是在验副本）。
+// mock 手法：`vi.mock('@/api/http')` 只换掉 `api.get` / `api.post`（`cleanParams` 走真实现，
+// 否则「空值不上 wire」那条断言是在验副本）。
+//
+// ⚠️ **2026-10-16 review 第 2 轮 C-1 补的一整段「出参形状对账」**（`V` 组用例）—— 本文件
+// 第 1 轮最有价值的产出恰恰是**它当时没覆盖的东西**：下面 `ROW` / `RESOLVE_ROW` 两个 fixture
+// 是**前端自己手写的**，断言的只是「前端代码符不符合前端自己的想象」，所以出参形状错了整整
+// 两轮没被拦（上传 / 列表 100% 不可用、自动选用 100% 失效）。`V` 组存在的意义是把「后端
+// `vo.rs` 里有哪些字段」这条**外部事实**钉成字面量断言，让「后端加了字段」与「前端漏声明了
+// 字段」都变红。**今后改这两个 fixture 之前，先打开后端 `print_template/vo.rs` 对一遍。**
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -33,8 +40,8 @@ import type * as HttpModule from '@/api/http';
 
 // ⚠️ `vi.mock` 的 factory 会被 hoist 到文件顶部 ⇒ 桩变量必须走 `vi.hoisted`，
 // 否则这里就是 `Cannot access 'apiGetMock' before initialization`（mailAccounts 那份
-// 用的是 `vi.fn` 直接声明 + 全模块桩，本文件要保留 `cleanParams` / `normalizeListResult`
-// 的真实现，只能用 importOriginal 形态，也就必须 hoisted）。
+// 用的是 `vi.fn` 直接声明 + 全模块桩，本文件要保留 `cleanParams` 的真实现，只能用
+// importOriginal 形态，也就必须 hoisted）。
 const { apiGetMock, apiPostMock } = vi.hoisted(() => ({ apiGetMock: vi.fn(), apiPostMock: vi.fn() }));
 
 vi.mock('@/api/http', async (importOriginal) => {
@@ -56,31 +63,39 @@ import {
 } from '@/views/printTemplates/printTemplateSchema';
 import { XLSX_MIME } from '@/views/com/delivery/utils/deliveryNoteTemplateContract';
 
-/** 一条**逐字合法**的 `PrintTemplateOut`（10 字段；`.strict()` ⇒ 多一个键即抛）。 */
+/**
+ * 一条**逐字合法**的 `PrintTemplateOut`（**12 字段**；`.strict()` ⇒ 多一个键即抛）。
+ *
+ * ⚠️ **逐字照抄后端 `print_template/vo.rs` 的字段表**（2026-10-16 review 第 2 轮 C-1）。
+ * ⚠️ **`file_type` 是短码 `"XLSX"`、不是 MIME**（后端 `policy::file_type_for_ext` 的返回值
+ * 形态）；xlsx 的规范 MIME 在**另一个字段** `content_type` 上。这俩值形态不同不是笔误 ——
+ * 真实 wire 上就是这样。
+ */
 const ROW = {
   id: '9000000000000701',
   customer_id: '9000000000000900',
-  customer_name: '法拉电子',
+  kind: 'DELIVERY_TEMPLATE',
+  file_type: 'XLSX',
   original_filename: 'fala.xlsx',
   file_size: 12345,
-  file_type: XLSX_MIME,
+  content_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   content_sha256: 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90',
   version: 2,
   created_at: '2026-10-16 09:00:00',
   updated_at: '2026-10-16 09:30:00',
+  customer_name: '法拉电子',
 } as const;
 
-/** 一条**逐字合法**的 `PrintTemplateResolveOut`（8 字段，**不带** `file_type` / `created_at`）。 */
+/**
+ * 一条**逐字合法**的 `PrintTemplateResolveOut`（**嵌套**：一个信封套一行）。
+ *
+ * ⚠️ 逐字照抄后端 `vo.rs`：`{ template: PrintTemplateOut, customer_name }`。
+ * ⚠️ **没有 `content_url`** —— 后端从头到尾没有这个字段（此前前端凭空造了一个，
+ * 直接导致 resolve 的 `parse` 每屏抛 ⇒ 自动选用 100% 失效）。
+ */
 const RESOLVE_ROW = {
-  id: ROW.id,
-  customer_id: ROW.customer_id,
+  template: ROW,
   customer_name: ROW.customer_name,
-  original_filename: ROW.original_filename,
-  file_size: ROW.file_size,
-  content_sha256: ROW.content_sha256,
-  version: ROW.version,
-  updated_at: ROW.updated_at,
-  content_url: `/print-templates/${ROW.id}/content`,
 } as const;
 
 /** `el-upload` 给的那种 File（happy-dom / node 都有 File 全局）。 */
@@ -121,6 +136,10 @@ describe('printTemplates api — 五个端点的 URL / method / body 契约', ()
     );
   });
 
+  // ⚠️ **强度有限，别当 URL 纪律的守卫**（2026-10-16 review 第 2 轮 M-4 复核）：它只认**单引号**
+  //   字面量，把 URL 写成反引号 / 双引号就绕过去了。真正的 URL 守卫是 U1 / U2 / U3 / U4 / U5
+  //   那五条（它们断言的是**实际发出去的请求参数**，换引法改不掉）。当「别把带尾斜杠的
+  //   完整路径抄进来」的粗筛用。
   it('U1b：上传 URL 与 resolve / list 的 URL 共用同一 prefix（三个都是 /print-templates…）', () => {
     // 防「只改了上传那一条、另外两条忘了」：三条的域根是同一个字面量。
     const src = readFileSync(new URL('../printTemplates.ts', import.meta.url), 'utf8');
@@ -168,29 +187,22 @@ describe('printTemplates api — 五个端点的 URL / method / body 契约', ()
 });
 
 describe('printTemplates api — 守门点分工（N1 / N2 / N2b）', () => {
-  it('N1：listPrintTemplates 不 parse，坏响应不抛（只经 normalizeListResult 整形计数）', async () => {
+  it('N1：listPrintTemplates 不 parse，坏响应不抛（只把 total 归一成 number）', async () => {
     // 真在 api 层挂过 parse 时这里必然抛 ZodError —— 这条是 N1 的行为侧镜像。
-    // 注意断言的形态：`items` 原样透传（`undefined`）、三个计数被 `Number(undefined)` 变成
+    // 注意断言的形态：`items` 原样透传（`undefined`）、`total` 被 `Number(undefined)` 变成
     // NaN，但**不抛**。守门在 queryFn（`usePrintTemplateListQuery`），不在这里。
+    // ⚠️ 2026-10-16 review 第 2 轮 C-1：`limit` / `offset` 两键已不在返回值里
+    // （后端不回显，见 V5）。
     apiGetMock.mockResolvedValue({ data: { definitely_not_a_list: true } });
-    await expect(listPrintTemplates()).resolves.toEqual({
-      items: undefined,
-      total: NaN,
-      limit: NaN,
-      offset: NaN,
-    });
+    await expect(listPrintTemplates()).resolves.toEqual({ items: undefined, total: NaN });
   });
 
-  it('N1b：listPrintTemplates 的三个分页计数仍经 normalizeListResult 归一成 number', async () => {
-    // 后端各域 list 端点的分页字段类型不统一（有的 serialize_i64 给 string）。这一层归一是
-    // api 层该做的事，与「要不要 parse」是两个独立问题。
-    apiGetMock.mockResolvedValue({ data: { items: [], total: '7', limit: '200', offset: '0' } });
-    await expect(listPrintTemplates()).resolves.toEqual({
-      items: [],
-      total: 7,
-      limit: 200,
-      offset: 0,
-    });
+  it('N1b：listPrintTemplates 的 total 仍被归一成 number', async () => {
+    // 后端 `total` 是裸 `i64`，归一当前是恒等；留着是防御层（其它域 list 端点的计数类型不统一，
+    // 有的 serialize_i64 给 string）。这一层归一是 api 层该做的事，与「要不要 parse」是两个
+    // 独立问题。
+    apiGetMock.mockResolvedValue({ data: { items: [], total: '7' } });
+    await expect(listPrintTemplates()).resolves.toEqual({ items: [], total: 7 });
   });
 
   it('N2a：uploadPrintTemplate 必须 parse（坏响应照抛，不把坏数据交给调用方）', async () => {
@@ -205,10 +217,10 @@ describe('printTemplates api — 守门点分工（N1 / N2 / N2b）', () => {
     await expect(resolvePrintTemplate('C1')).rejects.toThrow();
   });
 
-  it('N2c：resolve 出参多一个后端新加的字段时**不抛**（读侧不 `.strict()`，否则全站自动选型静默失效）', async () => {
+  it('N2c：resolve 出参多一个后端新加的字段时**不抛**（顶层读侧不 `.strict()`，否则全站自动选型静默失效）', async () => {
     apiGetMock.mockResolvedValue({ data: { ...RESOLVE_ROW, some_new_field: 'x' } });
     const out = await resolvePrintTemplate('C1');
-    expect(out.id).toBe(RESOLVE_ROW.id);
+    expect(out.template.id).toBe(RESOLVE_ROW.template.id);
     expect('some_new_field' in out).toBe(false);
   });
 
@@ -236,6 +248,9 @@ describe('printTemplates 的扩展名闸（与后端 21102 判据同源）', () 
     expect(PRINT_TEMPLATE_ACCEPT).toBe(PRINT_TEMPLATE_ACCEPT_EXT);
   });
 
+  // ⚠️ **强度有限**（2026-10-16 review 第 2 轮 M-4 复核）：`not.toContain("'.xlsx'")` 只认**单引号**
+  //   字面量，换反引号 / 双引号就绕过去了；`XLSX_MIME` 真正在不在，靠的是 E1 那条
+  //   （断言实际拼进 multipart 的 File 段 content-type）。当「没有第二份字面量副本」的粗筛用。
   it('E2：MIME 字面量在本文件里**没有第二份副本**（后端改判据时它不会报错、只会静默被 21102 挡回）', () => {
     const src = readFileSync(new URL('../printTemplates.ts', import.meta.url), 'utf8');
     // 允许的是从契约模块 import 后的**使用**；不允许的是把字面量抄进来。
@@ -249,11 +264,81 @@ describe('printTemplates api 的引法纪律', () => {
   it('U6：域内 schema 的类型引用是 import type（编译期擦除，api → views 不留类型边）', () => {
     // 守 CLAUDE.md「api 层引域内 schema 默认用 import type」。运行时的两条值引入是
     // 「写端点 + 无 queryFn 承载」这一条例外（见文件头 N2），所以这里只查 type 那一条。
+    //
+    // ⚠️ **强度有限，别当 import 顺序的守卫**（2026-10-16 review 第 2 轮 M-4 复核）：正则依赖
+    // 「`import type` 恰好排在值 import 之前」，调整 import 顺序就红 —— 那与被测行为无关。
+    // 当「域内 schema 不许被当值 import 进 api 层」的粗筛用。
     const src = readFileSync(new URL('../printTemplates.ts', import.meta.url), 'utf8');
     const match = src.match(
       /import\s+(type\s+)?\{[^}]*\}\s*from\s*'@\/views\/printTemplates\/printTemplateSchema'/s,
     );
     expect(match).not.toBeNull();
     expect(match?.[1]).toBe('type ');
+  });
+});
+
+// ============================================================================
+// V 组：出参形状与后端 `print_template/vo.rs` 逐字对账（2026-10-16 review 第 2 轮 C-1）
+// ----------------------------------------------------------------------------
+// 为什么这组是本文件的核心：U 组钉的是「打到哪里、发什么」，**出参形状一条都没钉**，
+// 而 C-1 的五处不符**全部**在出参形状上。下面每条都对着后端 `vo.rs` 写。
+// ============================================================================
+
+describe('V：出参形状与后端 vo.rs 逐字对账（C-1）', () => {
+  it('V1：行 VO 必含 kind / content_type / file_type —— 漏一个，`.strict()` 下上传与列表全废', async () => {
+    // 后端 `PrintTemplateOut` 逐字给了这三个字段（取值恒定，但类型是必填 string）。
+    // ⚠️ 前端一度只声明了 `file_type`，少了 `kind` 与 `content_type` ⇒ 每次 parse 都抛。
+    expect(Object.keys(ROW)).toEqual(expect.arrayContaining(['kind', 'file_type', 'content_type']));
+    await expect(uploadPrintTemplate('C1', xlsxFile())).resolves.toMatchObject({
+      kind: 'DELIVERY_TEMPLATE',
+      // ⚠️ `file_type` 是**短码**、`content_type` 才是 MIME —— 两个字段值形态不同不是笔误。
+      file_type: 'XLSX',
+      content_type: XLSX_MIME,
+    });
+  });
+
+  it('V2：行 VO 的 customer_name 可为 null（客户软删 / 查不到时后端给 null，不是必填）', async () => {
+    apiPostMock.mockResolvedValue({ data: { ...ROW, customer_name: null } });
+    await expect(uploadPrintTemplate('C1', xlsxFile())).resolves.toMatchObject({
+      customer_name: null,
+    });
+  });
+
+  it('V3：resolve 出参是「嵌套信封」而非平铺（取字段一律走 hit.template.*）', async () => {
+    // 后端 `PrintTemplateResolveOut { template: PrintTemplateOut, customer_name }`。
+    // ⚠️ 前端一度写成平铺 ⇒ parse 每屏抛 ⇒ **全站客户的自动选用 100% 失效**。
+    const out = await resolvePrintTemplate('C1');
+    expect(out.template.id).toBe(ROW.id);
+    expect(out.template.original_filename).toBe(ROW.original_filename);
+    expect(out.customer_name).toBe(ROW.customer_name);
+    // 平铺那套键**不在**顶层 —— 这条守住「不会有人顺手加回 hit.id」。
+    expect('id' in out).toBe(false);
+    expect('original_filename' in out).toBe(false);
+  });
+
+  it('V4：resolve 出参不含 content_url（顶层与 template 内都没有 —— 后端没这个字段）', async () => {
+    const out = await resolvePrintTemplate('C1');
+    expect('content_url' in out).toBe(false);
+    expect('content_url' in out.template).toBe(false);
+    // 取字节只有一条路：`fetchPrintTemplateContent(id)`（走 axios、带 Authorization 头）。
+    // 这正是本仓不能有「拼相对路径塞 `<a href>`」写法的原因 —— 压根没有路径可拼。
+  });
+
+  it('V5：列表出参只有 {items, total}（limit / offset 只作入参，后端不回显）', async () => {
+    // ⚠️ 这是 C-1 **连带**查出的第 5 处不符（reviewer 两轮都没看到）：后端
+    // `PrintTemplateListOut` 只渲染 `items` 与 `total`。前端一度按分页信封声明
+    // `{items, total, limit, offset}` 且 `.strict()`，而 `normalizeListResult` 把缺失的
+    // limit/offset 归一成 **NaN**，zod 4 的 `z.number()` 拒 NaN ⇒ queryFn 每屏抛。
+    apiGetMock.mockResolvedValue({ data: { items: [ROW], total: 1 } });
+    const out = await listPrintTemplates();
+    expect(out).toEqual({ items: [ROW], total: 1 });
+    // 真后端响应**没有**这两个键 ⇒ 不该被凭空补成 0 / NaN。
+    expect('limit' in out).toBe(false);
+    expect('offset' in out).toBe(false);
+  });
+
+  it('V6：列表出参的 total 仍被归一成 number（字符串计数不能直接喂 z.number()）', async () => {
+    apiGetMock.mockResolvedValue({ data: { items: [ROW], total: '7' } });
+    await expect(listPrintTemplates()).resolves.toEqual({ items: [ROW], total: 7 });
   });
 });

@@ -151,14 +151,17 @@ async function resolveBoundTemplate(): Promise<void> {
   try {
     const hit = await resolvePrintTemplate(customerId);
     // ⚠️ 必须**取字节 + 逐格复验**，不能拿 resolve 的元信息就当模板可用。
-    const bytes = await fetchPrintTemplateContent(hit.id);
+    // ⚠️ **出参是嵌套的**（2026-10-16 review 第 2 轮 C-1）：`hit.template.*` 才是模板本体，
+    // `hit.customer_name` 是另一条 `t_customer` 查询给的一级客户名。后端没有 `content_url`
+    // 字段，取字节只有 `fetchPrintTemplateContent(id)` 这一条路。
+    const bytes = await fetchPrintTemplateContent(hit.template.id);
     const { openXlsx } = await import('hucre');
     const diffs = await assertTemplateMatches(await openXlsx(bytes));
     if (stale() || userPickedTemplate.value) return;
-    templateName.value = hit.original_filename;
+    templateName.value = hit.template.original_filename;
     templateDiffs.value = diffs;
     // 校验不过就不留来源：导出按钮已经 disabled，留着只会让人以为「自动选用」这一步过了。
-    templateSource.value = diffs.length === 0 ? { kind: 'api', id: hit.id } : null;
+    templateSource.value = diffs.length === 0 ? { kind: 'api', id: hit.template.id } : null;
     boundMissing.value = false;
   } catch (e) {
     if (stale() || userPickedTemplate.value) return;

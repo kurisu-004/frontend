@@ -280,7 +280,11 @@ describe('ADMIN_MENUS', () => {
       expect(codes.indexOf('template_management') + 1).toBe(codes.indexOf('auth_group'));
     });
 
-    it('sort_order 落在 production_group(26) 与 auth_group(30) 之间', () => {
+    // ⚠️ **用例名里刻意不写死 sort_order 的数值**（2026-10-16 review 第 2 轮 M-2）：原先叫
+    // 「sort_order 落在 production_group(26) 与 auth_group(30) 之间」，那个 `26` 是 fixture
+    // 自身与后端 `seeds/menu.sql` 的**已知漂移**（后端是 27），断言比的是 fixture 内部值、
+    // 自洽能过，但用例名把漂移值当权威传播了。断言保持读 fixture 值不变。
+    it('sort_order 落在 production_group 与 auth_group 之间', () => {
       expect(group().sort_order).toBeGreaterThan(
         all().find((n) => n.code === 'production_group')!.sort_order,
       );

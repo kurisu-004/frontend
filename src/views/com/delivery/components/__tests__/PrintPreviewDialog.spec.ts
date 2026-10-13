@@ -84,19 +84,30 @@ function deferred<T = void>(): { promise: Promise<T>; resolve: (v: T) => void } 
   return { promise, resolve };
 }
 
-/** `GET /print-templates/resolve` 命中的出参（后端 `PrintTemplateResolveOut` 逐字形状）。 */
+/**
+ * `GET /print-templates/resolve` 命中的出参（后端 `PrintTemplateResolveOut` 逐字形状）。
+ *
+ * ⚠️ 2026-10-16 review 第 2 轮 C-1：**嵌套**（一个信封套一行），原先的平铺 fixture
+ * 是「前端自己手写的想象」，害得自动选用 100% 失效。
+ * ⚠️ **没有 `content_url`** —— 后端从头到尾没有这个字段。命中后取字节打的是
+ * `/print-templates/T1/content`（见 `defaultGet`），不是任何拼出来的 URL。
+ */
 const BOUND_TEMPLATE_OUT = {
-  id: 'T1',
-  customer_id: 'C1',
+  template: {
+    id: 'T1',
+    customer_id: 'C1',
+    kind: 'DELIVERY_TEMPLATE',
+    file_type: 'XLSX',
+    original_filename: 'fala_bound.xlsx',
+    file_size: BUILTIN.byteLength,
+    content_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    content_sha256: 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90',
+    version: 2,
+    created_at: '2026-10-16 09:00:00',
+    updated_at: '2026-10-16 09:00:00',
+    customer_name: '法拉电子',
+  },
   customer_name: '法拉电子',
-  original_filename: 'fala_bound.xlsx',
-  file_size: BUILTIN.byteLength,
-  content_sha256: 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90',
-  version: 2,
-  updated_at: '2026-10-16 09:00:00',
-  // ⚠️ 相对路径、不含 `/api/v2` 也不带鉴权头 ⇒ 前端绝不能拿它去拼 `<a href>`（本文件里
-  // 守这条：命中后取字节打的是 `/print-templates/T1/content`，不是这条 URL）。
-  content_url: '/print-templates/T1/content',
 };
 
 /**
@@ -675,6 +686,55 @@ describe('PrintPreviewDialog 自动选用一级客户绑定的模板', () => {
     });
   });
 
+  // 2026-10-16 review 第 2 轮 C-1 / 裁决 2：C-1 那五处不符**真的发生过**，而它的现场表现
+  // 是「一行 12px 黄色小字 + 零 toast + 零日志」—— 生产上完全不可发现。这条守的就是那层
+  // 可观测性：解析失败必须同时**上屏**（autoHint）且**进日志**（console.warn），二者缺一
+  // 就等于静默降级。
+  //
+  // ⚠️ 故意喂**本域第 1 轮那个平铺形状**（真后端从来没返回过它）：它是「后端形状变了 /
+  // schema 没跟上」最真实的替身，比随手编个缺字段的对象更有回归价值。
+  it('C-1：resolve 出参形状不对（少字段）⇒ 提示上屏 + console.warn，绝不静默降级', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      withDriverOptions();
+      boundMode = 'bound';
+      apiGetMock.mockImplementation(async (url: string) => {
+        if (url.includes('/print-templates/resolve')) {
+          // 旧版的**平铺**形状：后端 `PrintTemplateResolveOut` 是嵌套的，顶层这些键不存在
+          // ⇒ `printTemplateResolveSchema.parse` 抛 ⇒ 走 catch 的 else 分支。
+          return {
+            data: {
+              id: 'T1',
+              customer_id: 'C1',
+              customer_name: '法拉电子',
+              original_filename: 'fala_bound.xlsx',
+              file_size: BUILTIN.byteLength,
+              content_sha256: null,
+              version: 2,
+              updated_at: '2026-10-16 09:00:00',
+            },
+          };
+        }
+        return defaultGet(url);
+      });
+
+      const w = await mountDialog();
+      await waitUntil(() => w.find('.auto-hint').exists(), '自动选型失败的提示上屏');
+
+      // ① 上屏（不是静默）：文案要说清「自动选用出问题」而不是「没配模板」。
+      expect(w.find('.auto-hint').text()).toContain('自动选用该客户模板失败');
+      // ② 进日志：零日志的话生产上无从查起。
+      expect(warnSpy).toHaveBeenCalled();
+      // ③ 不谎报成「已绑定 / 已校验」，导出仍然禁用。
+      expect(w.text()).not.toContain('该客户绑定模板');
+      expect(exportDisabled(w)).toBe(true);
+      // ④ 不误标成「未绑定」（那是 21109 的形态，两者提示要让用户去不同的地方解决）。
+      expect(w.text()).not.toContain('未绑定打印模板');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it('bound_template_bytes_are_revalidated：库里那份字节坏掉时，不选中并把差异上屏', async () => {
     // 让 content 端点返回一份「C3 被改坏」的 xlsx：resolve 照样命中（后端只存字节不校验
     // 结构），但打开对话框这一步的复验必须把它挡住。
@@ -817,7 +877,11 @@ describe('PrintPreviewDialog 自动选用一级客户绑定的模板', () => {
         return {
           data: {
             ...BOUND_TEMPLATE_OUT,
-            original_filename: n === 1 ? 'slow_first.xlsx' : 'fast_second.xlsx',
+            // ⚠️ 改文件名必须改**嵌套那一层**（C-1：resolve 出参是 `{template, customer_name}`）。
+            template: {
+              ...BOUND_TEMPLATE_OUT.template,
+              original_filename: n === 1 ? 'slow_first.xlsx' : 'fast_second.xlsx',
+            },
           },
         };
       }

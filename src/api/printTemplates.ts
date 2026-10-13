@@ -1,11 +1,22 @@
 // 后端 print-templates 域（送货单打印模板）API。走 `@/api/http` 统一 axios 客户端。
 //
-// 2026-10-16 新建。后端契约（冻结版，与本文件逐字对齐）：
+// 2026-10-16 新建。端点表（URL / method / body 冻结，与本文件逐字对齐）：
 //   POST /print-templates                    → 上传 xlsx 并绑定一级客户（成功返 HTTP 201）
-//   GET  /print-templates?customer_id=&limit=&offset= → 列表（分页信封）
-//   GET  /print-templates/resolve?customer_id=      → 打印时按一级客户自动选用
+//   GET  /print-templates?customer_id=&limit=&offset= → 列表（**出参只有 `{items, total}`**）
+//   GET  /print-templates/resolve?customer_id=      → 打印时按一级客户自动选用（出参**嵌套**）
 //   GET  /print-templates/{id}/content              → 取 xlsx 字节（**裸响应体，不是信封**）
 //   POST /print-templates/{id}/delete              → 软删（OCC，body 必带 version）
+//
+// ⚠️ **上面这张表钉的是 URL / method / body，不是出参形状**（2026-10-16 review 第 2 轮 C-1
+// 的根因复盘）：第 1 轮加的那份 contract spec 断言的 `ROW` / `RESOLVE_ROW` fixture 是**前端
+// 自己手写的**，等于在验「前端代码符不符合前端自己的想象」—— 于是出参形状错了整整两轮没人
+// 拦（上传 / 列表 100% 不可用、自动选用 100% 失效）。真正的后端形状（`vo.rs`）是：
+//   - 行 VO `PrintTemplateOut`：**12 字段**，含 `kind`（恒 `DELIVERY_TEMPLATE`）/ `file_type`
+//     （恒 `XLSX` 短码）/ `content_type`（恒 xlsx MIME）/ `customer_name`（后端本轮新补）；
+//   - resolve 出参 `PrintTemplateResolveOut`：**嵌套** `{ template, customer_name }`，
+//     **没有 `content_url`**；
+//   - 列表出参 `PrintTemplateListOut`：**只有 `{items, total}`**，`limit` / `offset` 只作入参。
+// 出参形状的逐字对账由 `views/printTemplates/printTemplateSchema.ts` 承担，本文件只发请求。
 //
 // ⚠️ **URL 一律不带尾斜杠**（`/print-templates` 而不是 `/print-templates/`）：后端把各域
 // router nest 到 `/print-templates` 之下、域内首条路由注册在 `/`，nest 会把它折叠成 prefix
@@ -37,7 +48,7 @@
 // 出参类型一律 `import type` 取 schema 的 `z.infer` 派生类型（编译期擦除，不留
 // api → views 的**类型**依赖边）；只有 parse 需要运行时引入 schema 模块。
 
-import { api, cleanParams, normalizeListResult } from '@/api/http';
+import { api, cleanParams } from '@/api/http';
 import type {
   PrintTemplateData,
   PrintTemplateListResultData,
@@ -78,6 +89,7 @@ export interface DeletePrintTemplatePayload {
  * 为什么必须重包一个 `File` 而不是在 FormData 上设 content-type：multipart 的每段 content
  * type 是**跟着段走**的，改 form 的 header 改不到已经 append 进去的那一段。
  * 口径同 `api/files/objects.ts::normalizeUploadContentType`。
+ */
 
 /** 扩展名是不是 `.xlsx`（大小写不敏感）。调用方在**发请求之前**用它拦一道：
  *  坏模板不该占一次往返，更不该先落库再报错。
@@ -134,8 +146,14 @@ export async function uploadPrintTemplate(
  * `customer_id` 缺省 = 全部模板（不限客户）。⚠️ **该端点 MANAGER 独占**：打印对话框走的是
  * 下面那条 `resolve`，普通送货员打送货单时**不会**发这个请求。
  *
- * 守门在 queryFn，本函数**不 parse**。三个分页计数过 `normalizeListResult` 归一（后端各域
- * list 端点的计数类型不统一，见该函数的 doc）。
+ * 守门在 queryFn，本函数**不 parse**。
+ *
+ * ⚠️ **`limit` / `offset` 只作入参、不作回显**（2026-10-16 review 第 2 轮 C-1 连带查出的
+ * 第 5 处不符）：后端 `PrintTemplateListOut` 只有 `{items, total}`。本函数原先过
+ * `normalizeListResult`，它对缺失的 `limit` / `offset` 做 `Number(undefined)` ⇒ 产出 **`NaN`**，
+ * 而 zod 4 的 `z.number()` 拒 NaN ⇒ queryFn 的 `parse` 每屏必抛 ⇒ 列表恒空 + 每次弹
+ * 「加载失败」。故这里**不再**走 `normalizeListResult`，只对 `total` 保留一次 `Number()` 归一
+ * （后端 `total` 是裸 `i64`，当前是恒等；留着是防御层，与其它域 list 端点同款）。
  */
 export async function listPrintTemplates(
   params: ListPrintTemplatesParams = {},
@@ -143,8 +161,6 @@ export async function listPrintTemplates(
   const resp = await api.get<{
     items: PrintTemplateData[];
     total: string | number;
-    limit: string | number;
-    offset: string | number;
   }>('/print-templates', {
     params: cleanParams({
       customer_id: params.customer_id,
@@ -152,7 +168,7 @@ export async function listPrintTemplates(
       offset: params.offset,
     }),
   });
-  return normalizeListResult(resp.data);
+  return { items: resp.data.items, total: Number(resp.data.total) };
 }
 
 /**
@@ -164,8 +180,11 @@ export async function listPrintTemplates(
  * 抛成 `ApiError(21109, …)`，调用方按 `e.code === 21109` 分流成「让用户手动选一份」，而不是
  * 当失败弹错。
  *
- * 出参里的 `content_url` 是**相对路径**（不含 `/api/v2`、不带 Authorization 头）⇒ 只能当
- * 展示信息，取字节一律走 `fetchPrintTemplateContent(id)`。
+ * ⚠️ **出参是「信封套一行」而不是平铺**（2026-10-16 review 第 2 轮 C-1）：后端返
+ * `{ template: PrintTemplateOut, customer_name }`，调用方取字段一律走 `hit.template.id` /
+ * `hit.template.original_filename`。⚠️ **后端没有 `content_url` 这个字段**（原先那条关于
+ * 「相对路径不能塞 `<a href>`」的注释描述的是不存在的字段，已随本轮删除）：取字节只有
+ * `fetchPrintTemplateContent(template.id)` 这一条路。
  *
  * 守门在本层（没有 queryFn 承载：它是打印对话框打开时的一次性拉取）。
  */
@@ -183,8 +202,9 @@ export async function resolvePrintTemplate(customerId: string): Promise<PrintTem
  * 业务信封的响应是直接放行的（只有信封 `code !== 0` 才抛），所以这里拿到的就是字节本身。
  *
  * ⚠️ **必须走 `api` 实例，不能用裸 `fetch`**：裸 fetch 不会带 Authorization 头，后端按
- * 权限点 `delivery_note.print` 判定 ⇒ 直接 401。同理 `resolve` 出参里那条 `content_url`
- * 也不能塞进 `<a href>`（见该函数的 doc）。
+ * 权限点 `delivery_note.print` 判定 ⇒ 直接 401。这也是本域**没有**任何「拼一条相对路径塞进
+ * `<a href>`」的写法的原因（2026-10-16 review 第 2 轮 C-1：后端 resolve 出参里压根没有
+ * `content_url` 字段，此前那段相关注释描述的是幻觉）。
  *
  * @returns hucre `openXlsx` / `renderDeliveryNoteWorkbook` 吃的那份字节。
  */

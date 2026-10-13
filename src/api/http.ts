@@ -590,6 +590,14 @@ function makeEnvelopeErrorInterceptor(client: AxiosInstance) {
     // 取模板 xlsx 字节）落不到它 ⇒ 后端返 `{code:40102,...}` + HTTP 401 时直接
     // `throw ApiError(401, ...)`、**不进 reactive refresh**。两者读法不同：Blob 走
     // `payload.text()`，ArrayBuffer 走 `new TextDecoder().decode(buf)`。
+    //
+    // ⚠️ **ArrayBuffer 这一支只覆盖浏览器 XHR 适配器**（2026-10-16 review 第 2 轮 M-5 登记）：
+    // axios 的 **Node 适配器**在 `responseType:'arraybuffer'` 下返的是 **`Buffer`**（`Uint8Array`
+    // 的子类），`instanceof ArrayBuffer` 为 **false** ⇒ 落不到本分支，会被 `isEnvelope` 判 false
+    // 而抛成 `ApiError(401, …)`。本仓是纯浏览器 SPA（vite build + nginx，无 SSR / 无
+    // Node 侧调用 `api` 实例的路径），生产不受影响。⚠️ **别因为「读起来更通用」就把这里改成
+    // `ArrayBuffer.isView(payload)`** —— 那会让本文件对「Node 下要不要也走 envelope 判定」这个
+    // 本仓根本没回答的问题提前表态。
     let payload: unknown = error.response?.data;
     if (payload instanceof Blob) {
       try {

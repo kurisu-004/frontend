@@ -82,6 +82,12 @@ export const usePrintTemplatesStore = defineStore('print-templates', () => {
    * 翻页（理由见 `LIST_PAGE_SIZE`），所以 `total > rows.length` 的唯一成因就是「后端 clamp
    * 上限被调低 / 将来绑定维度从一对一放宽」⇒ 那时表格会**静默截断**。把它渲染到工具栏，
    * 截断当场可见。
+   *
+   * ⚠️ **「共 N 个一级客户」这个页面文案依赖一条当前恰好成立的等价**（2026-10-16 review
+   * 第 2 轮 M-6 登记）：`total` 数的是**模板行数**，页面却把它说成「一级客户数」。两者在
+   * 「一份模板 ↔ 一个一级客户」的后端约束下相等（模板行数 = 已绑定的 L1 数），所以措辞
+   * 现在成立。**绑定维度一旦放宽（一个 L1 多份模板），这个文案会先于数据出错** —— 那时要改
+   * 的是这里与 `PrintTemplateList.vue` 的工具栏，不是 `LIST_PAGE_SIZE`。
    */
   const total = computed<number>(() => listQuery.data.value?.total ?? 0);
   const loading = listQuery.isFetching;
@@ -199,9 +205,10 @@ export const usePrintTemplatesStore = defineStore('print-templates', () => {
   /**
    * 下载模板字节。
    *
-   * ⚠️ 走 `fetchPrintTemplateContent`（axios、带 Authorization 头）而不是出参里那条
-   * `content_url` —— 后者是不含 `/api/v2` 前缀的相对路径、也不带鉴权头，塞进 `<a href>`
-   * 必然 401/404。
+   * ⚠️ 走 `fetchPrintTemplateContent`（axios、`baseURL=/api/v2`、带 Authorization 头），
+   * 不拼任何相对路径：本域**没有**「把某条 URL 塞进 `<a href>`」的写法
+   * （2026-10-16 review 第 2 轮 C-1：后端 resolve 出参里压根没有 `content_url` 字段，
+   * 原先那段「不能用它因为它是相对路径」的注释描述的是幻觉）。
    */
   async function download(row: PrintTemplateData): Promise<void> {
     downloadingRowId.value = row.id;

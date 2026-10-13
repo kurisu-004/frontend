@@ -24,6 +24,8 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const refreshTokensMock = vi.fn();
 vi.mock('@/api/iam', () => ({
@@ -33,7 +35,6 @@ vi.mock('@/api/iam', () => ({
   me: vi.fn(),
 }));
 
-import axios from 'axios';
 import type { AxiosError } from 'axios';
 import { api } from '../http';
 
@@ -168,14 +169,22 @@ describe('http 错误拦截器 — 二进制 error body（2026-10-16 MAJOR-4）'
     }
   });
 
-  it('B5：文件头登记的纪律 —— 新增 `responseType` 非 json 的端点时，本文件必须扩用例', async () => {
-    // 把「源码里出现过哪些 responseType」列出来：出现新值却没有对应分支时，
-    // 这条会提醒（不是自动红，而是让漏配在 review 里被看见）。
-    const src = readFileSync('src/api/http.ts', 'utf8');
-    expect(src).toContain("payload instanceof Blob");
+  // ⚠️ **这条只证明「两个分支的字面量都还在」**，不证明别的（2026-10-16 review 第 2 轮 M-3）：
+  //   - 它**不**守「新增第三种 `responseType` 时本文件必须扩用例」—— 新增一种 responseType
+  //     时下面三条断言一条都不会红。别把这标题读成一个自动保证。
+  //   - 真正的行为守门是 B1–B4（Blob / ArrayBuffer × 40102 / 40105）。这条只是粗筛。
+  //
+  // ⚠️ **不能用全局 `URL` 拼相对路径**（同上 M-3）：本文件带 `// @vitest-environment happy-dom`
+  //   pragma（要真的 Blob 实例），而 happy-dom 注入的全局 `URL` 会把 `new URL('../http.ts',
+  //   import.meta.url)` 解析到它自己的 `http://localhost:3000/` 上（**忽略传入的 base**），
+  //   于是 `readFileSync` 抛「The URL must be of scheme file」。改走 `node:url` 的
+  //   `fileURLToPath` + `node:path` 的 `resolve/dirname`，两种环境下都锚在**本文件**所在目录，
+  //   换 cwd 跑也不会炸（原先的 `readFileSync('src/api/http.ts', 'utf8')` 是 CWD 相对的）。
+  it('B5：二进制 error body 的两个解包分支字面量都在（Blob / ArrayBuffer）', () => {
+    const src = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../http.ts'), 'utf8');
+    expect(src).toContain('payload instanceof Blob');
     expect(src).toContain('payload instanceof ArrayBuffer');
     // 反向：本文件不得自己抄一份 isEnvelope 判据（那是要在 http.ts 里改的那一处）。
     expect(src).toContain('function isEnvelope');
-    expect(axios.isAxiosError).toBeDefined();
   });
 });

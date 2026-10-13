@@ -138,6 +138,10 @@ export const ADMIN_MENUS: MenuNode[] = [
     code: 'scan_badge',
     title: '扫码台',
     path: '/scan/badge',
+    // ⚠️ **与后端 seed 的已知漂移（本轮刻意不改）**（2026-10-16 review 第 2 轮裁决 1 登记）：
+    // 后端 `seeds/menu.sql` 给这一行的是 `Promotion`，这里写的是 `Operation`。改与不改都不
+    // 影响可达性或排序（icon 只是菜单前面的装饰字符），**刻意留白**：改它会把一个与本任务
+    // 无关的改动混进 diff。对齐时连同下面 `production_group` 的 sort_order 一起做。
     icon: 'Operation',
     sort_order: 13,
     children: [],
@@ -255,6 +259,10 @@ export const ADMIN_MENUS: MenuNode[] = [
     title: '生产管理',
     path: null,
     icon: 'Operation',
+    // ⚠️ **与后端 seed 的已知漂移（本轮刻意不改）**（2026-10-16 review 第 2 轮裁决 1 登记）：
+    // 后端 `seeds/menu.sql` 给 `production_group` 的是 **27**，这里写的是 **26**。
+    // 对页面无影响（同级分组之间的相对次序没变），**刻意留白**：改它会把一个与本任务无关的
+    // 改动混进 diff。对齐时连同上面 `scan_badge` 的 icon 一起做。
     sort_order: 26,
     children: [
       {

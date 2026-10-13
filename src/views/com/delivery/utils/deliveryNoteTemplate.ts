@@ -12,9 +12,10 @@
 //                留着是为了让「再换数据源」这件事将来不动任何渲染代码。
 //
 // ⚠️ **`api` 形态必须走 axios，不能用裸 `fetch`**：`GET /{id}/content` 要 Authorization 头
-//（后端按权限点 `delivery_note.print` 判定），裸 `fetch` 带不上 ⇒ 401。同理 `resolve`
-// 出参里那条 `content_url` 是**不含 `/api/v2` 的相对路径**、也不带鉴权头，不能塞进
-// `<a href>` —— 取字节一律走 `api/printTemplates.ts::fetchPrintTemplateContent(id)`。
+//（后端按权限点 `delivery_note.print` 判定），裸 `fetch` 带不上 ⇒ 401。取字节一律走
+// `api/printTemplates.ts::fetchPrintTemplateContent(id)` —— ⚠️ 后端 resolve 出参里**没有**
+// `content_url` 这个字段（2026-10-16 review 第 2 轮 C-1 订正：本文件原先那条关于它的注释
+// 描述的是一个不存在的字段），本域因此也没有任何「拼相对路径塞 `<a href>`」的写法。
 //
 // ⚠️ 校验失败**不静默**：assertTemplateMatches 返回逐条差异，由对话框把「导出」按钮
 // 置 disabled 并把差异原文摆进 tooltip。用户改坏了一列位还导出成功，得到的送货单在

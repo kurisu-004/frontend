@@ -90,19 +90,27 @@ async function brokenTemplateFile(): Promise<File> {
   return new File([exact.buffer as ArrayBuffer], 'broken.xlsx', { type: '' });
 }
 
-/** 一条逐字合法的列表行。 */
+/**
+ * 一条逐字合法的列表行（后端 `PrintTemplateOut` 12 字段）。
+ *
+ * ⚠️ 2026-10-16 review 第 2 轮 C-1：`kind` / `content_type` 两个字段原先漏了
+ * （后端真给的），且 `file_type` 填成了 MIME —— 真实取值是**短码 `XLSX`**，
+ * xlsx 的规范 MIME 在另一个字段 `content_type` 上。
+ */
 function row(over: Partial<PrintTemplateData> = {}): PrintTemplateData {
   return {
     id: 'T1',
     customer_id: 'C1',
-    customer_name: '法拉电子',
+    kind: 'DELIVERY_TEMPLATE',
+    file_type: 'XLSX',
     original_filename: 'fala.xlsx',
     file_size: 12345,
-    file_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    content_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     content_sha256: 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90',
     version: 3,
     created_at: '2026-10-16 09:00:00',
     updated_at: '2026-10-16 09:30:00',
+    customer_name: '法拉电子',
     ...over,
   };
 }
@@ -131,7 +139,7 @@ beforeEach(() => {
   setupApp();
   uploadMock.mockResolvedValue(row());
   deleteMock.mockResolvedValue(undefined);
-  listMock.mockResolvedValue({ items: [row()], total: 1, limit: 200, offset: 0 });
+  listMock.mockResolvedValue({ items: [row()], total: 1 });
 });
 
 describe('usePrintTemplatesStore 上传前的两道闸（核心判据）', () => {
@@ -222,7 +230,7 @@ describe('usePrintTemplatesStore 上传失败归因（2026-10-16 review 第 1 �
 
 describe('usePrintTemplatesStore 列表与软删', () => {
   it('L1：`total` 透出（不翻页 ⇒ 后端 clamp 截断必须看得见，见 MINOR-13）', async () => {
-    listMock.mockResolvedValue({ items: [row()], total: 7, limit: 200, offset: 0 });
+    listMock.mockResolvedValue({ items: [row()], total: 7 });
     const store = usePrintTemplatesStore();
     store.query.openGate();
     await tick();
