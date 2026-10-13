@@ -326,25 +326,43 @@ const routes: RouteRecordRaw[] = [
         },
       },
       {
-        // 2026-10-13 新增：交期汇总邮件定时任务管理页。后端 mail_digest 域，5 个端点
-        // 全部 MANAGER 独占（权限走菜单 code，不另加 allowRoles）。
+        // 2026-10-16 新增：邮件中心页（`/mail`，页内两个 tab：邮箱设置 / 交期汇总）。
+        // 后端 scheduled_task 域的 mail 子域（`/api/v2/mail/*` 与 `/api/v2/mail-digest/*`，
+        // 全部 MANAGER 独占 —— 权限走菜单 code，不另加 allowRoles）。
         //
-        // ⚠️ **一级分组菜单「定时任务/邮件」（code `mail_group`、path NULL）没有前端路由**
+        // ⚠️ **一级分组菜单「定时任务」（code `scheduled_task`、path NULL）没有前端路由**
         // —— 它由后端菜单树下发，渲染成 `el-sub-menu`（见 `MenuTreeItem.vue` 的分支判定：
         // 「有 path 且无 children」才渲染成可点的 `el-menu-item`）。照 `order_group` /
         // `auth_group` 等既有分组节点的既有做法。
         //
-        // ⚠️ `menuCode` 必须与后端 `seeds/menu.sql` 的 `mail_digest` code **逐字一致**：
+        // ⚠️ `menuCode` 必须与后端 `seeds/menu.sql` 的 `mail` code **逐字一致**：
         // 不一致时路由守卫第 3 条（menuCode 不在菜单树 → 重定向到菜单树里一个有 path
         // 的节点）会把用户踢出本页，且现象是「点菜单闪一下又回到别的页」。
-        path: 'mail/digest',
-        name: 'MailDigestSettings',
-        component: () => import('@/views/mail/digest/MailDigestSettings.vue'),
+        //
+        // ⚠️ **为什么 path 是 `/mail` 而不是 `/mail/digest`**：邮件类型改用**页内 tab**
+        // 区分（见 `views/mail/MailCenter.vue`），邮件类型不再占菜单层级。path 同时是
+        // 浏览器可见的书签 URL 与后端菜单表的 `path` 字段，它对应的是「功能页」而不是
+        // 「某一个 tab」——将来加「周报推送」这类新类型时不该连带改书签 URL。
+        path: 'mail',
+        name: 'MailCenter',
+        component: () => import('@/views/mail/MailCenter.vue'),
         meta: {
-          title: '交期汇总邮件',
+          title: '邮件',
           icon: 'Message',
-          menuCode: 'mail_digest',
+          menuCode: 'mail',
         },
+      },
+      {
+        // 2026-10-16：老书签兼容路由。2026-10-13 上线时交期汇总的入口是 `/mail/digest`
+        // （path 同时是浏览器书签 URL 与后端菜单表的 path 字段，现场已有人收藏 / 把它
+        // 写进运维文档）。邮件类型改成页内 tab 后入口是 `/mail`，直接删掉这条会让所有
+        // 老链接 404（404 页面不会告诉用户「东西搬到哪儿了」）。
+        //
+        // 刻意**不带 `meta.menuCode`**：它不是菜单项、只是重定向。守卫第 3 条（menuCode
+        // 不在菜单树 → 踢回首个有 path 的节点）对没有 menuCode 的路由是放行的（`target`
+        // 为空 ⇒ 继续放行），带上 code 反而会让守卫把这次重定向拦成一次「无权跳转」。
+        path: 'mail/digest',
+        redirect: '/mail',
       },
       {
         path: 'customers',

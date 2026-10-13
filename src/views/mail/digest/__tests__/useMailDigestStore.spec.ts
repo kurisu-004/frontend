@@ -52,6 +52,14 @@ vi.mock('@/api/mailDigest', () => ({
   sendMailDigestNow: (...args: unknown[]) => sendMailDigestNowMock(...args),
 }));
 
+// 2026-10-16：邮箱列表（`/api/v2/mail/accounts`）—— 「发信邮箱」下拉的选项来源。
+const listMailAccountsMock = vi.fn();
+
+vi.mock('@/api/mailAccounts', () => ({
+  fetchMailMeta: vi.fn(),
+  listMailAccounts: (...args: unknown[]) => listMailAccountsMock(...args),
+}));
+
 import { ElMessage } from 'element-plus';
 import { useMailDigestStore } from '../composables/useMailDigestStore';
 import { MAIL_DIGEST_ERROR_CODES } from '../mailDigestErrorText';
@@ -74,6 +82,8 @@ const CONFIG: MailDigestConfigData = {
   upcoming_days: 14,
   visible_columns: ['part_no', 'customer'],
   subject_template: null,
+  // 2026-10-16 新增：发信邮箱 id（雪花 ID ⇒ JSON string）。
+  sender_account_id: '9000000000000902',
   smtp_configured: true,
   created_at: '2026-10-01 08:00:00',
   updated_at: '2026-10-02 08:00:00',
@@ -128,16 +138,30 @@ const META = {
     upcoming_days: 7,
     visible_columns: ['part_no'],
     subject_template: null,
+    sender_account_id: null,
   },
   upcoming_days_range: { min: 1, max: 60 },
-  smtp: {
-    configured: true,
-    host: 'smtp.example.com',
-    port: 465,
-    from_address: 'noreply@example.com',
-    from_name: '工厂 ERP',
-  },
 };
+
+/** 2026-10-16：SMTP 改由邮箱账号实体承载（`/api/v2/mail/accounts`），本页多挂一条
+ *  `qk.mailAccounts()` 的 query 给「发信邮箱」下拉供选项。与「邮箱设置」tab 共用同一条
+ *  缓存，切 tab 不重新打。 */
+const ACCOUNTS = [
+  {
+    id: '9000000000000902',
+    version: 1,
+    name: '采购部邮箱',
+    preset: 'NET_EASE_163',
+    preset_label: '网易 163',
+    account: 'purchase@example.com',
+    host: 'smtp.163.com',
+    port: 465,
+    tls_mode: 'WRAPPED',
+    is_default: true,
+    created_at: '2026-10-16 08:00:00',
+    updated_at: '2026-10-16 08:00:00',
+  },
+];
 
 function logRow(over: Partial<MailDigestLogData> = {}): MailDigestLogData {
   return {
@@ -189,6 +213,8 @@ beforeEach(() => {
   fetchMailDigestConfigMock.mockResolvedValue(CONFIG);
   fetchMailDigestMetaMock.mockResolvedValue(META);
   listMailDigestLogsMock.mockResolvedValue(LOGS);
+  // 2026-10-16：默认给一条邮箱（默认档 = 「有邮箱、已选中」）；各用例按需覆盖。
+  listMailAccountsMock.mockResolvedValue({ items: ACCOUNTS });
   saveMailDigestConfigMock.mockResolvedValue(CONFIG);
   previewMailDigestMock.mockResolvedValue({
     subject: '交期汇总 2026-10-13',
@@ -234,9 +260,11 @@ describe('useMailDigestStore — 不变量（闸门 / 切片解包 / $dispose）
 
     expect(store.query.logsTotal).toBe(1);
     expect(store.query.items).toHaveLength(1);
-    expect(store.query.smtpConfigured).toBe(true);
-    expect(store.query.smtpMissing).toBe(false);
     expect(store.query.columnOptions).toHaveLength(2);
+    // 2026-10-16：SMTP 判据已换成「邮箱实体」那一套（见 SND3 / SND4）。
+    expect(store.query.senderAccounts).toHaveLength(1);
+    expect(store.query.noAccounts).toBe(false);
+    expect(store.query.senderMissing).toBe(false);
     expect(store.query.upcomingDaysRange).toEqual({ min: 1, max: 60 });
 
     store.query.logsPage = 3;
@@ -586,28 +614,61 @@ describe('useMailDigestStore — 预览与立即发送', () => {
     expect(ElMessage.error).toHaveBeenCalledWith('邮件发送失败，请检查 SMTP 配置与收件人地址');
   });
 
-  it('SND3：SMTP 未配置时 meta 给出 smtpMissing=true（壳据此禁用「立即发送」并弹告警）', async () => {
-    fetchMailDigestMetaMock.mockResolvedValue({
-      ...META,
-      smtp: { ...META.smtp, configured: false },
-    });
+  it('SND3：一条邮箱都没有时 noAccounts=true（壳据此禁用「立即发送」并弹告警）', async () => {
+    listMailAccountsMock.mockResolvedValue({ items: [] });
     const store = useMailDigestStore();
     store.query.openGate();
     await tick();
 
-    expect(store.query.smtpMissing).toBe(true);
+    expect(store.query.accountsLoaded).toBe(true);
+    expect(store.query.noAccounts).toBe(true);
+    expect(store.query.senderMissing).toBe(false);
     expect(store.actions.sendDisabled).toBe(true);
   });
 
-  it('SND4：meta 还没回来时 smtpMissing=false（首屏不闪假告警），sendDisabled 只看「明确未配」', async () => {
+  it('SND4：邮箱列表还在飞时 noAccounts/senderMissing 都是 false（首屏不闪假告警）', async () => {
     const store = useMailDigestStore();
     store.query.openGate();
-    // meta 请求挂在不 resolve 的 promise 上
-    fetchMailDigestMetaMock.mockImplementation(() => new Promise(() => undefined));
+    // 邮箱列表请求挂在不 resolve 的 promise 上
+    listMailAccountsMock.mockImplementation(() => new Promise(() => undefined));
     await tick();
 
-    expect(store.query.smtpConfigured).toBeNull();
-    expect(store.query.smtpMissing).toBe(false);
+    expect(store.query.accountsLoaded).toBeNull();
+    expect(store.query.noAccounts).toBe(false);
+    expect(store.query.senderMissing).toBe(false);
     expect(store.actions.sendDisabled).toBe(false);
+  });
+
+  it('SND5：有邮箱但本条配置没选时 senderMissing=true ⇒ **「立即发送」禁用**（后端无回落分支）', async () => {
+    fetchMailDigestConfigMock.mockResolvedValue({ ...CONFIG, sender_account_id: null });
+    listMailAccountsMock.mockResolvedValue({ items: ACCOUNTS });
+    const store = useMailDigestStore();
+    store.query.openGate();
+    await tick();
+
+    expect(store.query.senderMissing).toBe(true);
+    // ⚠️ 禁用：后端 `mail_digest::service::resolve_sender` 对 `sender_account_id IS NULL`
+    // 直接返 21701（503），**没有**回落到默认邮箱的分支 —— 「不选也能发」是假承诺，
+    // 而「立即发送」是不可撤销操作。
+    expect(store.actions.sendDisabled).toBe(true);
+  });
+
+  it('SND5b：选了发信邮箱 ⇒ sendDisabled=false（发得出去，不该灰着）', async () => {
+    listMailAccountsMock.mockResolvedValue({ items: ACCOUNTS });
+    const store = useMailDigestStore();
+    store.query.openGate();
+    await tick();
+
+    expect(store.query.senderMissing).toBe(false);
+    expect(store.actions.sendDisabled).toBe(false);
+  });
+
+  it('SND6：配置里的 sender_account_id 原样 hydrate 进表单（雪花 ID 不过 Number()）', async () => {
+    listMailAccountsMock.mockResolvedValue({ items: ACCOUNTS });
+    const store = useMailDigestStore();
+    store.query.openGate();
+    await tick();
+
+    expect(store.query.form.sender_account_id).toBe('9000000000000902');
   });
 });

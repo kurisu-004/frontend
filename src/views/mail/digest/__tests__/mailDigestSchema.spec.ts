@@ -45,6 +45,8 @@ const CONFIG = {
   upcoming_days: 7,
   visible_columns: ['part_no', 'customer'],
   subject_template: null,
+  // 2026-10-16 新增：发信邮箱 id（雪花 ID ⇒ JSON string；null = 未选）。
+  sender_account_id: '9000000000000902',
   smtp_configured: true,
   created_at: '2026-10-01 08:00:00',
   updated_at: '2026-10-02 08:00:00',
@@ -177,23 +179,25 @@ describe('mailDigestMetaSchema / mailDigestConfigDefaultsSchema（GET /meta 守�
       upcoming_days: 7,
       visible_columns: ['part_no'],
       subject_template: null,
+      sender_account_id: null,
     },
     upcoming_days_range: { min: 1, max: 60 },
-    smtp: {
-      configured: false,
-      host: 'smtp.example.com',
-      port: 465,
-      from_address: 'noreply@example.com',
-      from_name: '工厂 ERP',
-    },
   };
 
-  it('SMTP 未配置时 smtp.configured 为 false，其余字段仍返（不整段空）', () => {
+  it('2026-10-16：smtp 段已从出参删除，defaults 里带上了发信邮箱 id', () => {
     const parsed = mailDigestMetaSchema.parse(META);
-    expect(parsed.smtp.configured).toBe(false);
-    expect(parsed.smtp.host).toBe('smtp.example.com');
+    // SMTP 改由邮箱账号实体承载（views/mail/accounts/），meta 里不再有部署级 SMTP 段。
+    // 断言用的是「键不存在」而不是「值为 undefined」：后者在 `.strict()` 下也会通过，
+    // 万一有人把它改成 `.passthrough()` 就漏掉了这条不变量。
+    expect(Object.keys(parsed)).not.toContain('smtp');
+    expect(parsed.defaults.sender_account_id).toBeNull();
     expect(parsed.upcoming_days_range).toEqual({ min: 1, max: 60 });
     expect(parsed.frequencies).toHaveLength(4);
+  });
+
+  it('2026-10-16：后端若仍下发 smtp 段，守门当场抛（不是静默 strip）', () => {
+    const bad = { ...META, smtp: { configured: true } };
+    expect(() => mailDigestMetaSchema.parse(bad)).toThrow();
   });
 
   it('频率选项缺一个 needs_* 即抛（页面按它显隐，漏一个就少显一项输入）', () => {
@@ -284,6 +288,7 @@ function baseForm(over: Partial<MailDigestFormModel> = {}): MailDigestFormModel 
     upcoming_days: 7,
     visible_columns: ['part_no'],
     subject_template: '',
+    sender_account_id: null,
     ...over,
   };
 }

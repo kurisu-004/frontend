@@ -12,6 +12,12 @@
 // 改文案只改本文件一处。
 
 import { contractDriftErrorText } from '@/utils/contractDriftError';
+// 2026-10-16：邮箱域的三个码（21706 / 21707 / 21708）在**本页也会出现** —— 本页的配置
+// 里存着 `sender_account_id`，所以「保存 / 立即发送」可能因「那条邮箱没了（21706）」被
+// 拒。它们的**码值与文案都在邮箱域那一份**（`views/mail/accounts/mailAccountErrorText.ts`，
+//  见该文件头「为什么这三个码归它」），本页只**查表**不重写 —— 重写就是同一句人话的两个
+// 真源，后端改码或改措辞时两处会各自漂。
+import { MAIL_ACCOUNT_ERROR_TEXT } from '@/views/mail/accounts/mailAccountErrorText';
 
 /** 契约漂移时给管理员看的固定文案：不含 Zod 的 issues 结构，细节只进 console。 */
 export const MAIL_DIGEST_CONTRACT_DRIFT_TEXT = '服务端返回的数据格式不符合预期，请联系管理员';
@@ -58,7 +64,7 @@ export const MAIL_DIGEST_ERROR_CODES = {
 export const MAIL_DIGEST_ERROR_TEXT: Partial<Record<number, string>> = {
   [MAIL_DIGEST_ERROR_CODES.VERSION_CONFLICT]: '配置已被他人修改，请刷新后重试',
   [MAIL_DIGEST_ERROR_CODES.SMTP_NOT_CONFIGURED]:
-    'SMTP 未配置（需设 MAIL_SMTP_USERNAME / MAIL_SMTP_PASSWORD / MAIL_FROM_ADDRESS）',
+    '没有可用的发信邮箱，请到「邮件 → 邮箱设置」新增一条邮箱账号，并在本页选择它',
   [MAIL_DIGEST_ERROR_CODES.SMTP_SEND_FAILED]: '邮件发送失败，请检查 SMTP 配置与收件人地址',
   [MAIL_DIGEST_ERROR_CODES.INVALID_RECIPIENT]: '收件人邮箱格式不合法，请检查收件人列表',
   [MAIL_DIGEST_ERROR_CODES.INVALID_FREQUENCY_COMBO]:
@@ -70,7 +76,10 @@ export const MAIL_DIGEST_ERROR_TEXT: Partial<Record<number, string>> = {
  * 把本域请求抛出的异常转成可直接展示的文案（供 `ElMessage` toast 或表格内文本）。
  *
  * 分流顺序（顺序有讲究）：
- *   1. 命中业务码表 ⇒ 返表里的人话（后端 message 只进日志）；
+ *   1. 命中业务码表 ⇒ 返表里的人话（后端 message 只进日志）。**本域表查不到时再看邮箱域
+ *      那张表**（21706 / 21707 / 21708）—— 本页的 `sender_account_id` 指向邮箱域的行，
+ *      写端点被拒时抛的是邮箱域的码；只查本域表的话，用户点保存看到的是一句兜底的
+ *      「保存失败」，完全不知道「你选的那个邮箱已经不存在了」。
  *   2. 其余异常交给 `contractDriftErrorText` —— 它负责识别 ZodError（契约漂移，给固定
  *      文案 + console.error 原始 issues）与普通 Error（返 `e.message`，缺 message 时
  *      回落 `fallback`）。
@@ -78,7 +87,7 @@ export const MAIL_DIGEST_ERROR_TEXT: Partial<Record<number, string>> = {
 export function mailDigestErrorText(e: unknown, fallback: string): string {
   const code = (e as { code?: number } | null | undefined)?.code;
   if (typeof code === 'number') {
-    const mapped = MAIL_DIGEST_ERROR_TEXT[code];
+    const mapped = MAIL_DIGEST_ERROR_TEXT[code] ?? MAIL_ACCOUNT_ERROR_TEXT[code];
     if (mapped) return mapped;
   }
   return contractDriftErrorText(e, {

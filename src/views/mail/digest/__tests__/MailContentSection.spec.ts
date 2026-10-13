@@ -83,6 +83,7 @@ function baseForm(over: Partial<MailDigestFormModel> = {}): MailDigestFormModel 
     upcoming_days: 7,
     visible_columns: ['part_no'],
     subject_template: '',
+    sender_account_id: null,
     ...over,
   };
 }

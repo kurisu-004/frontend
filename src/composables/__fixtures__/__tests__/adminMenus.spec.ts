@@ -46,6 +46,11 @@ function flatten(nodes: MenuNode[]): MenuNode[] {
  *   - 2026-10-14（review 第 1 轮 N-2）：上面两个新 code 此前**只进了 fixture、没进本
  *     用例**的登记。
  *   - 2026-10-14（RBAC 控制面板）：auth_group 新增 roles_list（path /iam/roles）。
+ *   - 2026-10-16（定时任务域改名）：上面那两个 code 改掉了 —— `mail_group` →
+ *     `scheduled_task`（分组管的是定时任务这一整类后台作业，邮件只是它的第一个子域）、
+ *     `mail_digest` → `mail`（邮件类型改用页内 tab 区分，不再占菜单层级，path 随之
+ *     /mail/digest → /mail）。**改了 code 就必须改这里**：漏改的症状是用例红在
+ *     `covers all menuCodes exactly` 上。
  *
  * ⚠️ **不再维护「总数 N」这个数字**：自本轮起数量已由穷尽比较隐含（清单多一个、少一个
  * 都会红），原先的 `has exactly 32 codes` 与注释里的 `30 → 32` 箭头一并删除 —— 再维护
@@ -84,8 +89,8 @@ const COVERED_CODES: readonly string[] = [
   'outsource_quotes_list',
   'outsource_send_receive_list',
   'floor_group',
-  'mail_group',
-  'mail_digest',
+  'scheduled_task',
+  'mail',
   'settings_root',
   'work_types_list',
   'processes_list',
@@ -170,6 +175,50 @@ describe('ADMIN_MENUS', () => {
       const roles = children.find((c) => c.code === 'roles_list')!;
       const shelves = children.find((c) => c.code === 'shelves_list')!;
       expect(roles.sort_order).toBeGreaterThan(shelves.sort_order);
+    });
+  });
+
+  // 2026-10-16 新增：`scheduled_task` / `mail` 两个节点的定位断言。改名的这一轮最容易
+  // 漏的是「fixture 改了、router 没改」（或反过来）—— code 与 path 两边各写一份字面量，
+  // 对不上时运行时症状是「点菜单闪一下又回到别的页」（守卫第 3 条），不是编译错误。
+  describe('scheduled_task / mail 节点（定时任务 → 邮件）', () => {
+    const all = () => flatten(ADMIN_MENUS);
+    const group = () => all().find((n) => n.code === 'scheduled_task')!;
+    const leaf = () => all().find((n) => n.code === 'mail')!;
+
+    it('一级分组 scheduled_task「定时任务」path 为 null（渲染成 el-sub-menu）', () => {
+      expect(group().title).toBe('定时任务');
+      expect(group().path).toBeNull();
+      expect(group().children.map((c) => c.code)).toEqual(['mail']);
+    });
+
+    it("二级 mail「邮件」path 为 /mail（与 router 的 `path: 'mail'` 逐字一致）", () => {
+      expect(leaf().title).toBe('邮件');
+      expect(leaf().path).toBe('/mail');
+      expect(leaf().parent_id).toBe(group().id);
+    });
+
+    it('两个 icon 都在 MenuTreeItem 的 ICON_MAP 白名单内（查不到会静默不显示）', () => {
+      expect(ICON_MAP[group().icon!]).toBeDefined();
+      expect(ICON_MAP[leaf().icon!]).toBeDefined();
+    });
+
+    it('id 用后端 seed 的新 id、不复用软删的旧 id（9000000000000014 / …902）', () => {
+      // 旧的两行已被后端软删；id 是唯一能把「软删 + 改名」与「原地改名」区分开的标识。
+      expect(group().id).toBe('9000000000000014');
+      expect(leaf().id).toBe('9000000000000902');
+    });
+
+    it('**数组物理位置**落在 floor_group(40) 与 settings_root(50) 之间', () => {
+      const codes = ADMIN_MENUS.map((n) => n.code);
+      expect(codes.indexOf('scheduled_task')).toBe(codes.indexOf('floor_group') + 1);
+      expect(codes.indexOf('scheduled_task') + 1).toBe(codes.indexOf('settings_root'));
+    });
+
+    it('旧 code 已彻底下线（fixture 里不得残留 mail_group / mail_digest）', () => {
+      const codes = all().map((n) => n.code);
+      expect(codes).not.toContain('mail_group');
+      expect(codes).not.toContain('mail_digest');
     });
   });
 

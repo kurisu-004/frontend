@@ -61,6 +61,11 @@ export interface SaveMailDigestConfigPayload {
   visible_columns: string[];
   /** 标题模板；null = 用后端默认标题（页面留空即 null）。 */
   subject_template: string | null;
+  /** 2026-10-16 新增：发信邮箱 id（`/api/v2/mail/accounts` 一行的雪花 id，JSON string）。
+   *  null = 未选。**保存合法**（用户可能只想先改收件人清单），但**发不出去**：后端
+   *  `resolve_sender` 对 null 直接返 21701（503），没有回落默认邮箱的分支。所以页面顶部
+   *  给告警、「立即发送」按钮给禁用，而**不拦保存**。 */
+  sender_account_id: string | null;
 }
 
 /** POST /mail-digest/preview 与 POST /mail-digest/send 共用的请求体。
