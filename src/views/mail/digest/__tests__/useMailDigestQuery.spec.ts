@@ -21,7 +21,10 @@
 //   - L1：`GET /logs` 的**行**少 `error_message`（`.strict()` 下失败行整表空，管理员看不到
 //     「为什么失败」，而失败正是这条日志存在的理由）；
 //   - S0：三条 hook 收到**好响应**时数据落进 data（负向用例的基线：只有坏响应守卫、没有
-//     好响应基线的话，「请求压根没发出去 / 闸门没开」也是全绿）。
+//     好响应基线的话，「请求压根没发出去 / 闸门没开」也是全绿）；
+//   - G1（2026-10-16 补）：`enabled=false` 时三条 hook 都**零网络请求**（闸门由 store 的
+//     `openGate()` 在 onMounted 末尾开，避免页面 setup 期就抢跑）。这条同时是下面 `mount()`
+//     必须把闸门真流进 hook 的理由。
 //
 // 环境：happy-dom（vue-query 的 `useQuery` 需要一个 app 上下文跑 watch）；
 // element-plus 桩成 no-op（真 `ElMessage` 在 node env 会因 `document is not defined` 抛）。
@@ -133,14 +136,29 @@ const LOG_LIST = { items: [LOG_ROW], total: 1, limit: 20, offset: 0 };
 let testApp: ReturnType<typeof createApp>;
 let testQueryClient: QueryClient;
 
-function mount<T>(enabled: MaybeRefOrGetter<boolean>, use: () => T) {
+/**
+ * 把一个 query hook 挂进独立 `effectScope`（`scope.stop()` 即卸载），返回 `{ scope, comp }`。
+ *
+ * ⚠️ **第一个形参必须真的流进 hook**（经下面三条适配器转成 hook 的 `{ enabled }` 入参），
+ *   闸门用例 G1 全靠它成立。形参若被收下却不用、各调用点各写各的 `enabled: ref(true)`，
+ *   `mount(ref(false), …)` 会**绿着骗人**：读者以为在测闸门，实际测的是「闸门写死 true」。
+ */
+function mount<T>(enabled: MaybeRefOrGetter<boolean>, use: (e: MaybeRefOrGetter<boolean>) => T) {
   const scope = effectScope();
   let comp: T | undefined;
   scope.run(() => {
-    comp = testApp.runWithContext(() => use());
+    comp = testApp.runWithContext(() => use(enabled));
   });
   return { scope, comp: comp! };
 }
+
+// 三条 hook 的「只吃闸门」适配器：hook 自身的入参是**对象形**（`{ enabled }` /
+// `{ params, enabled }`），不是位置形 `(enabled)`，所以不能把 hook 函数直接丢给 `mount`。
+// `params` 传普通对象即可：本 spec 不翻页，包一层 ref 只会让每个调用点多造一个没人改的 ref。
+const useConfig = (e: MaybeRefOrGetter<boolean>) => useMailDigestConfigQuery({ enabled: e });
+const useMeta = (e: MaybeRefOrGetter<boolean>) => useMailDigestMetaQuery({ enabled: e });
+const useLogs = (e: MaybeRefOrGetter<boolean>) =>
+  useMailDigestLogsQuery({ enabled: e, params: { limit: 20, offset: 0 } });
 
 function tick(ms = 30): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -168,11 +186,9 @@ afterEach(() => {
 
 describe('useMailDigestQuery — 好响应落值', () => {
   it('S0：三条 hook 各自把好响应落进 data（坏响应守卫的基线）', async () => {
-    const c = mount(ref(true), () => useMailDigestConfigQuery({ enabled: ref(true) }));
-    const m = mount(ref(true), () => useMailDigestMetaQuery({ enabled: ref(true) }));
-    const l = mount(ref(true), () =>
-      useMailDigestLogsQuery({ enabled: ref(true), params: ref({ limit: 20, offset: 0 }) }),
-    );
+    const c = mount(ref(true), useConfig);
+    const m = mount(ref(true), useMeta);
+    const l = mount(ref(true), useLogs);
     await tick();
 
     expect(c.comp.query.error.value).toBeNull();
@@ -181,6 +197,33 @@ describe('useMailDigestQuery — 好响应落值', () => {
     expect(m.comp.data.value?.upcoming_days_range.max).toBe(60);
     expect(l.comp.query.error.value).toBeNull();
     expect(l.comp.data.value?.items).toHaveLength(1);
+    c.scope.stop();
+    m.scope.stop();
+    l.scope.stop();
+  });
+});
+
+// ============================================================================
+// G1：enabled 闸门（照 accounts 域 `useMailAccountsQuery.spec.ts` 的 W2 形态）
+// ============================================================================
+
+describe('useMailDigestQuery — enabled 闸门', () => {
+  it('G1：enabled=false ⇒ 三条 hook 零网络请求、data 恒 undefined', async () => {
+    // ⚠️ 零请求是**这条用例的全部价值**：三条 hook 的闸门若被摘掉（或退化成写死 `true`），
+    // 症状是「页面还没挂载就先打一轮请求」——首屏多一次三连打，且 store 的 hydrate 会拿着
+    // 半路回来的数据覆盖管理员正在填的表单态。正面那条（S0：闸门开着、数据落进 data）
+    // 是它的对照，两条一起才框住闸门的行为边界。
+    const c = mount(ref(false), useConfig);
+    const m = mount(ref(false), useMeta);
+    const l = mount(ref(false), useLogs);
+    await tick();
+
+    expect(fetchMailDigestConfigMock, 'config 闸门未开时不该发请求').not.toHaveBeenCalled();
+    expect(fetchMailDigestMetaMock, 'meta 闸门未开时不该发请求').not.toHaveBeenCalled();
+    expect(listMailDigestLogsMock, 'logs 闸门未开时不该发请求').not.toHaveBeenCalled();
+    expect(c.comp.data.value).toBeUndefined();
+    expect(m.comp.data.value).toBeUndefined();
+    expect(l.comp.data.value).toBeUndefined();
     c.scope.stop();
     m.scope.stop();
     l.scope.stop();
@@ -199,9 +242,7 @@ describe('useMailDigestConfigQuery — 坏响应守门（C1）', () => {
     delete broken['sender_account_id'];
     fetchMailDigestConfigMock.mockResolvedValue(broken);
 
-    const { scope, comp } = mount(ref(true), () =>
-      useMailDigestConfigQuery({ enabled: ref(true) }),
-    );
+    const { scope, comp } = mount(ref(true), useConfig);
     await tick();
 
     expect(comp.query.error.value, '缺 sender_account_id 应当抛').not.toBeNull();
@@ -217,7 +258,7 @@ describe('useMailDigestMetaQuery — 坏响应守门（M1）', () => {
     const { upcoming_days_range: _drop, ...noRange } = META;
     fetchMailDigestMetaMock.mockResolvedValue(noRange);
 
-    const { scope, comp } = mount(ref(true), () => useMailDigestMetaQuery({ enabled: ref(true) }));
+    const { scope, comp } = mount(ref(true), useMeta);
     await tick();
 
     expect(comp.query.error.value).not.toBeNull();
@@ -228,7 +269,7 @@ describe('useMailDigestMetaQuery — 坏响应守门（M1）', () => {
   it('M1b：meta 整段形状错（顶层是裸数组）⇒ 进 error 态', async () => {
     fetchMailDigestMetaMock.mockResolvedValue([META]);
 
-    const { scope, comp } = mount(ref(true), () => useMailDigestMetaQuery({ enabled: ref(true) }));
+    const { scope, comp } = mount(ref(true), useMeta);
     await tick();
 
     expect(comp.query.error.value).not.toBeNull();
@@ -242,9 +283,7 @@ describe('useMailDigestLogsQuery — 坏响应守门（L1）', () => {
     const { error_message: _drop, ...noMsg } = LOG_ROW;
     listMailDigestLogsMock.mockResolvedValue({ ...LOG_LIST, items: [noMsg] });
 
-    const { scope, comp } = mount(ref(true), () =>
-      useMailDigestLogsQuery({ enabled: ref(true), params: ref({ limit: 20, offset: 0 }) }),
-    );
+    const { scope, comp } = mount(ref(true), useLogs);
     await tick();
 
     expect(comp.query.error.value, '缺 error_message 应当抛').not.toBeNull();
@@ -257,9 +296,7 @@ describe('useMailDigestLogsQuery — 坏响应守门（L1）', () => {
     // 是在放行一个不存在的契约。
     listMailDigestLogsMock.mockResolvedValue({ ...LOG_LIST, items: LOG_ROW });
 
-    const { scope, comp } = mount(ref(true), () =>
-      useMailDigestLogsQuery({ enabled: ref(true), params: ref({ limit: 20, offset: 0 }) }),
-    );
+    const { scope, comp } = mount(ref(true), useLogs);
     await tick();
 
     expect(comp.query.error.value).not.toBeNull();
