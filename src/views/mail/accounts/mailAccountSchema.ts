@@ -190,14 +190,17 @@ const MAIL_ACCOUNT_SECRET_REJECT = /[\u0000-\u001f\u007f-\u009f]/;
 
 /** 登录账号的格式判据：拒**任何空白字符**，且**必须含 `@`**。
  *
- *  ⚠️ 与后端 `validate_account` **等价**（不是逐字同一条正则）：Rust 的
- *  `char::is_whitespace()` 与 JS `/\s/` 的唯一差集是 U+0085（NEL）—— 前端放行、后端拒。
- *  两端都拒的那一侧口径完全一致（含 U+FEFF 这类 BOM：JS `\s` 含、Rust 不含 ⇒ 前端更严，
- *  但 BOM 本来就该拒）。
+ *  ⚠️ 与后端 `validate_account` **不是逐字同一条正则**（Rust 的 `char::is_whitespace()` 按
+ *  Unicode `White_Space` 属性判，JS 按 `/\s/`），两端口径有**两处差集，且方向相反**：
+ *  - U+0085（NEL）：Rust 拒、JS `\s` 放行 ⇒ **前端更松**，唯一一类「过了前端却吃后端 21704」的
+ *    输入形态；
+ *  - U+FEFF（BOM）：JS `\s` 拒、Rust 放行 ⇒ **前端更严**（BOM 本来就该拒）。
+ *
+ *  除此之外两端口径逐条一致，所以前端可以照 `\s` 写，不必枚举 `White_Space` 类目。
  *
  *  ⚠️ **链式顺序与后端不同，但这只影响「同时违反多条时哪条先报」**（前端先 trim、先拒空串；
- *  后端先判空再判空白再判 CR/LF 再判 `@`）：两端**都拒**，没有一条输入是「一边过一边不过」，
- *  所以不需要为了对齐提示先后而改顺序（前端「trim 在前」是 CLAUDE.md 表单 schema 的纪律）。 */
+ *  后端先判空再判空白再判 CR/LF 再判 `@`）：除上面那两条差集外，两端对同一条输入**都拒**，
+ *  不需要为了对齐提示先后而改顺序（前端「trim 在前」是 CLAUDE.md 表单 schema 的纪律）。 */
 const MAIL_ACCOUNT_ACCOUNT_REJECT = /\s/;
 
 export interface MailAccountFormModel {

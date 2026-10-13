@@ -26,7 +26,7 @@
 // `views/mail/digest/__tests__/MailDigestSettings.spec.ts`。pinia 先、VueQueryPlugin 后
 // （store setup 首行 `useQueryClient()`）。
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, type Directive } from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 import { createApp } from 'vue';
@@ -150,6 +150,12 @@ const META = {
   ],
 };
 
+/** `mountTab` 每次现建一个 QueryClient，登记在册后交 `afterEach` 统一 `unmount()`
+ *  （照同域 `useMailAccountsQuery.spec.ts` 的写法 —— QueryClient 持有订阅与定时器，不卸会漏）。
+ *  刻意不改成模块级共用一只：同一测试里挂第二次会命中 30s 内的缓存、不再发请求，
+ *  「`onMounted` 开闸 → 等 `flushPromises` 取数」这个前提就没了。 */
+const createdClients: QueryClient[] = [];
+
 /** 起 pinia + vue-query 环境，再挂壳（`onMounted` 里 store 才开闸取数）。 */
 async function mountTab(items: readonly MailAccountData[]) {
   listMailAccountsMock.mockResolvedValue({ items });
@@ -160,6 +166,7 @@ async function mountTab(items: readonly MailAccountData[]) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: 0 }, mutations: { retry: 0 } },
   });
+  createdClients.push(queryClient);
   app.use(VueQueryPlugin, { queryClient });
   setActivePinia(app.config.globalProperties.$pinia);
 
@@ -173,6 +180,10 @@ async function mountTab(items: readonly MailAccountData[]) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+afterEach(() => {
+  createdClients.splice(0).forEach((client) => client.unmount());
 });
 
 // ---------------------------------------------------------------- 用例
@@ -227,7 +238,9 @@ describe('MailAccountsTab — 提示文案**不承诺**「设为默认就能发�
   it('H1c：如实陈述 `is_default` 的真实语义（只影响排序），并指路到真正决定发信的地方', async () => {
     const text = await hintText([account()]);
     expect(text).toContain('排序');
-    expect(text).toContain('「发信邮箱」');
+    // 只钉「发信邮箱」这个说法本身，不钉直角引号：digest 侧把该字段标签从「发信邮箱」改成
+    // 「发件邮箱」这类良性改文案不该让这条红（引号形态是排版细节，不是这条要守的语义）。
+    expect(text).toContain('发信邮箱');
     expect(text).toContain('交期汇总');
   });
 
