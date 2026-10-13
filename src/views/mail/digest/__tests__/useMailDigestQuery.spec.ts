@@ -15,13 +15,18 @@
 //   这几条，把 parse 从 queryFn 删掉也是零信号。本域的写端点（保存 / preview / send）走
 //   useMutation、没有 queryFn 承载，守门由 api 层 `N2` 那几条单独守，两条路径互不替代。
 //
-// 覆盖（每条 hook 各一条坏响应，形状照 accounts 域的 W3a / W3d）：
+// 覆盖（共 7 条，缺键用例照 accounts 域的 W3a、信封形状用例照它的 W3d）：
 //   - C1：`GET /config` 少 `sender_account_id`（后端 `ConfigOut` 19 键里最新的那个）；
 //   - M1：`GET /meta` 信封少 `upcoming_days_range`（前端 el-input-number 的 min/max 无源）；
+//   - M1b：`GET /meta` 整段形状错（顶层是裸数组）；
 //   - L1：`GET /logs` 的**行**少 `error_message`（`.strict()` 下失败行整表空，管理员看不到
 //     「为什么失败」，而失败正是这条日志存在的理由）；
-//   - S0：三条 hook 收到**好响应**时数据落进 data（负向用例的基线：只有坏响应守卫、没有
-//     好响应基线的话，「请求压根没发出去 / 闸门没开」也是全绿）；
+//   - L1b：`GET /logs` 的 `items` 不是数组（M1b / L1b 这对专守**信封形状**那一维：守门写成
+//     裸数组时的症状是「每一屏都抛、列表恒空、零告警」，反过来守门没约束住则是在放行一个
+//     不存在的契约；缺键用例碰不到这一维）；
+//   - S0：三条 hook 收到**好响应**时数据落进 data、且每条**恰好打一次**请求（负向用例的
+//     基线：只有坏响应守卫、没有好响应基线的话，「请求压根没发出去 / 闸门没开 / 同一份数据
+//     被打两遍」都是全绿）；
 //   - G1（2026-10-16 补）：`enabled=false` 时三条 hook 都**零网络请求**（闸门由 store 的
 //     `openGate()` 在 onMounted 末尾开，避免页面 setup 期就抢跑）。这条同时是下面 `mount()`
 //     必须把闸门真流进 hook 的理由。
@@ -155,6 +160,11 @@ function mount<T>(enabled: MaybeRefOrGetter<boolean>, use: (e: MaybeRefOrGetter<
 // 三条 hook 的「只吃闸门」适配器：hook 自身的入参是**对象形**（`{ enabled }` /
 // `{ params, enabled }`），不是位置形 `(enabled)`，所以不能把 hook 函数直接丢给 `mount`。
 // `params` 传普通对象即可：本 spec 不翻页，包一层 ref 只会让每个调用点多造一个没人改的 ref。
+// ⚠️ **这三行是本 spec 唯一把闸门接进 hook 的线，而 TS 守不住它**：适配器被改成零参形
+// （`const useConfig = () => useMailDigestConfigQuery({ enabled: ref(true) })`）同样类型
+// 合法 —— 零参函数可赋给一参形 —— typecheck 与 lint 也照样全绿，**只有 G1 会红**。症状与
+// 上面 `mount` 那条同源：形参被收下却不用、或形参压根不存在，读者以为在测闸门，实际测的
+// 是「闸门写死 true」。两条牙关（G1 + `mount` 的形参流进）必须当成一对看。
 const useConfig = (e: MaybeRefOrGetter<boolean>) => useMailDigestConfigQuery({ enabled: e });
 const useMeta = (e: MaybeRefOrGetter<boolean>) => useMailDigestMetaQuery({ enabled: e });
 const useLogs = (e: MaybeRefOrGetter<boolean>) =>
@@ -197,6 +207,14 @@ describe('useMailDigestQuery — 好响应落值', () => {
     expect(m.comp.data.value?.upcoming_days_range.max).toBe(60);
     expect(l.comp.query.error.value).toBeNull();
     expect(l.comp.data.value?.items).toHaveLength(1);
+    // 「**恰好**一次」把双发也钉住：上面那几条落值断言只证得「至少打了一次」（每用例全新
+    // QueryClient ⇒ 无缓存 ⇒ 有数据必有请求），闸门开着多打一轮是它照样全绿的症状 —— 而
+    // 首屏三连打两遍正是这条用例要拦的。形态照 accounts 域 `useMailAccountsQuery.spec.ts`
+    // 的 W2b（开闸 → `toHaveBeenCalledTimes(1)` → 断 data），与那边 G1（关闸 → 零请求）
+    // 成对。
+    expect(fetchMailDigestConfigMock).toHaveBeenCalledTimes(1);
+    expect(fetchMailDigestMetaMock).toHaveBeenCalledTimes(1);
+    expect(listMailDigestLogsMock).toHaveBeenCalledTimes(1);
     c.scope.stop();
     m.scope.stop();
     l.scope.stop();
