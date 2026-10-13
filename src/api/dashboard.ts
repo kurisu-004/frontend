@@ -109,7 +109,7 @@ const WS_CLOSE_SESSION_LOST = 4001;
  *  「重连 + 全量 HTTP 重取」（后端 `docs/api/dashboard.md` §7.1 慢消费方条的规定动作）。
  *  单纯重连是不够的 —— 本仓 dashboard 域是「HTTP 全量首取 + WS 事件 invalidate
  *  重取」，**丢掉的 n 条事件在服务端已不可追溯**（新连接的订阅集合从此刻起算），
- *  TanStack Query 也无轮询（staleTime 30s 只管「下次取数是否放放行」而不是定时自取）
+ *  TanStack Query 也无轮询（staleTime 30s 只管「下次取数是否放行」而不是定时自取）
  *  ⇒ 必须自己派一次「全量重取」信号，由 views 层立即 invalidate。
  *
  *  同一个信号也被「重连后的首帧 snapshot」复用（见 dispatch()）—— 断线期间丢的事件
@@ -212,7 +212,16 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
    *  dispatch() 用它区分「首次连接的首帧 snapshot」与「重连后的首帧 snapshot」：
    *  后端 `handle_socket` 每次连接都推一帧新鲜 snapshot，所以重连后的那一帧就是
    *  断线期的数据补偿点；而首次连接的那一帧与首屏 HTTP 全量首取重复，触发补偿等于
-   *  白刷一次三个 dashboard query。 */
+   *  白刷一次三个 dashboard query。
+   *
+   *  2026-10-13 澄清：这里的「首次」是**本 WS 单例生命周期内的首次**（模块级
+   *  createGlobalState，整个页面生命周期只有一个实例），**不是**「本次会话的首连」。
+   *  connectedCount 不随登出复位 —— 登出→登入后第一次连接时它已经 ≥ 2，会被按
+   *  「重连」处理、照常派一次 dashboard:full-refetch。**当前无实际危害**：登出时
+   *  teardownSession() 已 `queryClient.clear()` 清空缓存，而登录后 dashboard 页的
+   *  listener 一般还没挂上（要等用户真的打开该页），此时重取无人接收。刻意不改代码：
+   *  真要按「会话」计数就得把会话标识引进 WS 层，而 WS 层不得 import stores/auth
+   *  （见本文件分层禁令），为一个零危害的差异破这条禁令不划算。 */
   let connectedCount = 0;
 
   /** 连接状态订阅者共享的当前状态。订阅即刻回放的就是它。 */

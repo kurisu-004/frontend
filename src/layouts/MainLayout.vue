@@ -39,7 +39,8 @@
       <!-- 2026-09-29 重构：el-header 改为三段式（left / middle / right）。
            header-left 留折叠按钮；header-middle 嵌入 TagsView（40px 容器贴
            header 下边缘，active tab margin-bottom: -1px 盖住 header border）；
-           header-right 仅放 UserDropdown。面包屑与刷新按钮已移除。 -->
+           header-right 放 WsConnectionIndicator（WS 连接状态）+ UserDropdown。
+           面包屑与刷新按钮已移除。 -->
       <el-header class="header">
         <div class="header-left">
           <el-button link class="collapse-btn" @click="onNavToggle">

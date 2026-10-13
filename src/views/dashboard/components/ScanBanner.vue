@@ -25,7 +25,8 @@
 // 数据来源只有一个：`onDashboardEvent` 里 `event_type === 'SCAN_BANNER'` 的帧。
 // dashboard 域约 40 个事件里，**只有 SCAN_BANNER 的 payload 带展示字段**（6 键，
 // 守门 schema 在 composables/bannerSchema.ts）；其余事件的 payload 全是 id / 计数，
-// 本组件一律不消费 —— 这正是旧横幅每条事件都弹一条垃圾文案的原因。
+// 唯一例外是 `PART_TO_INSPECTION` 带 `shelf_code`，而那不是展示文案。本组件一律
+// 不消费 —— 这正是旧横幅每条事件都弹一条垃圾文案的原因。
 //
 // 为什么守门写在组件里而不是 api 层：SCAN_BANNER 走的是**推送通道**，既没有 queryFn
 // 承载，也不是 api 层的函数调用，WS 层只负责把帧原样 fan-out。守门点是 `onEvent`

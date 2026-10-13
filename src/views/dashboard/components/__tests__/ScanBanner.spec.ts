@@ -259,4 +259,26 @@ describe('ScanBanner — SCAN_BANNER 事件条（2026-10-13）', () => {
     expect(el.className).toContain('is-picked-up');
     expect(el.className).not.toContain('is-picked_up');
   });
+
+  it('S9c：三个 action 各自落一个语义色类（第三条 .is-inspected 此前无任何用例覆盖）', async () => {
+    // S9 只断言 RETURNED、S9b 只断言 PICKED_UP ⇒ 第三条 action 的类名裸奔。
+    // 后果是**静默**的：类名写错不会有任何报错，只是那条边框悄悄退回默认色，
+    // 三条同款语义色规则里独独缺一个，肉眼看不出是哪一条坏了。
+    // push() 是**头插**（最新在前）且 MAX_VISIBLE=3，所以这里断言用 arrayContaining
+    // 而不是逐位 toEqual —— 顺序由 push 策略决定，与被守卫的事实无关。
+    mountBanner();
+    await pushEvent(bannerEvent(goodPayload({ action: 'PICKED_UP' })));
+    await pushEvent(bannerEvent(goodPayload({ action: 'RETURNED' })));
+    await pushEvent(bannerEvent(goodPayload({ action: 'INSPECTED' })));
+
+    const classNames = banners().map((el) => el.className);
+    expect(classNames).toHaveLength(3);
+    expect(classNames).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('is-picked-up'),
+        expect.stringContaining('is-returned'),
+        expect.stringContaining('is-inspected'),
+      ]),
+    );
+  });
 });

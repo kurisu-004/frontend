@@ -3,7 +3,7 @@
 // 2026-09-29 新增：useDashboardInvalidation WS 事件 → invalidate 回归保护。
 //
 // 覆盖：
-//   - I1：25 个 AFFECTS_DASHBOARD 事件命中 → 触发 debounced invalidate
+//   - I1：26 个 AFFECTS_DASHBOARD 事件命中 → 触发 debounced invalidate
 //   - I2：连续 5 个 AFFECTS_DASHBOARD 事件 → debounce 500ms 内合并 → 1 次 invalidate
 //   - I3：maxWait 1500ms flush —— 持续超过 1500ms 必须强制 invalidate
 //   - I4：非 AFFECTS_DASHBOARD 事件（如 DELIVERY_NOTE_CREATED）不触发 invalidate
@@ -280,7 +280,7 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
     scope.stop();
   });
 
-  it('I7：25 个 AFFECTS_DASHBOARD 事件全部触发 invalidate（白名单回归保护）', async () => {
+  it('I7：26 个 AFFECTS_DASHBOARD 事件全部触发 invalidate（白名单回归保护）', async () => {
     vi.useFakeTimers();
     for (const evType of AFFECTS_DASHBOARD_EVENTS) {
       const invalidateSpy = vi.spyOn(testQueryClient, 'invalidateQueries');
