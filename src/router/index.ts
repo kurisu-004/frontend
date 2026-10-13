@@ -375,6 +375,30 @@ const routes: RouteRecordRaw[] = [
         },
       },
       {
+        // 2026-10-16 新增：送货单打印模板管理页（`/print-templates`）。
+        //
+        // ⚠️ **页面上一版存在过、2026-09-24 随 x-data-spreadsheet 弃用整条删掉**（原组件名
+        // `PrintTemplateDesigner.vue`，是个可视化模板编辑器）。这次回来的是**另一个东西**：
+        // 「上传 xlsx + 查看已有模板 + 绑一级客户」，**不含**任何可视化编辑（用户已拍板不
+        // 复活那个编辑器）。同名 URL 复用同一个书签 / 菜单 path。
+        //
+        // ⚠️ `menuCode` 必须与后端菜单表 `print_templates_designer` 节点的 `code` 逐字一致
+        // —— 守卫第 3 条（menuCode 不在菜单树 → 踢到菜单树里一个有 path 的节点）会把用户
+        // 踢出本页，现象是「点菜单闪一下又回到别的页」。这是**页面的单一权限源**：本页的
+        // 按钮级闸门（上传 / 删除）在 `utils/printTemplatePermissions.ts`，两者不是一回事。
+        //
+        // ⚠️ `path` 是 `/print-templates`，后端 API URL 是 `/api/v2/print-templates`（多一层
+        // `/api/v2`）。两层不要求一致，与 `shelves` / `iam/roles` 那几条同款做法。
+        path: 'print-templates',
+        name: 'PrintTemplates',
+        component: () => import('@/views/printTemplates/PrintTemplateList.vue'),
+        meta: {
+          title: '模板编辑',
+          icon: 'Document',
+          menuCode: 'print_templates_designer',
+        },
+      },
+      {
         path: 'applicants',
         name: 'ApplicantList',
         component: () => import('@/views/applicants/ApplicantList.vue'),

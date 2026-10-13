@@ -58,6 +58,9 @@ import type { StatisticsQuery } from '@/types/statistics';
 // 2026-10-13：mail-digest 域日志分页入参形态在 types/mailDigest.ts 定义（沿
 // ListUsersParams / StatisticsQuery 等既有做法），本文件只引用。
 import type { ListMailDigestLogsParams } from '@/types/mailDigest';
+// 2026-10-16：送货单打印模板域列表入参形态在 api/printTemplates.ts 定义（api 层是 wire
+// 契约的唯一定义处，沿上面几个 List*Params 的既有做法），本文件只引用。
+import type { ListPrintTemplatesParams } from '@/api/printTemplates';
 
 /** 2026-09-26 新增：工序列表 / 下拉选项 query 入参形态（与 api/process.ts listProcesses 同步）。
  *  含 code_like / category / limit / offset 四字段；与 ListProcessesParams 同形，预留扩展分叉。 */
@@ -827,4 +830,28 @@ export const qk = {
   /** mail 域前缀 —— 四条写端点在**成功与失败两条路径**上都失效（理由见上方「失效编排点」）。
    *  同时覆盖将来新加的 `['mail', …]` 读键。 */
   mailPrefix: ['mail'] as const,
+  // ============================================================
+  // 2026-10-16 新增：print-templates 域（送货单打印模板管理页）queryKey 工厂。
+  //
+  // 根命名空间取 `print-templates`（与页面路由段 / 菜单域、后端 `/api/v2/print-templates/*`
+  // 逐段对齐，便于按 URL 反查键），**不**挂 `partsPrefix` 下 —— 理由沿本文件
+  // `mail` / `inspection` 几段的「根命名空间」取舍：本域与零件域、生产队列**零共享写点**
+  // （本域写的是模板字节与「模板 ↔ 一级客户」这条绑定，一个批次 / 一件零件都不碰）。
+  //
+  // 两条键：
+  //   - printTemplatesList(params) —— GET /print-templates（**参数键**：端点接
+  //     customer_id + limit / offset，键必须随 params 变化才能拿到不同 cache identity）。
+  //     管理页没选 L1 时 `customer_id` 缺省 = 全部模板，切客户才会换键。
+  //   - printTemplatesPrefix —— 域前缀失效。上传 / 软删两条写端点成功后失效它。
+  //
+  // ⚠️ **打印侧的 `GET /print-templates/resolve` 刻意没有键**：它是打印对话框打开时的一次性
+  // 拉取（不进缓存、不需要去重），走 api 层直接调用。给它建键反而会诱使后来者把它接成
+  // 「一个客户一条长期缓存的 resolve 结果」，而那条结果是**可被另一个管理员改掉的**，
+  // 缓存住就等于让打印机用着上一个模板。
+  // ============================================================
+  /** 模板列表键。params = `customer_id`（缺省 = 全部）/ `limit` / `offset`。 */
+  printTemplatesList: (params: ListPrintTemplatesParams) =>
+    ['print-templates', 'list', params] as const,
+  /** print-templates 域前缀 —— 上传 / 软删完成后一把全失效（任意 params 形态都命中）。 */
+  printTemplatesPrefix: ['print-templates'] as const,
 } as const;

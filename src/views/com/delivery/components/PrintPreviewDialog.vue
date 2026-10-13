@@ -9,6 +9,11 @@
   实现在 utils/deliveryNoteLabelExport（草稿卡片与详情页共用）。所以本组件只剩送货单
   一条链路，`mode` / 标签模式的模板区、司机下拉、勾选集合等全部随之下线。
 
+  模板来源（2026-10-16 起三种，见 utils/deliveryNoteTemplate.ts）：
+  打开时先按 `note.customer_id`（**它就是一级客户 id**）自动选用该客户在「模板编辑」页
+  绑定的模板（命中即用，并复验字节）；未绑定（业务码 21109）或自动选型失败时保留
+  「选择模板」按钮作手动兜底。渲染 / 校验链路三种来源逐字相同，只换数据来源。
+
   表头排序 + 行拖拽 + 行拆分 + 列拖拽共存，行拖拽会清掉排序标记（自定义顺序优先）。
 
   交互契约：
@@ -53,6 +58,7 @@ import {
 } from '../utils/deliveryNotePrintRows';
 import { renderDeliveryNoteWorkbook, XLSX_MIME } from '../utils/deliveryNoteWorkbook';
 import { DELIVERY_NOTE_TEMPLATE_CONTRACT } from '../utils/deliveryNoteTemplateContract';
+import { fetchPrintTemplateContent, resolvePrintTemplate } from '@/api/printTemplates';
 
 const props = defineProps<{
   modelValue: boolean;
@@ -74,15 +80,91 @@ const dlg = useDialogSize({ desktopWidth: 1200 });
 const qc = useQueryClient();
 
 // ============================================================
-// 模板（用户上传 + 逐格校验）
+// 模板（一级客户绑定模板自动选用 + 用户临时上传兜底）
 // ============================================================
+// 2026-10-16 新增「自动选用」：打开对话框时用 `note.customer_id`（**它就是一级客户 id**，
+// 送货单按 L1 建单）调 `GET /print-templates/resolve`：
+//   - 命中 ⇒ `templateSource = {kind:'api', id}`，并**重新跑一遍 assertTemplateMatches**；
+//   - 未命中（业务码 21109）⇒ 回落成「请手动选择」，**「选择模板」按钮保留**（产品拍板：
+//     手动上传兜底不撤）。
+//
+// ⚠️ **服务端字节必须复验，不能因为「它是我们自己的服务器存的」就放行**：那份 xlsx 是别的
+// 管理员上传的，可能在被绑定之后又改坏；坏模板一路飘到客户签字的收货凭证上是不可逆的。
 const uploadRef = ref<{ clearFiles: () => void } | null>(null);
 const templateSource = ref<TemplateSource | null>(null);
 const templateName = ref('');
 const templateDiffs = ref<string[]>([]);
 const templateLoading = ref(false);
+/** 打开对话框时那次 resolve 的进行中（与用户手动选模板的 loading 合并成一个按钮态）。 */
+const boundResolving = ref(false);
+/** 该一级客户**没有**绑定模板（业务码 21109）。与「还没查」区分开：前者要提示用户去
+ *  「模板编辑」页上传，后者不能提示（那会让首次打开的用户以为系统坏了）。 */
+const boundMissing = ref(false);
+/** 用户在本次打开期间手动选过模板 ⇒ resolve 的结果**不得**覆盖它。
+ *
+ *  ⚠️ 这条不是为了防竞态（resolve 只在打开时跑一次），而是防「自动选用把用户刚选的文件
+ *  悄悄换掉」：自动选中的那次字节校验可能比用户点「选择模板」慢（要先过一次
+ *  `GET /{id}/content` + 动态 import hucre），晚到的一旦覆盖，用户会看到自己选的模板名字
+ *  变了、导出的却是另一份。 */
+const userPickedTemplate = ref(false);
+
+/** 该一级客户未绑定模板的后端业务码（见 `api/printTemplates.ts::resolvePrintTemplate`）。 */
+const TEMPLATE_NOT_BOUND_CODE = 21109;
 
 const templateOk = computed(() => templateSource.value !== null && templateDiffs.value.length === 0);
+
+/** 当前模板是不是「一级客户绑定的那份」（工具栏上换个标签区分它与用户临时上传的）。 */
+const usingBoundTemplate = computed(() => templateSource.value?.kind === 'api');
+
+/**
+ * 打开对话框时按一级客户自动选用模板。
+ *
+ * ⚠️ **失败不弹 toast、只把原因摆进工具栏那一行**：这是一次后台自动选型，用户还没做任何
+ * 事，弹一条红色错误只是噪音（`.auto-hint` 那行与图纸预览的 `.degrade-hint` 同一形态）。
+ * ⚠️ **用户已手动选过模板时不覆盖**（见 `userPickedTemplate` 的说明）。
+ */
+async function resolveBoundTemplate(): Promise<void> {
+  const customerId = props.note.customer_id;
+  if (!props.modelValue || !customerId) return;
+  boundResolving.value = true;
+  try {
+    const hit = await resolvePrintTemplate(customerId);
+    // ⚠️ 必须**取字节 + 逐格复验**，不能拿 resolve 的元信息就当模板可用。
+    const bytes = await fetchPrintTemplateContent(hit.id);
+    const { openXlsx } = await import('hucre');
+    const diffs = await assertTemplateMatches(await openXlsx(bytes));
+    if (userPickedTemplate.value) return;
+    templateName.value = hit.original_filename;
+    templateDiffs.value = diffs;
+    // 校验不过就不留来源：导出按钮已经 disabled，留着只会让人以为「自动选用」这一步过了。
+    templateSource.value = diffs.length === 0 ? { kind: 'api', id: hit.id } : null;
+    boundMissing.value = false;
+  } catch (e) {
+    if ((e as { code?: number }).code === TEMPLATE_NOT_BOUND_CODE) {
+      // 未绑定是**正常状态**（绝大多数客户还没配模板），不是失败：清空自动选型结果 + 置
+      // 「未绑定」标志，让工具栏提示 + 「导出」禁用原因都说到点子上。
+      if (userPickedTemplate.value) return;
+      templateSource.value = null;
+      templateName.value = '';
+      templateDiffs.value = [];
+      boundMissing.value = true;
+    } else {
+      // 其它失败（网络 / 权限 / 库里那份字节解不开）：退回「请手动选择」，并说明是自动选用
+      // 出了问题而不是「没配模板」—— 用户去「模板编辑」页改配置是解决不了网络问题的。
+      if (userPickedTemplate.value) return;
+      templateSource.value = null;
+      templateName.value = '';
+      templateDiffs.value = [];
+      boundMissing.value = false;
+      autoHint.value = '自动选用该客户模板失败，请手动选择模板';
+    }
+  } finally {
+    boundResolving.value = false;
+  }
+}
+
+/** 自动选型失败时的那一句提示（成功 / 未绑定时都是空串 = 不显示）。 */
+const autoHint = ref('');
 
 /** el-upload 的 `:limit="1"` 意味着第二次选同一文件不触发 on-change；
  *  必须先 clearFiles() 清掉内部列表（仓内同款注释见 PurchaseOrderImportDialog）。 */
@@ -102,6 +184,8 @@ async function onFileChange(file: { raw?: File; name?: string }): Promise<void> 
     templateName.value = src.filename;
     // 校验不过就不留字节：导出按钮已经 disabled，留着只会让人以为「换模板」这一步过了。
     templateSource.value = templateDiffs.value.length === 0 ? src : null;
+    userPickedTemplate.value = true;
+    autoHint.value = '';
     if (templateDiffs.value.length === 0) ElMessage.success('模板校验通过');
   } catch (e) {
     templateSource.value = null;
@@ -226,6 +310,26 @@ watch(
   { immediate: true },
 );
 
+// 打开沿 → 重置模板态并按一级客户自动选用。
+//
+// ⚠️ **独立一条 watch，不塞进上面那条**：上面那条还跟着 mergeMode / 分组数据变化触发，把
+// 自动选型挂进去会让「改一次合并模式」重打一次 `resolve` + `content`（两次往返）。
+// `note.customer_id` 在一次挂载内不会变（详情页切单据才会），而切单据必然经过关闭再打开。
+watch(
+  () => props.modelValue,
+  (open) => {
+    if (!open) return;
+    userPickedTemplate.value = false;
+    autoHint.value = '';
+    boundMissing.value = false;
+    templateSource.value = null;
+    templateName.value = '';
+    templateDiffs.value = [];
+    void resolveBoundTemplate();
+  },
+  { immediate: true },
+);
+
 function rowsOf(groupKey: string): PrintRow[] {
   return rowsByKey.value[groupKey] ?? [];
 }
@@ -289,9 +393,15 @@ const exportDisabled = computed(() => {
 /** 「导出」disabled 的原因（tooltip 显示；空串 = 可导出）。 */
 const exportHint = computed(() => {
   if (!templateOk.value) {
-    return templateDiffs.value.length > 0
-      ? `模板校验未通过：${templateDiffs.value.join('；')}`
-      : '请先上传送货单模板';
+    if (templateDiffs.value.length > 0) {
+      return `模板校验未通过：${templateDiffs.value.join('；')}`;
+    }
+    // ⚠️ 21109（该一级客户没绑模板）要说清「去哪儿解决」：这不是让用户在**这个对话框**里
+    // 随便挑一份上传（那只是兜底），而是「模板编辑」页给这个客户配一份常驻模板。
+    if (boundMissing.value) {
+      return '该一级客户未绑定打印模板，请点击「选择模板」手动上传，或到「模板编辑」页为该客户配置';
+    }
+    return '请先上传送货单模板';
   }
   if (totalRows.value === 0) return '没有可打印的行项';
   if (!driverNameOfExport.value) return '请先指定司机（页脚「送货人」与 pickup 都要它）';
@@ -369,14 +479,24 @@ async function onExport(): Promise<void> {
           :on-change="onFileChange"
           :on-exceed="onExceed"
         >
-          <el-button size="small" :loading="templateLoading">选择模板</el-button>
+          <el-button size="small" :loading="templateLoading || boundResolving">选择模板</el-button>
         </el-upload>
         <span v-if="templateName" class="file-name">{{ templateName }}</span>
         <el-tag v-if="templateOk" type="success" size="small" effect="plain">已校验</el-tag>
+        <!-- 「自动选用」与「手动上传」在导出产物上等价，但**来源不同**：前者是管理员在
+             「模板编辑」页配的常驻模板（删掉就回到未绑定态），后者是这一次临时选的。 -->
+        <el-tag v-if="templateOk && usingBoundTemplate" type="primary" size="small" effect="plain">
+          该客户绑定模板
+        </el-tag>
         <el-tag v-else-if="templateDiffs.length" type="danger" size="small" effect="plain">
           校验未通过（{{ templateDiffs.length }}）
         </el-tag>
       </span>
+
+      <!-- 自动选型失败的那一句（成功 / 未绑定 / 用户已自选都是空串 ⇒ 不渲染）。
+           静默兜底会让「管理员明明配了模板却总要手动选」无人察觉（照图纸预览
+           `.degrade-hint` 的同一形态：降级必须是有告知的）。 -->
+      <span v-if="autoHint" class="auto-hint">{{ autoHint }}</span>
 
       <!-- 列可见性是**对话框级**偏好（N 张表共用一份 print_preview_dialog 快照，
            见下方列可见性段注释）。 -->
@@ -487,6 +607,10 @@ async function onExport(): Promise<void> {
 .file-name {
   font-size: 12px;
   color: var(--el-text-color-secondary);
+}
+.auto-hint {
+  font-size: 12px;
+  color: var(--el-color-warning-dark-2, #b88230);
 }
 .merge-toggle {
   margin-left: auto;

@@ -2,15 +2,29 @@
 //
 // 送货单打印模板的取字节 + 结构校验（2026-10-08 新增）。
 //
-// 模板来源两种形态（`TemplateSource`）：
-//   · `local` —— 用户在打印对话框里上传的文件（el-upload 给的 raw File → bytes）；
-//   · `url`   —— **预留**：后端把模板绑到 COS 后由前端按 URL 取。当前没有调用方，
-//                留着是为了让「换数据源」这件事将来不动任何渲染代码。
+// 模板来源三种形态（`TemplateSource`），**只有数据来源不同，渲染与校验链路逐字相同**：
+//   · `local` —— 用户在打印对话框里临时上传的文件（el-upload 给的 raw File → bytes）；
+//   · `api`   —— **2026-10-16 新增**：后端 `/api/v2/print-templates` 按**一级客户**绑定的
+//                模板，打印对话框打开时用 `resolve` 端点选中、再按 id 取字节。管理员在
+//                「模板编辑」页（`/print-templates`）上传 / 替换 / 删除，日常打印零操作自动
+//                命中；
+//   · `url`   —— **预留**：后端把模板绑到 COS 后由前端按裸 URL 取。当前没有调用方，
+//                留着是为了让「再换数据源」这件事将来不动任何渲染代码。
+//
+// ⚠️ **`api` 形态必须走 axios，不能用裸 `fetch`**：`GET /{id}/content` 要 Authorization 头
+//（后端按权限点 `delivery_note.print` 判定），裸 `fetch` 带不上 ⇒ 401。同理 `resolve`
+// 出参里那条 `content_url` 是**不含 `/api/v2` 的相对路径**、也不带鉴权头，不能塞进
+// `<a href>` —— 取字节一律走 `api/printTemplates.ts::fetchPrintTemplateContent(id)`。
 //
 // ⚠️ 校验失败**不静默**：assertTemplateMatches 返回逐条差异，由对话框把「导出」按钮
 // 置 disabled 并把差异原文摆进 tooltip。用户改坏了一列位还导出成功，得到的送货单在
 // 客户那边就是废纸 —— 逐条差异（含「期望 / 实际」）就是为了让用户自己看出改错了哪格。
+//
+// ⚠️ **服务端取回的字节必须复验**：`api` 形态的字节是别人（管理员）上传的，可能在被绑定
+// 之后又被改坏。打印对话框打开时那次 `assertTemplateMatches` 就是这条护栏 —— 它与本地
+// 上传那份逐格同判，不因「它来自我们自己的服务器」而放行。
 
+import { fetchPrintTemplateContent } from '@/api/printTemplates';
 import type { Workbook } from 'hucre/xlsx';
 import {
   DELIVERY_NOTE_TEMPLATE_CONTRACT,
@@ -20,11 +34,14 @@ import {
 
 export type TemplateSource =
   | { kind: 'local'; bytes: Uint8Array; filename: string }
+  /** 后端库里那份（按 id 取字节；文件名走 `templateName` 那侧的展示位）。 */
+  | { kind: 'api'; id: string }
   | { kind: 'url'; url: string };
 
 /** 取模板字节。 */
 export async function fetchTemplateBytes(src: TemplateSource): Promise<Uint8Array> {
   if (src.kind === 'local') return src.bytes;
+  if (src.kind === 'api') return fetchPrintTemplateContent(src.id);
   const resp = await fetch(src.url);
   if (!resp.ok) throw new Error(`模板下载失败（HTTP ${resp.status}）`);
   return new Uint8Array(await resp.arrayBuffer());

@@ -5,12 +5,31 @@
 // 而 Zod strip 模式不会报错、只会静默丢字段 ⇒ 必须靠这里的逐条差异把用户自己看出
 // 「改错了哪一格」。
 //
-// 覆盖：正确模板返空数组 / 缺 placeholder / 旧名 {{L2_customer}} / 列位错位 / 缺 sheet。
+// 覆盖：正确模板返空数组 / 缺 placeholder / 旧名 {{L2_customer}} / 列位错位 / 缺 sheet；
+// 2026-10-16 追加：`fetchTemplateBytes` 的三种 `TemplateSource` 变体（重点是 `api` 变体
+// 必须走后端 axios 端点而不是裸 `fetch` —— 后者带不上 Authorization 头，必然 401）。
 
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import type * as Hucre from 'hucre/xlsx';
-import { assertTemplateMatches, colIndexOf } from '../deliveryNoteTemplate';
+
+// ⚠️ 整个 api 模块桩掉：`deliveryNoteTemplate.ts` 的 `api` 变体要从它那里取字节，而它是
+// axios 客户端 —— 组件测试里真拉一次网络既慢又不稳。这里只断言「打了哪个 id」。
+const { fetchPrintTemplateContentMock } = vi.hoisted(() => ({
+  fetchPrintTemplateContentMock: vi.fn(async (id: string) => new Uint8Array([7, 7, id.length])),
+}));
+
+vi.mock('@/api/printTemplates', () => ({
+  fetchPrintTemplateContent: (id: string) => fetchPrintTemplateContentMock(id),
+}));
+
+const { assertTemplateMatches, colIndexOf, fetchTemplateBytes } = await import(
+  '../deliveryNoteTemplate'
+);
+
+beforeEach(() => {
+  fetchPrintTemplateContentMock.mockClear();
+});
 
 const BUILTIN = readFileSync('templates/delivery_note_fala.xlsx');
 
@@ -98,5 +117,38 @@ describe('colIndexOf', () => {
     expect(() => colIndexOf('AA')).toThrow();
     expect(() => colIndexOf('a')).toThrow();
     expect(() => colIndexOf('')).toThrow();
+  });
+});
+
+describe('fetchTemplateBytes', () => {
+  it('api 变体：按 id 走后端取字节（不带 Authorization 的裸 fetch 在这里是错的）', async () => {
+    const bytes = await fetchTemplateBytes({ kind: 'api', id: 'T1' });
+    expect(fetchPrintTemplateContentMock).toHaveBeenCalledWith('T1');
+    // 桩按 id 长度造字节：长度对上就说明传下去的是那个 id，而不是丢了 id 拿了别的东西
+    expect(Array.from(bytes)).toEqual([7, 7, 2]);
+  });
+
+  it('local 变体：直接给回字节，零请求', async () => {
+    const raw = new Uint8Array([1, 2, 3]);
+    const bytes = await fetchTemplateBytes({ kind: 'local', bytes: raw, filename: 'a.xlsx' });
+    expect(bytes).toBe(raw);
+    expect(fetchPrintTemplateContentMock).not.toHaveBeenCalled();
+  });
+
+  it('url 变体：仍然走裸 fetch（预留形态，本次不动它的语义）', async () => {
+    const calls: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (u: string) => {
+      calls.push(u);
+      return new Response(new Uint8Array([9]));
+    }) as unknown as typeof fetch;
+    try {
+      const bytes = await fetchTemplateBytes({ kind: 'url', url: 'https://example.test/t.xlsx' });
+      expect(calls).toEqual(['https://example.test/t.xlsx']);
+      expect(Array.from(bytes)).toEqual([9]);
+      expect(fetchPrintTemplateContentMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
