@@ -40,8 +40,8 @@ export const MAIL_ACCOUNT_ERROR_CODES = {
   /** 写入内容不符合服务端校验。⚠️ **两域共用码**（后端 `BIZ_MAIL_CONFIG_INVALID`）：
    *  本域用它报「名称超长 / 账号不是完整邮箱地址 / 授权码含控制字符 / 预设字面量非法」，
    *  mail_digest 域用它报「频率与配套字段组合非法」。所以下面那张表的措辞必须两边都说得通，
-   *  且**交期汇总页不会显示这一条** —— `mailDigestErrorText()` 先查本域自己的表、
-   *  21704 在那里命中（`MAIL_DIGEST_ERROR_CODES.INVALID_FREQUENCY_COMBO`），查表顺序见
+   *  且**交期汇总页不会显示这一条** —— `mailDigestErrorText()` 先查 **mail_digest 域**自己的
+   *  表、21704 在那里命中（`MAIL_DIGEST_ERROR_CODES.INVALID_FREQUENCY_COMBO`），查表顺序见
    *  `views/mail/digest/mailDigestErrorText.ts`。 */
   CONFIG_INVALID: 21704,
   /** 账号不存在（改档 / 删除 / 设为默认的目标 id 已被别人删掉）。 */

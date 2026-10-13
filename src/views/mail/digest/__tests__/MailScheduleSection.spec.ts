@@ -79,10 +79,14 @@ const ElInputNumberStub = {
   template: '<div class="mock-input-number" :data-disabled="String(!!disabled)" />',
 };
 
+// ⚠️ `description` **必须**渲染出来：本组件的告警正文在 description 里（title 只是小标题），
+// 只渲染 title 的桩会让「读 `.mock-alert` 文本」的那条断言恒真 —— 那是
+// `MailDigestSettings.spec.ts` 初版栽过的同一个坑（那边已修），本文件同样不许留。
 const ElAlertStub = {
   name: 'ElAlert',
   props: ['title', 'description'],
-  template: '<div class="mock-alert"><span class="alert-title">{{ title }}</span></div>',
+  template:
+    '<div class="mock-alert"><span class="alert-title">{{ title }}</span><span class="alert-description">{{ description }}</span></div>',
 };
 
 /** 2026-10-16：「发信邮箱」下拉的候选（query `GET /mail/accounts` 的行）。
@@ -212,6 +216,15 @@ describe('MailScheduleSection — MANUAL_ONLY 隐藏全部时间输入', () => {
     const labels = wrapper.findAll('.mock-radio-button').map((n) => n.text());
     expect(labels).toHaveLength(4);
     expect(labels.join('|')).toContain('仅手动');
+    wrapper.unmount();
+  });
+
+  it('桩真的把 `description` 渲染出来了（正文在 description 里，不在 title）', () => {
+    // 这条是给 `ElAlertStub` 兜底的：桩只渲染 title 时，本文件的 `.mock-alert` 文本断言会
+    // 恒真（正文一个字都读不到却照样通过）。拆掉 description 那个 span 它必须变红。
+    const form = baseForm({ frequency: 'MANUAL_ONLY', send_hour: null, send_minute: null });
+    const { wrapper } = mountSection(form);
+    expect(wrapper.find('.alert-description').text()).toContain('立即发送');
     wrapper.unmount();
   });
 });

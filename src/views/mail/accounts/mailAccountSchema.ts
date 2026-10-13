@@ -96,7 +96,11 @@ export const mailAccountSchema = z
     port: z.number(),
     /** TLS 模式（由预设推导，`WRAPPED` / `STARTTLS` / `NONE`）。未知 preset 时为空串。 */
     tls_mode: z.string(),
-    /** 是否为默认发信邮箱（`POST /accounts/{id}/set-default` 只能有一条为 true）。 */
+    /** 是否带「默认」标记（`POST /accounts/{id}/set-default` 只能有一条为 true，唯一索引保证）。
+     *
+     *  ⚠️ **它不决定发信**：后端对这一列的全部消费只有列表排序（`ORDER BY is_default DESC`）
+     *  与那条唯一索引；发信走 `mail_digest_config.sender_account_id` →
+     *  `mail_digest::service::resolve_sender`，后者**从不**回落到本字段。 */
     is_default: z.boolean(),
     created_at: z.string(),
     updated_at: z.string(),
@@ -184,8 +188,16 @@ export const MAIL_ACCOUNT_SECRET_MAX = 200;
  *  一路进到 SMTP 的 `AUTH` 命令行（那是凭据注入面），前端却报「已通过」。 */
 const MAIL_ACCOUNT_SECRET_REJECT = /[\u0000-\u001f\u007f-\u009f]/;
 
-/** 登录账号的格式判据：与后端 `validate_account` 对齐 —— 拒**任何空白字符**（后端是
- *  `char::is_whitespace()`，比只拦 `\r\n` 宽），且**必须含 `@`**。 */
+/** 登录账号的格式判据：拒**任何空白字符**，且**必须含 `@`**。
+ *
+ *  ⚠️ 与后端 `validate_account` **等价**（不是逐字同一条正则）：Rust 的
+ *  `char::is_whitespace()` 与 JS `/\s/` 的唯一差集是 U+0085（NEL）—— 前端放行、后端拒。
+ *  两端都拒的那一侧口径完全一致（含 U+FEFF 这类 BOM：JS `\s` 含、Rust 不含 ⇒ 前端更严，
+ *  但 BOM 本来就该拒）。
+ *
+ *  ⚠️ **链式顺序与后端不同，但这只影响「同时违反多条时哪条先报」**（前端先 trim、先拒空串；
+ *  后端先判空再判空白再判 CR/LF 再判 `@`）：两端**都拒**，没有一条输入是「一边过一边不过」，
+ *  所以不需要为了对齐提示先后而改顺序（前端「trim 在前」是 CLAUDE.md 表单 schema 的纪律）。 */
 const MAIL_ACCOUNT_ACCOUNT_REJECT = /\s/;
 
 export interface MailAccountFormModel {

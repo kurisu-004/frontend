@@ -25,17 +25,24 @@
       </div>
     </el-card>
 
-    <!-- 「有邮箱但一个默认都没有」：后端**新建邮箱永远不设默认**（建邮箱与「让它成为默认发信
-         通道」是两个意图），而「删掉默认邮箱」也**不会**自动转给别的（库里就变成零个默认）
-         ⇒ 这是正常使用下必然出现的一种状态，不提示的话用户会以为建好就能直接发信。 -->
+    <!-- 「有邮箱但一个默认都没有」：后端**新建邮箱永远不设默认**，而「删掉默认邮箱」也**不会**
+         自动转给别的（库里就变成零个默认）⇒ 这是正常使用下必然出现的一种状态，提示条解释的
+         是「默认」这一列为什么全空。
+
+         ⚠️ **文案只陈述 `is_default` 的真实语义，一个字的发信承诺都不许有**：后端对
+         `is_default` 的全部消费只有列表排序（`ORDER BY is_default DESC`）与那条「至多一条为
+         true」的唯一索引，发信路径只读 `mail_digest_config.sender_account_id`
+         （`mail_digest::service::resolve_sender`）。写成「点「设为默认」…才能用它发信」会让
+         用户照做、回到交期汇总仍吃 21701（那页的 `senderMissing` 还会把「立即发送」置灰）。
+         守卫：`__tests__/MailAccountsTab.spec.ts` 的 H1。 -->
     <el-alert
       v-if="showNoDefaultHint"
       class="default-hint"
       type="warning"
       show-icon
       :closable="false"
-      title="还没有默认发信邮箱"
-      description="新建邮箱不会自动成为默认。在下方点「设为默认」选定一条后，交期汇总才能用它发信。"
+      title="还没有设为默认的邮箱"
+      description="新建邮箱不会自动成为默认；「默认」只影响这里的列表排序，不影响发信。交期汇总要用哪条邮箱，请在「交期汇总」页的「发信邮箱」下拉里选。"
     />
 
     <el-card shadow="never">

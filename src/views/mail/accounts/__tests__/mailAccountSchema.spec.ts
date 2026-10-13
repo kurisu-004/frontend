@@ -16,7 +16,8 @@
 //     字符、字段聚焦（红字落到具体输入项）。
 //  4. **字段错误聚合**：同字段多 issue 只取第一条。
 //
-// 环境：默认 node（本文件不碰 DOM）。
+// 环境：happy-dom（与同域其它 spec 同款；本文件只跑 zod，不碰 DOM —— 那行 pragma 是照抄
+// 同目录 spec 的形态，不是「本文件需要 DOM」）。
 
 import { describe, expect, it } from 'vitest';
 import {

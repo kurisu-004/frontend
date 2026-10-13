@@ -69,7 +69,10 @@ function account(over: Partial<MailAccountData> = {}): MailAccountData {
 
 const ACCOUNTS = [
   account({ is_default: true }),
-  account({ id: '9000000000000903', name: '仓库邮箱' }),
+  // ⚠️ 第二条刻意给一个**与第一条不同的 `version`**：两条都是 1 时，把 `mutationFn` 里的
+  // `row.version` 换成常量 `1` 全仓测试照样绿 —— 那就等于没钉住「OCC 锚取的是**被操作那一
+  // 行**」。W2 / W3 / W4 三条断言各自锚在这个 7 上。
+  account({ id: '9000000000000903', name: '仓库邮箱', version: 7 }),
 ];
 
 const META = {
@@ -312,7 +315,7 @@ describe('W — 四条写端点', () => {
 
     expect(await store.actions.submit()).toBe(true);
     expect(updateMailAccountMock).toHaveBeenCalledWith('9000000000000903', {
-      version: 1,
+      version: 7,
       name: '仓库邮箱',
       preset: 'NET_EASE_163',
       account: 'warehouse@qq.com',
@@ -351,7 +354,7 @@ describe('W — 四条写端点', () => {
     await tick();
 
     await store.actions.remove(ACCOUNTS[1]!);
-    expect(deleteMailAccountMock).toHaveBeenCalledWith('9000000000000903', { version: 1 });
+    expect(deleteMailAccountMock).toHaveBeenCalledWith('9000000000000903', { version: 7 });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['mail'] });
     expect(ElMessage.success).toHaveBeenCalledWith('邮箱已删除');
   });
@@ -385,7 +388,7 @@ describe('W — 四条写端点', () => {
     expect(setDefaultMailAccountMock).not.toHaveBeenCalled();
 
     await store.actions.makeDefault(ACCOUNTS[1]!);
-    expect(setDefaultMailAccountMock).toHaveBeenCalledWith('9000000000000903', { version: 1 });
+    expect(setDefaultMailAccountMock).toHaveBeenCalledWith('9000000000000903', { version: 7 });
   });
 });
 

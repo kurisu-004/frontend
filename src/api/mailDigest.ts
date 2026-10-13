@@ -81,6 +81,11 @@ export async function saveMailDigestConfig(
   payload: SaveMailDigestConfigPayload,
 ): Promise<MailDigestConfigData> {
   const resp = await api.post<MailDigestConfigData>('/mail-digest/config', payload);
+  // ⚠️ **部署顺序：后端必须先上**（照 CLAUDE.md「写侧 schema 接 `.strict()`」的登记口径）。
+  // `mailDigestConfigSchema` 是 `.strict()` 的写侧语义：后端给 `ConfigOut` **加一个字段**，
+  // 这行当场抛 ZodError（mutation 进 `onError` 弹「格式不符合预期」，而库里已落库成功）。
+  // 这正是写侧要 `.strict()` 的理由 —— 配置多 / 少一个字段是一次没被看见的决定，必须当场红。
+  // 后端契约已逐字段核对（19 键一致），真要加字段时同步改 schema 即可。
   return mailDigestConfigSchema.parse(resp.data);
 }
 

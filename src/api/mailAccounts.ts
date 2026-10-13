@@ -6,7 +6,7 @@
 //   POST /mail/accounts                    → 建档
 //   POST /mail/accounts/{id}               → 改档（**不是 PUT**，本仓后端只允许 GET/POST）
 //   POST /mail/accounts/{id}/delete        → 删除（被定时任务引用时后端 21708 拒）
-//   POST /mail/accounts/{id}/set-default   → 设为默认发信邮箱
+//   POST /mail/accounts/{id}/set-default   → 设为默认（列表标记，⚠️ 不影响发信）
 //
 // 端点全部 MANAGER 独占（后端 handler 层统一 require_role）。
 //
@@ -145,7 +145,11 @@ export async function deleteMailAccount(
 }
 
 /**
- * 设为默认发信邮箱（`POST /api/v2/mail/accounts/{id}/set-default`）。
+ * 设为默认（`POST /api/v2/mail/accounts/{id}/set-default`）。
+ *
+ * ⚠️ **只是给这一行打上「默认」标记，不决定发信**：后端对 `is_default` 的全部消费只有列表
+ * 排序与那条「至多一条为 true」的唯一索引；发信邮箱由交期汇总配置里的
+ * `sender_account_id` 决定（`mail_digest::service::resolve_sender` 不看本字段）。
  *
  * @param payload `version` **必填**（OCC 锚，取**目标行**当前的 `version`）。
  *

@@ -21,6 +21,8 @@
 //   - N2b：**删除端点不做 parse**，因为后端 `delete_account` 返 `R<()>`、信封 `data` 是
 //     `null` —— 没有形状可守（`parse(null)` 必抛，那正是「删除永远失败」的成因）。软删成功
 //     与否由 HTTP 状态码表达：失败一律 reject（21706 / 21708），store 的 onError 转人话。
+//     N2b3 是它的**源码侧补强**：只数那三个 parse 计数守不住「新造一个删除结果 schema 再
+//     接上 parse」这条路。
 // 少了 N1，把 parse 搬回 api 层是零信号；少了 N2，把 parse 从写端点删掉也是零信号。
 // 两个方向都要有人在。
 //
@@ -138,7 +140,32 @@ describe('mailAccounts api — 四条写端点必须 Zod 校验（N2）', () => 
   it('N2b2：删除失败（后端返 21708 信封）照常 reject 出 api 层', async () => {
     const err = Object.assign(new Error('该邮箱已被定时任务选中'), { code: 21708 });
     httpPostMock.mockRejectedValue(err);
-    await expect(deleteMailAccount('9000000000000902', VERSION_BODY)).rejects.toThrow('已被定时任务选中');
+    await expect(deleteMailAccount('9000000000000902', VERSION_BODY)).rejects.toThrow(
+      '已被定时任务选中',
+    );
+  });
+
+  it('N2b3：**源码**断言删除端点整条函数体里没有 parse，且值引入的 schema 只有三个写端点那一个', () => {
+    // ⚠️ N2b 只守得住「既有那三个 parse 没被接到删除上」：有人顺手新建一个删除结果的 schema
+    // （`{deleted: boolean}` 之类）、把它加进本文件的 schema mock、再在 deleteMailAccount 里
+    // parse 它时，N2b 那三个计数一个都不动、仍然全绿 —— 而线上正是「删除永远失败」。
+    // 补了这层源码断言，那条路就没有零信号的口子了。
+    const src = readFileSync(new URL('../mailAccounts.ts', import.meta.url), 'utf8');
+    const fn = src.match(/export async function deleteMailAccount[\s\S]*?\n\}/);
+    expect(fn).not.toBeNull();
+    // 函数体（不含 JSDoc）：只发请求、拿状态码，不碰响应体。
+    expect(fn![0]).toContain('/delete');
+    expect(fn![0]).not.toMatch(/\.parse\(/);
+
+    // 另一半：值引入**有且只有** `mailAccountSchema` 一个名字 —— 多一个名字就是「有人为删除
+    // 端点准备好了新的出参守门」，而它在 wire 上根本没有出参可守（`data` 是 null）。
+    const valueImports = [
+      ...src.matchAll(
+        /import\s+\{([^}]*)\}\s*from\s*'@\/views\/mail\/accounts\/mailAccountSchema'/g,
+      ),
+    ];
+    expect(valueImports).toHaveLength(1);
+    expect(valueImports[0]![1]!.replace(/\s/g, '')).toBe('mailAccountSchema');
   });
 
   it('N2c：守门失败时 api 层**抛**（不把坏响应透传给 store）', async () => {

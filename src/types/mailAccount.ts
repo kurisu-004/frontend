@@ -25,7 +25,8 @@ export interface SaveMailAccountPayload {
   name: string;
   /** SMTP 服务商预设；host / port / tls_mode 由后端按它推导，前端不传也不存。 */
   preset: MailAccountPreset;
-  /** 登录账号（163 是邮箱地址本身、QQ 是 QQ 号）。 */
+  /** SMTP 登录账号，163 / QQ **都**填完整邮箱地址（后端 `validate_account` 要求含 `@`）。
+   *  同时也是发件人地址。 */
   account: string;
   /** 授权码。**建档时必填**（库里还没有）。 */
   secret: string;

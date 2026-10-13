@@ -79,8 +79,13 @@ export const useMailAccountsStore = defineStore('mail-accounts', () => {
 
   /** 邮箱账号列表。**恒为数组**（拿不到时给 `[]`，页面据此渲染空态而不是 `undefined`）。 */
   const accounts = computed<MailAccountData[]>(() => accountsQuery.data.value ?? []);
-  /** 是否至少有一条默认发信邮箱。后端**新建永不设默认**、**删掉默认也不会自动转给别的**
-   *  ⇒ 「零个默认」是正常使用下必然出现的中间态，壳据此给一条提示（否则用户以为建好就能发）。 */
+  /** 是否至少有一条**带默认标记**的邮箱（判据 = 有行 `is_default`）。后端**新建永不设
+   *  默认**、**删掉默认也不会自动转给别的** ⇒ 「零个默认」是正常使用下必然出现的中间态，
+   *  壳据此提示「为什么『默认』这一列全是空的」。
+   *
+   *  ⚠️ **这条判据与发信无关**：后端对 `is_default` 的全部消费只有列表排序与「至多一条为
+   *  true」的唯一索引，发信邮箱由 `mail_digest_config.sender_account_id` 决定。所以它
+   *  既不 gate 任何写操作、也不进任何请求体。 */
   const hasDefault = computed(() => accounts.value.some((a) => a.is_default));
   const loading = accountsQuery.isFetching;
   /** SMTP 预设选项（`GET /mail/meta`），弹窗下拉的唯一来源。
@@ -154,7 +159,7 @@ export const useMailAccountsStore = defineStore('mail-accounts', () => {
   }
 
   /** 正在删除 / 正在设为默认的行 id（`null` = 无）。**按行**而不是布尔：布尔量挂到每一行上
-   *  会让整张表一起转圈，看不出是哪一条在处理。 */
+   *  会让每一行的按钮一起转圈，看不出是哪一条在处理。 */
   const deletingRowId = ref<string | null>(null);
   const settingDefaultRowId = ref<string | null>(null);
 
@@ -218,7 +223,9 @@ export const useMailAccountsStore = defineStore('mail-accounts', () => {
     mutationFn: (row: MailAccountData) => setDefaultMailAccount(row.id, { version: row.version }),
     onSuccess: async () => {
       await invalidateMailDomain();
-      ElMessage.success('已设为默认发信邮箱');
+      // ⚠️ 文案**只报这一次写操作做了什么**（把某行标成默认），不暗示它会改变发信行为：
+      // 发信邮箱由交期汇总配置里选的那条决定，`is_default` 只管列表排序（后端零消费方）。
+      ElMessage.success('已设为默认');
     },
     onError: (e: Error & { code?: number }) => handleWriteError(e, '设置默认邮箱失败'),
   });
@@ -254,9 +261,9 @@ export const useMailAccountsStore = defineStore('mail-accounts', () => {
   /** 删除。调用方（壳的 `el-popconfirm`）负责二次确认。
    *
    *  收**整行**（不是 id）：动作端点的 body 必填 `version`，取的是**这一行当前**的 OCC 锚。
-   *  `deletingRowId` 让壳把 loading 挂在**正在删的那一行**上 —— 布尔量挂在每一行上会让整张
-   *  表一起转圈，而它原来的处境更糟：这两个 loading 暴露在切片里却零消费方，删除进行中界面
-   *  毫无反馈、用户会连点好几次（第二次的 OCC 必然 40901）。 */
+   *  `deletingRowId` 让壳把 loading 挂在**正在删的那一行**上 —— 布尔量挂在每一行上会让每一行
+   *  的按钮一起转圈，而它原来的处境更糟：这两个 loading 暴露在切片里却零消费方，删除进行中
+   *  界面毫无反馈、用户会连点好几次（第二次的 OCC 必然 40901）。 */
   async function remove(row: MailAccountData): Promise<void> {
     deletingRowId.value = row.id;
     try {
@@ -268,7 +275,9 @@ export const useMailAccountsStore = defineStore('mail-accounts', () => {
     }
   }
 
-  /** 设为默认发信邮箱。已是默认的那条**不发请求**（幂等：后端那趟往返没有任何作用，
+  /** 设为默认（⚠️ **只影响列表排序，不影响发信**：发信邮箱由交期汇总配置里
+   *  `sender_account_id` 选中的那条决定，后端 `resolve_sender` 不看 `is_default`）。
+   *  已是默认的那条**不发请求**（幂等：后端那趟往返没有任何作用，
    *  而失败路径会弹一条「请刷新」之类的噪音）。 */
   async function makeDefault(row: MailAccountData): Promise<void> {
     if (row.is_default) return;
