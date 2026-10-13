@@ -26,7 +26,6 @@
 //     路由），sort_order 45，插在 floor_group(40) 与 settings_root(50) 之间；
 //   - 其下子菜单 mail_digest「交期汇总邮件」，path /mail/digest（与 router 的
 //     `path: 'mail/digest'` 逐字一致）、sort_order 10、icon Message（分组 icon Clock）。
-//     ⚠️ 本条已被下一条（2026-10-16）取代：code 改 scheduled_task / mail、path 改 /mail。
 // 2026-10-04 同步 backend-rust seeds/menu.sql：
 //   - workers_list 从 auth_group children 迁入 production_group children，
 //     path /workers → /production/worker-list，sort_order 10 → 25；

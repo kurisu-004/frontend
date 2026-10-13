@@ -11,7 +11,7 @@
 //   - N1：三条**读**端点（config / meta / logs）api 层**不** parse —— 它们有 queryFn
 //     承载，守门在 `composables/useMailDigestQuery.ts`。把 parse 搬回 api 层会让每屏
 //     数据被校验并克隆两遍，且两处校验点会随字段增删各自漂移。
-//   - N2：两条「跑一次」的端点（preview / send）**必须** parse —— 它们走 useMutation、
+//   - N2：三条**写**端点（保存配置 / preview / send）**必须** parse —— 它们走 useMutation、
 //     没有 queryFn 承载；漏掉 parse 时坏响应会一路流到 `iframe :srcdoc`（预览）与
 //     成功提示（发送）。
 // 少了 N1，把 parse 搬回 api 层是零信号；少了 N2，把 parse 从 preview / send 删掉也是
@@ -168,11 +168,23 @@ describe('mailDigest api 层守门点分工', () => {
     expect(schemaParse.logs).not.toHaveBeenCalled();
   });
 
-  it('N2：preview / send 必须 parse（走 useMutation，没有 queryFn 承载）', async () => {
+  it('N2：保存配置 / preview / send 必须 parse（走 useMutation，没有 queryFn 承载）', async () => {
+    await saveMailDigestConfig(CONFIG_PAYLOAD);
     await previewMailDigest({});
     await sendMailDigestNow({});
+    expect(schemaParse.config).toHaveBeenCalledTimes(1);
     expect(schemaParse.preview).toHaveBeenCalledTimes(1);
     expect(schemaParse.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('N2b：保存配置的 parse 失败会以 rejection 冒泡（store 拿它重置快照，坏响应会毁掉它）', async () => {
+    // 保存返回的是**存完之后**的那一行，`applyConfigToForm` 直接拿它重置 dirty 快照；
+    // 不守门时一个缺 `version` 的响应会让下一次提交带着 undefined 打 422。
+    schemaParse.config.mockImplementation(() => {
+      throw new Error('ZodError: 保存响应缺 version');
+    });
+    await expect(saveMailDigestConfig(CONFIG_PAYLOAD)).rejects.toThrow('保存响应缺 version');
+    schemaParse.config.mockImplementation((v: unknown) => v);
   });
 
   it('N3：preview 的 parse 失败会以 rejection 冒泡（坏响应不许一路流到 iframe srcdoc）', async () => {
@@ -199,7 +211,7 @@ describe('mailDigest api 层守门点分工', () => {
       /import type \{[^}]*\} from '@\/views\/mail\/digest\/mailDigestSchema'/s,
     );
     expect(typeImports).not.toBeNull();
-    // 运行时 import 恰好 **1 条语句**（内含 preview / send 两个 schema 的 parse），
+    // 运行时 import 恰好 **1 条语句**（内含 config / preview / send 三个 schema 的 parse），
     // 不多不少 —— 原注释写「恰好两条」会被读成「两条 import 语句」，实际是一条。
     const runtimeImports = src.match(
       /import \{[^}]*\} from '@\/views\/mail\/digest\/mailDigestSchema'/g,

@@ -29,15 +29,24 @@ export interface MailAccountsQueryGate {
   enabled: MaybeRefOrGetter<boolean>;
 }
 
-/** 读邮箱账号列表（`GET /mail/accounts`）。 */
+/** 读邮箱账号列表（`GET /mail/accounts`）。
+ *
+ *  ⚠️ 出参是**信封对象**（`{items: [...]}`），所以这里 parse 完**再取 `.items`**：
+ *  直接把 parse 结果当数组用（`data.value.map(...)`）会在守门通过后拿到一个对象，
+ *  表现是「列表恒空 + 控制台一条 `.map is not a function`」；反过来把 schema 写成
+ *  `z.array` 则是在**每一屏**抛 ZodError（症状同样是空白页，但连报错线索都没有）。 */
 export function useMailAccountsQuery(options: MailAccountsQueryGate) {
   const query = useQuery({
     queryKey: computed(() => qk.mailAccounts()),
-    queryFn: async () => mailAccountListSchema.parse(await listMailAccounts()),
+    queryFn: async () => mailAccountListSchema.parse(await listMailAccounts()).items,
     enabled: computed(() => toValue(options.enabled)),
   });
 
-  /** fetchList 别名 = refetch 的 async 包装（store 的「刷新」按钮）。 */
+  /** fetchList 别名 = refetch 的 async 包装（store 的「刷新」按钮）。
+   *
+   *  ⚠️ `data` 是**已剥掉信封的数组**（不是 `{items:[]}`）：这个 hook 的两个消费方
+   *  （邮箱列表页与交期汇总的「发信邮箱」下拉）都只想要那一个数组，把信封留在 hook 内部
+   *  就不会让每个消费方各写一次 `.items` —— 而漏一次的表现是「`.map is not a function`」。 */
   async function fetchList(): Promise<void> {
     await query.refetch();
   }

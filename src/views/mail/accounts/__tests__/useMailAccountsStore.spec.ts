@@ -12,7 +12,9 @@
 //  3. **授权码语义**：建档必填、改档**留空 = 不改**（wire 上是空串）；列表/弹窗都拿不到它。
 //  4. **错误码分流**：21706 / 21707 / 21708 各弹对应的人话（21708 点名引用方）。
 //  5. **前端校验前置**：名称空 / 账号空 / 预设未选 / 建档授权码空时**不发请求**，只标红字段。
-//  6. **幂等**：已是默认的那条再点「设为默认」**不发请求**。
+//  6. **幂等 + OCC 锚**：已是默认的那条再点「设为默认」**不发请求**；删除 / 设为默认
+//     两条动作端点的 body **必带 `version`**（漏传是 422 纯文本、拿不到业务码）。
+//  7. **改档时保存按钮也要转圈**（`saving` 覆盖建档 + 改档两条 mutation）。
 //
 // mock 策略：`vi.mock('@/api/mailAccounts')` 全桩；`vi.mock('element-plus')` 把 ElMessage
 // 桩成 no-op。顺序硬约束：pinia 先、VueQueryPlugin 后（store setup 首行 `useQueryClient()`）。
@@ -53,7 +55,11 @@ function account(over: Partial<MailAccountData> = {}): MailAccountData {
     version: 1,
     name: '采购部邮箱',
     preset: 'NET_EASE_163',
+    preset_label: '网易 163',
     account: 'purchase@example.com',
+    host: 'smtp.163.com',
+    port: 465,
+    tls_mode: 'WRAPPED',
     is_default: false,
     created_at: '2026-10-16 08:00:00',
     updated_at: '2026-10-16 08:00:00',
@@ -113,11 +119,12 @@ let qc: QueryClient;
 beforeEach(() => {
   vi.clearAllMocks();
   qc = setupApp();
-  listMailAccountsMock.mockResolvedValue(ACCOUNTS);
+  listMailAccountsMock.mockResolvedValue({ items: ACCOUNTS });
   fetchMailMetaMock.mockResolvedValue(META);
   createMailAccountMock.mockResolvedValue(account({ version: 1 }));
   updateMailAccountMock.mockResolvedValue(account({ version: 2 }));
-  deleteMailAccountMock.mockResolvedValue({ deleted: true });
+  // 后端 `R<()>` ⇒ `data: null`，api 层返回 undefined（没有出参可守）
+  deleteMailAccountMock.mockResolvedValue(undefined);
   setDefaultMailAccountMock.mockResolvedValue(account({ is_default: true }));
 });
 
@@ -143,6 +150,8 @@ describe('I — 4 不变量', () => {
     expect(store.query.accounts[0]?.name).toBe('采购部邮箱');
     expect(store.query.presetOptions).toHaveLength(2);
     expect(store.dialogs.visible).toBe(false);
+    // 「有邮箱但一个默认都没有」的提示判据：ACCOUNTS[0] 是默认 ⇒ true
+    expect(store.query.hasDefault).toBe(true);
   });
 
   it('I3：$dispose() 后重建 store 拿到全新弹窗态（不泄漏上一次的未保存输入）', async () => {
@@ -312,19 +321,62 @@ describe('W — 四条写端点', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['mail'] });
   });
 
-  it('W3：删除 ⇒ 打 id，成功后失效 + success', async () => {
+  it('W2b：改档进行中 `saving` 为 true（保存按钮转圈；只挂 create 的话改档时按钮不转）', async () => {
+    const store = useMailAccountsStore();
+    store.query.openGate();
+    await tick();
+
+    let resolveUpdate: ((v: MailAccountData) => void) | undefined;
+    updateMailAccountMock.mockImplementation(
+      () =>
+        new Promise<MailAccountData>((r) => {
+          resolveUpdate = r;
+        }),
+    );
+    store.dialogs.openEdit(ACCOUNTS[1]!);
+    const p = store.actions.submit();
+    await tick();
+    expect(store.actions.saving).toBe(true);
+    resolveUpdate?.(account({ id: '9000000000000903', version: 2 }));
+    await p;
+    expect(store.actions.saving).toBe(false);
+  });
+
+  it('W3：删除 ⇒ 打 id **+ version**（OCC 锚），成功后失效 + success', async () => {
+    // ⚠️ 动作端点的 body 必填 `version` 且无 serde default ⇒ 发 `{}` 是 HTTP 422 纯文本，
+    // 连业务码都拿不到（查表文案全落空）。收「整行」而不是 id 就是为了这个 version。
     const invalidateSpy = vi.spyOn(qc, 'invalidateQueries');
     const store = useMailAccountsStore();
     store.query.openGate();
     await tick();
 
-    await store.actions.remove('9000000000000902');
-    expect(deleteMailAccountMock).toHaveBeenCalledWith('9000000000000902');
+    await store.actions.remove(ACCOUNTS[1]!);
+    expect(deleteMailAccountMock).toHaveBeenCalledWith('9000000000000903', { version: 1 });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['mail'] });
     expect(ElMessage.success).toHaveBeenCalledWith('邮箱已删除');
   });
 
-  it('W4：设为默认 ⇒ 打 id；**已是默认的那条不发请求**（幂等）', async () => {
+  it('W3b：删除进行中 exposing 那一行的 id（壳据此把 loading 挂在**那一行**上）', async () => {
+    const store = useMailAccountsStore();
+    store.query.openGate();
+    await tick();
+
+    let resolveDelete: (() => void) | undefined;
+    deleteMailAccountMock.mockImplementation(
+      () =>
+        new Promise<void>((r) => {
+          resolveDelete = r;
+        }),
+    );
+    const p = store.actions.remove(ACCOUNTS[1]!);
+    await tick();
+    expect(store.actions.deletingRowId).toBe('9000000000000903');
+    resolveDelete?.();
+    await p;
+    expect(store.actions.deletingRowId).toBeNull();
+  });
+
+  it('W4：设为默认 ⇒ 打 id **+ version**；**已是默认的那条不发请求**（幂等）', async () => {
     const store = useMailAccountsStore();
     store.query.openGate();
     await tick();
@@ -333,7 +385,7 @@ describe('W — 四条写端点', () => {
     expect(setDefaultMailAccountMock).not.toHaveBeenCalled();
 
     await store.actions.makeDefault(ACCOUNTS[1]!);
-    expect(setDefaultMailAccountMock).toHaveBeenCalledWith('9000000000000903');
+    expect(setDefaultMailAccountMock).toHaveBeenCalledWith('9000000000000903', { version: 1 });
   });
 });
 
@@ -348,7 +400,7 @@ describe('E — 失败路径：失效 + 文案', () => {
     await tick();
     invalidateSpy.mockClear();
 
-    await store.actions.remove('9000000000000902');
+    await store.actions.remove(ACCOUNTS[1]!);
 
     // ⚠️ 失败也失效：引用关系只有后端知道，本端副本在那一刻已不等于真源。
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['mail'] });

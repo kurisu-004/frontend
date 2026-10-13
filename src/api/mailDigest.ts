@@ -20,8 +20,9 @@
 //   - 三条**读**端点（config / meta / logs）的守门在 queryFn
 //     （`views/mail/digest/composables/useMailDigestQuery.ts`），本文件**不 parse** ——
 //     parse 返回深拷贝，多一层等于每屏数据被校验并克隆两遍；
-//   - 两条「跑一次」的端点（preview / send）走 useMutation、**没有 queryFn 承载**，
-//     守门留在本层（CLAUDE.md 为这类调用留的口子，同 `api/inspection.ts` 的扫码树）。
+//   - 两条「跑一次」的端点（preview / send）与**保存配置**这三条走 useMutation、
+//     **没有 queryFn 承载**，守门留在本层（CLAUDE.md 为这类调用留的口子，同
+//     `api/inspection.ts` 的扫码树）。
 //   出参类型一律 `import type` 取 schema 的 `z.infer` 派生类型（编译期擦除，不留
 //   api → views 的**类型**依赖边）；只有上面两条 parse 需要运行时引入 schema 模块。
 
@@ -37,6 +38,7 @@ import type {
   MailDigestMetaData,
 } from '@/views/mail/digest/mailDigestSchema';
 import {
+  mailDigestConfigSchema,
   mailDigestPreviewSchema,
   mailDigestSendResultSchema,
   type MailDigestPreviewData,
@@ -62,6 +64,11 @@ export async function fetchMailDigestConfig(): Promise<MailDigestConfigData> {
  * @param payload `version` **必填**（OCC 锚，取 `GET /config` 的 `version`；缺省是
  *   axum 的 HTTP 422 纯文本，不是业务信封）。
  *
+ * 守门在本层（走 useMutation、没有 queryFn 承载，CLAUDE.md 为这类调用留的口子）。
+ * 返回的是**存完之后**的那一行（`id` / `version` 都已更新），store 的 `applyConfigToForm`
+ * 直接拿它重置快照；不守门的话，一个缺 `version` 的响应会让下一次提交带着 `undefined`
+ * 打 422，而用户看到的只是一句兜底文案。
+ *
  * 失败抛 `ApiError`：
  * - 40901 OCC 版本冲突（配置已被他人改动，UI 提示刷新后重试并重拉配置）；
  * - 21703 收件人邮箱格式不合法；
@@ -74,7 +81,7 @@ export async function saveMailDigestConfig(
   payload: SaveMailDigestConfigPayload,
 ): Promise<MailDigestConfigData> {
   const resp = await api.post<MailDigestConfigData>('/mail-digest/config', payload);
-  return resp.data;
+  return mailDigestConfigSchema.parse(resp.data);
 }
 
 /**

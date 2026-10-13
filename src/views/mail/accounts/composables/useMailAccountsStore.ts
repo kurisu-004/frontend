@@ -79,6 +79,9 @@ export const useMailAccountsStore = defineStore('mail-accounts', () => {
 
   /** 邮箱账号列表。**恒为数组**（拿不到时给 `[]`，页面据此渲染空态而不是 `undefined`）。 */
   const accounts = computed<MailAccountData[]>(() => accountsQuery.data.value ?? []);
+  /** 是否至少有一条默认发信邮箱。后端**新建永不设默认**、**删掉默认也不会自动转给别的**
+   *  ⇒ 「零个默认」是正常使用下必然出现的中间态，壳据此给一条提示（否则用户以为建好就能发）。 */
+  const hasDefault = computed(() => accounts.value.some((a) => a.is_default));
   const loading = accountsQuery.isFetching;
   /** SMTP 预设选项（`GET /mail/meta`），弹窗下拉的唯一来源。
    *  **三态**：`[]` = meta 还在飞（弹窗里的描述行留空，别显示成「未选预设」）。 */
@@ -150,6 +153,11 @@ export const useMailAccountsStore = defineStore('mail-accounts', () => {
     return true;
   }
 
+  /** 正在删除 / 正在设为默认的行 id（`null` = 无）。**按行**而不是布尔：布尔量挂到每一行上
+   *  会让整张表一起转圈，看不出是哪一条在处理。 */
+  const deletingRowId = ref<string | null>(null);
+  const settingDefaultRowId = ref<string | null>(null);
+
   // ============ 切片：actions（四条写端点）============
   /** 写完立即失效本域（两条读键一把；「写完立即看到自己那笔」的优化，非一致性保证）。 */
   function invalidateMailDomain(): Promise<void> {
@@ -195,7 +203,9 @@ export const useMailAccountsStore = defineStore('mail-accounts', () => {
 
   const deleteMutation = useMutation({
     mutationKey: ['mail', 'delete-account'],
-    mutationFn: (id: string) => deleteMailAccount(id),
+    // ⚠️ 收**整行**而不是 id：两条动作端点（删除 / 设为默认）都必填 `version`（OCC 锚），
+    // 只把 id 传下去就必然发一个 `{}` 出去 ⇒ 后端 422 纯文本、连业务码都没有。
+    mutationFn: (row: MailAccountData) => deleteMailAccount(row.id, { version: row.version }),
     onSuccess: async () => {
       await invalidateMailDomain();
       ElMessage.success('邮箱已删除');
@@ -205,7 +215,7 @@ export const useMailAccountsStore = defineStore('mail-accounts', () => {
 
   const setDefaultMutation = useMutation({
     mutationKey: ['mail', 'set-default-account'],
-    mutationFn: (id: string) => setDefaultMailAccount(id),
+    mutationFn: (row: MailAccountData) => setDefaultMailAccount(row.id, { version: row.version }),
     onSuccess: async () => {
       await invalidateMailDomain();
       ElMessage.success('已设为默认发信邮箱');
@@ -241,12 +251,20 @@ export const useMailAccountsStore = defineStore('mail-accounts', () => {
     }
   }
 
-  /** 删除。调用方（壳的 `el-popconfirm`）负责二次确认。 */
-  async function remove(id: string): Promise<void> {
+  /** 删除。调用方（壳的 `el-popconfirm`）负责二次确认。
+   *
+   *  收**整行**（不是 id）：动作端点的 body 必填 `version`，取的是**这一行当前**的 OCC 锚。
+   *  `deletingRowId` 让壳把 loading 挂在**正在删的那一行**上 —— 布尔量挂在每一行上会让整张
+   *  表一起转圈，而它原来的处境更糟：这两个 loading 暴露在切片里却零消费方，删除进行中界面
+   *  毫无反馈、用户会连点好几次（第二次的 OCC 必然 40901）。 */
+  async function remove(row: MailAccountData): Promise<void> {
+    deletingRowId.value = row.id;
     try {
-      await deleteMutation.mutateAsync(id);
+      await deleteMutation.mutateAsync(row);
     } catch {
       /* 错误已由 onError 提示 */
+    } finally {
+      deletingRowId.value = null;
     }
   }
 
@@ -254,15 +272,19 @@ export const useMailAccountsStore = defineStore('mail-accounts', () => {
    *  而失败路径会弹一条「请刷新」之类的噪音）。 */
   async function makeDefault(row: MailAccountData): Promise<void> {
     if (row.is_default) return;
+    settingDefaultRowId.value = row.id;
     try {
-      await setDefaultMutation.mutateAsync(row.id);
+      await setDefaultMutation.mutateAsync(row);
     } catch {
       /* 同上 */
+    } finally {
+      settingDefaultRowId.value = null;
     }
   }
 
   const query = {
     accounts,
+    hasDefault,
     loading,
     presetOptions,
     selectedPresetDetail,
@@ -285,9 +307,13 @@ export const useMailAccountsStore = defineStore('mail-accounts', () => {
   };
 
   const actions = {
-    saving: createMutation.isPending,
-    deleting: deleteMutation.isPending,
-    settingDefault: setDefaultMutation.isPending,
+    /** 弹窗保存按钮的转圈态：**建档与改档共用弹窗**，只挂 create 会让改档时按钮不转圈、
+     *  用户以为没点上而连点（第二次必然撞 40901）。 */
+    saving: computed(() => createMutation.isPending.value || updateMutation.isPending.value),
+    /** 正在删除的行 id（`null` = 无）。壳据此把 loading 挂在那一行的按钮上。 */
+    deletingRowId,
+    /** 正在设为默认的行 id（`null` = 无）。 */
+    settingDefaultRowId,
     submit,
     remove,
     makeDefault,

@@ -32,19 +32,25 @@ function apiError(code: number, message = `后端 ${code}`): Error & { code: num
 describe('MAIL_ACCOUNT_ERROR_CODES — 码值钉死', () => {
   // ⚠️ 这组是全仓前端唯一允许写裸数字的地方（映射表的回归闸门）。改成具名常量引用会让
   // 「后端换码段」变成零信号。
-  it('三个码与后端逐字一致，且与 mail-digest 域的 21701..21705 不重叠', () => {
+  it('四个码与后端逐字一致；除 21704 外与 mail-digest 域的 21701..21705 不重叠', () => {
     expect(MAIL_ACCOUNT_ERROR_CODES).toEqual({
+      CONFIG_INVALID: 21704,
       ACCOUNT_NOT_FOUND: 21706,
       NAME_DUPLICATED: 21707,
       ACCOUNT_IN_USE: 21708,
     });
+    // ⚠️ 21704 是**两域共用码**（后端 `BIZ_MAIL_CONFIG_INVALID`）：本域用它报「账号不是完整
+    // 邮箱地址 / 授权码含控制字符 / 名称超长」，mail_digest 域用它报「频率与配套字段组合
+    // 非法」。它的措辞必须两边都说得通，交期汇总页则由 digest 自己的表先命中。
     const digestCodes = Object.values(MAIL_DIGEST_ERROR_CODES);
     for (const code of Object.values(MAIL_ACCOUNT_ERROR_CODES)) {
+      if (code === MAIL_ACCOUNT_ERROR_CODES.CONFIG_INVALID) continue;
       expect(digestCodes).not.toContain(code);
     }
+    expect(digestCodes).toContain(MAIL_ACCOUNT_ERROR_CODES.CONFIG_INVALID);
   });
 
-  it('映射表逐条覆盖三个码（漏一条 ⇒ 那条退回兜底文案，用户看不出发生了什么）', () => {
+  it('映射表逐条覆盖四个码（漏一条 ⇒ 那条退回兜底文案，用户看不出发生了什么）', () => {
     for (const code of Object.values(MAIL_ACCOUNT_ERROR_CODES)) {
       expect(MAIL_ACCOUNT_ERROR_TEXT[code]).toBeTruthy();
     }

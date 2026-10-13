@@ -37,6 +37,10 @@
       title="还没有可用邮箱，定时与手动发送都会失败"
       description="请先到「邮箱设置」里新增一条邮箱账号（填写服务商授权码），再回到本页选择发信邮箱。"
     />
+    <!-- ⚠️ 文案里**不出现**「不选也会用默认邮箱发」这类说法：后端
+         `mail_digest::service::resolve_sender` 对 `sender_account_id IS NULL` 直接返
+         21701（503），**没有**回落到默认邮箱的分支。理由写在代码注释里，不写给用户看
+         —— 用户要的是「选一条」，不是一段与后端争辩的说明。 -->
     <el-alert
       v-else-if="store.query.senderMissing"
       class="sender-alert"
@@ -44,7 +48,7 @@
       show-icon
       :closable="false"
       title="尚未选择发信邮箱"
-      description="可在下方「发信邮箱」里选一条；不选时将由系统使用默认邮箱发送。本页其余配置仍可正常保存。"
+      description="不选则无法发送：请在下方「发信邮箱」里选一条。本页其余配置仍可正常保存。"
     />
 
     <el-alert

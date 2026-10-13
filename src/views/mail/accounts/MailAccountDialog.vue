@@ -15,11 +15,16 @@
      的登录密码**当成授权码提交了（明文进库、且永远看不到）。
   2. **预设下拉 + 只读描述行**：下拉选项取 `/mail/meta` 的 `presets[]`（展示 `label`），
      选中后下方那条只读行展示 `host:port:tls_mode`。**这三值由后端下发**（前端的
-     `mailAccountPresetSchema` 只守枚举取值域，没有「163 是什么端口」这种常量）——
+     `mailAccountPresetSchema` 只守**入参**侧的封闭集，没有「163 是什么端口」这种常量）——
      前端另存一份就是第二个真源，后端改端口 / 加一家服务商时它不会报错、只会静默显示
      旧值。
   3. **不做「回显掩码」**：列表与弹窗里都没有任何由授权码派生的展示（连长度都没有）。
      「已配置」是这类信息唯一诚实的表达方式。
+  4. **三个 `maxlength` 一律绑 schema 的常量**（`MAIL_ACCOUNT_NAME_MAX` /
+     `_ACCOUNT_MAX` / `_SECRET_MAX`），模板里不写第二份字面量 —— 写死了就会出现「改了
+     schema 的上限、界面仍按旧值拦（或放行）」，用户在浏览器过得去、后端拿 21704 拒。
+  5. **登录账号 placeholder 不教人填 QQ 号**：后端 `validate_account` 要求**必须含 `@`**
+     （163 与 QQ 都是完整邮箱地址），照旧文案填 QQ 号只会吃一个 21704。
 -->
 <template>
   <el-dialog :model-value="modelValue" :title="title" width="520px" @update:model-value="onCancel">
@@ -28,7 +33,7 @@
         <el-input
           :model-value="form.name"
           placeholder="给这条邮箱起个名字，如「采购部邮箱」"
-          maxlength="64"
+          :maxlength="MAIL_ACCOUNT_NAME_MAX"
           show-word-limit
           @update:model-value="patch({ name: String($event ?? '') })"
         />
@@ -57,8 +62,8 @@
       <el-form-item label="登录账号" :error="errors.account" required>
         <el-input
           :model-value="form.account"
-          placeholder="163 填邮箱地址本身，QQ 填 QQ 号"
-          maxlength="128"
+          placeholder="SMTP 登录账号，163 / QQ 都填完整邮箱地址"
+          :maxlength="MAIL_ACCOUNT_ACCOUNT_MAX"
           @update:model-value="patch({ account: String($event ?? '') })"
         />
       </el-form-item>
@@ -70,7 +75,7 @@
           show-password
           autocomplete="new-password"
           :placeholder="secretPlaceholder"
-          maxlength="128"
+          :maxlength="MAIL_ACCOUNT_SECRET_MAX"
           @update:model-value="patch({ secret: String($event ?? '') })"
         />
         <div class="field-hint">加密保存，保存后不再显示，也无法查看</div>
@@ -90,11 +95,14 @@
 // 2026-10-16 新建：见文件头。0 业务状态 —— 表单模型是 prop、补丁与提交都是 emit。
 
 import { computed } from 'vue';
-import type {
-  MailAccountFormFieldErrors,
-  MailAccountFormModel,
-  MailAccountPresetData,
-  MailPresetOptionData,
+import {
+  MAIL_ACCOUNT_ACCOUNT_MAX,
+  MAIL_ACCOUNT_NAME_MAX,
+  MAIL_ACCOUNT_SECRET_MAX,
+  type MailAccountFormFieldErrors,
+  type MailAccountFormModel,
+  type MailAccountPresetData,
+  type MailPresetOptionData,
 } from './mailAccountSchema';
 
 const props = defineProps<{

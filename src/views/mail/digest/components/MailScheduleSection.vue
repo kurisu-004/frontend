@@ -37,14 +37,15 @@
 <template>
   <div class="mail-schedule">
     <!-- 2026-10-16：发信邮箱。放最前面是因为它是「能不能发出去」的前置条件，
-         比「什么时候发」更该先看见。空值 = 未选（合法，页面顶部会给告警）。 -->
-    <div :class="['field-row', rowClass('sender_account')]">
+         比「什么时候发」更该先看见。空值 = 未选（保存合法，但**发不出去**：后端
+         `resolve_sender` 对 null 直接 21701，没有回落默认邮箱的分支 —— 见页面顶部告警）。 -->
+    <div :class="['field-row', rowClass('sender_account_id')]">
       <span class="field-label">发信邮箱</span>
       <el-select
         :model-value="modelValue.sender_account_id"
         class="sender-select"
         clearable
-        placeholder="未选（发送时使用默认邮箱）"
+        placeholder="未选（发送会失败）"
         aria-label="发信邮箱"
         @update:model-value="patch({ sender_account_id: toNullableString($event) })"
       >
@@ -53,7 +54,9 @@
       <span v-if="senderAccounts.length === 0" class="field-hint">
         还没有可用邮箱，请先到「邮箱设置」里新增一条
       </span>
-      <span v-if="errors?.sender_account" class="field-error">{{ errors.sender_account }}</span>
+      <span v-if="errors?.sender_account_id" class="field-error">{{
+        errors.sender_account_id
+      }}</span>
     </div>
 
     <div class="field-row">

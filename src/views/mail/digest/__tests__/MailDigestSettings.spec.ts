@@ -7,11 +7,11 @@
 //  1. **v-model 回写**：section emit 出来的整份表单模型真的写回 store 的 `query.form`
 //     （壳是唯一接线点，写错的表现是「改了输入框、保存时发的还是旧值」）；
 //  2. **发信邮箱状态条**（2026-10-16 取代原「SMTP 状态条」）：一条邮箱都没有 ⇒ 顶部出
-//     warning + 「立即发送」禁用；有邮箱但本条配置没选 ⇒ 出 warning 但**不**禁用（后端
-//     会回落到默认邮箱，仍能真发）；都正常 ⇒ 不出（邮箱列表还没回来时也不出 —— 否则会
-//     先闪一条假告警）；
+//     warning + 「立即发送」禁用；**有邮箱但本条配置没选同样出 warning 且禁用**（后端
+//     `resolve_sender` 对 null 直接 21701、没有回落到默认邮箱的分支，而「立即发送」不可
+//     撤销）；都正常 ⇒ 不出（邮箱列表还没回来时也不出 —— 否则会先闪一条假告警）；
 //  3. **「立即发送」走二次确认**：只有 `el-popconfirm` 的 confirm 才发请求（真发不可撤销，
-//     点一下就发是事故）；按钮本身在「一条邮箱都没有」时禁用。
+//     点一下就发是事故）；按钮本身在「发不出信」（无邮箱 / 未选邮箱）时禁用。
 //
 // section 子组件在本 spec 里用桩替换（VTU 的 `stubs` 优先于 SFC 的局部 import）：
 // 被测的是壳的接线，不是三个 section 的内部渲染（那三份各有 spec）。被桩替掉的组件
@@ -125,7 +125,11 @@ const ACCOUNTS = [
     version: 1,
     name: '采购部邮箱',
     preset: 'NET_EASE_163',
+    preset_label: '网易 163',
     account: 'purchase@example.com',
+    host: 'smtp.163.com',
+    port: 465,
+    tls_mode: 'WRAPPED',
     is_default: true,
     created_at: '2026-10-16 08:00:00',
     updated_at: '2026-10-16 08:00:00',
@@ -142,13 +146,16 @@ const loadingDirective: Directive<HTMLElement, unknown> = {
   },
 };
 
+// ⚠️ `description` 也在桩里渲染出来（初版漏了它，于是「告警文案不承诺『不选也能发』」那条
+// 文案回归断言是恒真的假绿 —— 真正的文案全在 description 里）。
 const ElAlertStub = defineComponent({
   name: 'ElAlert',
-  props: ['title', 'type'],
+  props: ['title', 'description', 'type'],
   setup(props, { slots }) {
     return () =>
       h('div', { class: ['mock-alert', `mock-alert-${props.type}`] }, [
         h('span', { class: 'alert-title' }, String(props.title ?? '')),
+        h('span', { class: 'alert-description' }, String(props.description ?? '')),
         slots.default?.(),
       ]);
   },
@@ -298,7 +305,7 @@ beforeEach(() => {
   fetchMailDigestConfigMock.mockResolvedValue(CONFIG);
   fetchMailDigestMetaMock.mockResolvedValue(META);
   listMailDigestLogsMock.mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 });
-  listMailAccountsMock.mockResolvedValue(ACCOUNTS);
+  listMailAccountsMock.mockResolvedValue({ items: ACCOUNTS });
   saveMailDigestConfigMock.mockResolvedValue(CONFIG);
   previewMailDigestMock.mockResolvedValue({
     subject: 's',
@@ -363,7 +370,7 @@ describe('MailDigestSettings — 发信邮箱状态条与「立即发送」（20
   }
 
   it('一条邮箱都没有：出「还没有可用邮箱」告警 + 「立即发送」按钮禁用', async () => {
-    listMailAccountsMock.mockResolvedValue([]);
+    listMailAccountsMock.mockResolvedValue({ items: [] });
     const { wrapper } = await mountPage();
 
     const alerts = warningAlerts(wrapper);
@@ -373,15 +380,33 @@ describe('MailDigestSettings — 发信邮箱状态条与「立即发送」（20
     wrapper.unmount();
   });
 
-  it('有邮箱但本条配置没选：出「尚未选择发信邮箱」告警，但**不禁用**立即发送', async () => {
-    // 后端在 sender_account_id 为 null 时回落到默认邮箱，仍能真发 ⇒ 只告警不禁用。
+  it('有邮箱但本条配置没选：出「尚未选择发信邮箱」告警，**且禁用**立即发送', async () => {
+    // ⚠️ 禁用：后端 `mail_digest::service::resolve_sender` 对 `sender_account_id IS NULL`
+    // 直接返 21701（HTTP 503），全仓没有回落到默认邮箱的分支 ⇒ 「不选也能发」是假承诺，
+    // 而「立即发送」是真发、不可撤销。
     fetchMailDigestConfigMock.mockResolvedValue({ ...CONFIG, sender_account_id: null });
     const { wrapper } = await mountPage();
 
     const alerts = warningAlerts(wrapper);
     expect(alerts).toHaveLength(1);
     expect(alerts[0]?.text()).toContain('尚未选择发信邮箱');
-    expect(sendButton(wrapper)?.attributes('disabled')).toBeUndefined();
+    expect(sendButton(wrapper)?.attributes('disabled')).toBeDefined();
+    wrapper.unmount();
+  });
+
+  it('⚠️ 顶部告警**不承诺**「不选也能发」（文案回归：后端没有回落默认邮箱的分支）', async () => {
+    // 「立即发送」是真发、不可撤销；文案一旦又写成「不选时将由系统使用默认邮箱发送」，
+    // 用户就会点一次、确认一次、然后吃一个 21701。下拉的 placeholder 侧由
+    // `MailScheduleSection.spec.ts` 的 S5 守。
+    fetchMailDigestConfigMock.mockResolvedValue({ ...CONFIG, sender_account_id: null });
+    const { wrapper } = await mountPage();
+
+    const text = wrapper
+      .findAll('.mock-alert')
+      .map((n) => n.text())
+      .join('|');
+    expect(text).toContain('尚未选择发信邮箱');
+    expect(text).not.toMatch(/默认邮箱|不选.{0,8}也能发|回落到默认|使用默认/);
     wrapper.unmount();
   });
 
@@ -393,7 +418,7 @@ describe('MailDigestSettings — 发信邮箱状态条与「立即发送」（20
   });
 
   it('告警文案里**不出现任何环境变量名**（SMTP 已改成页面内配置）', async () => {
-    listMailAccountsMock.mockResolvedValue([]);
+    listMailAccountsMock.mockResolvedValue({ items: [] });
     const { wrapper } = await mountPage();
     const text = wrapper
       .findAll('.mock-alert')

@@ -14,7 +14,8 @@
 // 覆盖：
 //   - W1 / M1：queryKey 取自 `keys.ts` 工厂（不在调用点拼字面量数组）；
 //   - W2：`enabled: false` 时零网络请求（闸门由 store 的 `openGate()` 开）；
-//   - W3 系列：坏响应 ⇒ `query.error` 非空且 data 不落值（**parse 真接在返回路径上**）；
+//   - W3 系列：坏响应 ⇒ `query.error` 非空且 data 不落值（**parse 真接在返回路径上**），
+//     含「信封形状错」「出参少 4 个推导键」「误带 encrypted_secret」三类；
 //   - M4：meta 的 `staleTime` / `gcTime` 是共享基础数据层那一档（30s / **有限** 5min；禁
 //     `POSITIVE_INFINITY` —— 那是 dashboard 域靠 WS 事件失效才成立的例外，本域没有失效通道）。
 
@@ -39,17 +40,24 @@ import { ElMessage } from 'element-plus';
 import { useMailAccountsQuery, useMailMetaQuery } from '../composables/useMailAccountsQuery';
 import { qk } from '@/composables/queries/keys';
 
-/** 一条合法的 `AccountOut`（守门 schema 全 9 键）。 */
+/** 一条合法的 `MailAccountOut`（守门 schema 全 **12** 键，少一个就抛）。 */
 const ACCOUNT = {
   id: '9000000000000902',
   version: 1,
   name: '采购部邮箱',
   preset: 'NET_EASE_163',
+  preset_label: '网易 163',
   account: 'purchase@example.com',
+  host: 'smtp.163.com',
+  port: 465,
+  tls_mode: 'WRAPPED',
   is_default: true,
   created_at: '2026-10-16 08:00:00',
   updated_at: '2026-10-16 08:00:00',
 };
+
+/** `GET /mail/accounts` 的出参是**信封对象**（后端 `MailAccountListOut`），不是裸数组。 */
+const LIST = { items: [ACCOUNT] };
 
 const META = {
   presets: [
@@ -90,7 +98,7 @@ function tick(ms = 30): Promise<void> {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  listMailAccountsMock.mockResolvedValue([ACCOUNT]);
+  listMailAccountsMock.mockResolvedValue(LIST);
   fetchMailMetaMock.mockResolvedValue(META);
   testQueryClient = new QueryClient({
     defaultOptions: { mutations: { retry: 0 }, queries: { retry: 0 } },
@@ -129,6 +137,7 @@ describe('useMailAccountsQuery — 键 / 闸门', () => {
     await tick();
 
     expect(listMailAccountsMock).toHaveBeenCalledTimes(1);
+    // ⚠️ `data` 是**剥掉信封的数组**（hook 内部取 `.items`）—— 两个消费方都只想要那一个数组。
     expect(comp.data.value).toEqual([ACCOUNT]);
     scope.stop();
   });
@@ -142,7 +151,7 @@ describe('useMailAccountsQuery — 坏响应守门（W3）', () => {
     // queryFn 里的 parse 就是为拦住这个。
     const broken: Record<string, unknown> = { ...ACCOUNT };
     delete broken['version'];
-    listMailAccountsMock.mockResolvedValue([broken]);
+    listMailAccountsMock.mockResolvedValue({ items: [broken] });
 
     const { scope, comp } = mountAccounts(ref(true));
     await tick();
@@ -153,17 +162,46 @@ describe('useMailAccountsQuery — 坏响应守门（W3）', () => {
     scope.stop();
   });
 
-  it('W3b：preset 枚举越界（GMAIL）⇒ 进 error 态', async () => {
-    listMailAccountsMock.mockResolvedValue([{ ...ACCOUNT, preset: 'GMAIL' }]);
+  it('W3b：缺 preset_label / host / tls_mode / port 任一 ⇒ 进 error 态', async () => {
+    // 出参少声明一个键，`.strict()` 让**建档 / 改档 / 设为默认每次成功都抛**（后端已落库，
+    // 用户却看到失败）—— 所以「4 个键一个都不能少」必须有断言守着。
+    for (const key of ['preset_label', 'host', 'tls_mode', 'port'] as const) {
+      vi.clearAllMocks();
+      const broken: Record<string, unknown> = { ...ACCOUNT };
+      delete broken[key];
+      listMailAccountsMock.mockResolvedValue({ items: [broken] });
+
+      const { scope, comp } = mountAccounts(ref(true));
+      await tick();
+
+      expect(comp.query.error.value, `缺 ${key} 应当抛`).not.toBeNull();
+      expect(comp.data.value).toBeUndefined();
+      scope.stop();
+    }
+  });
+
+  it('W3b2：未知 preset（GMAIL）⇒ **不抛**，那一行照常落进 data（后端刻意降级不丢行）', async () => {
+    // 后端 `MailAccountOut::from_row` 对库里未知的 preset 是降级（空 label / 空 host /
+    // port 0）而非报错。出参拿枚举守它会把一行脏数据放大成整页空白。
+    const degraded = {
+      ...ACCOUNT,
+      preset: 'GMAIL',
+      preset_label: '',
+      host: '',
+      port: 0,
+      tls_mode: '',
+    };
+    listMailAccountsMock.mockResolvedValue({ items: [degraded] });
     const { scope, comp } = mountAccounts(ref(true));
     await tick();
 
-    expect(comp.query.error.value).not.toBeNull();
+    expect(comp.query.error.value).toBeNull();
+    expect(comp.data.value).toEqual([degraded]);
     scope.stop();
   });
 
   it('W3c：⚠️ 后端误带 encrypted_secret ⇒ 当场抛（列表页不允许出现任何授权码派生值）', async () => {
-    listMailAccountsMock.mockResolvedValue([{ ...ACCOUNT, encrypted_secret: 'AAAA' }]);
+    listMailAccountsMock.mockResolvedValue({ items: [{ ...ACCOUNT, encrypted_secret: 'AAAA' }] });
     const { scope, comp } = mountAccounts(ref(true));
     await tick();
 
@@ -172,13 +210,19 @@ describe('useMailAccountsQuery — 坏响应守门（W3）', () => {
     scope.stop();
   });
 
-  it('W3d：顶层不是数组（信封搞错）⇒ 进 error 态', async () => {
-    listMailAccountsMock.mockResolvedValue({ items: [ACCOUNT] });
-    const { scope, comp } = mountAccounts(ref(true));
-    await tick();
+  it('W3d：信封形状错（顶层是裸数组 / items 不是数组）⇒ 进 error 态', async () => {
+    // 后端 `R<MailAccountListOut>` 的 data 就是 `{items:[…]}`。写成 `z.array` 时症状是
+    // 「每一屏都抛、列表恒空、零告警」；反过来守门写成裸数组则是在放行一个不存在的契约。
+    for (const bad of [[ACCOUNT], { items: ACCOUNT }]) {
+      vi.clearAllMocks();
+      listMailAccountsMock.mockResolvedValue(bad);
+      const { scope, comp } = mountAccounts(ref(true));
+      await tick();
 
-    expect(comp.query.error.value).not.toBeNull();
-    scope.stop();
+      expect(comp.query.error.value).not.toBeNull();
+      expect(comp.data.value).toBeUndefined();
+      scope.stop();
+    }
   });
 });
 

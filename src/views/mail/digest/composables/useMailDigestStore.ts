@@ -70,8 +70,9 @@ function initialFormModel(): MailDigestFormModel {
     upcoming_days: 7,
     visible_columns: [],
     subject_template: '',
-    // 2026-10-16：发信邮箱默认「未选」。刻意**不**默认成列表第一条 / 后端默认邮箱 ——
-    // 那是在替用户做「用哪个邮箱发信」的决定，而页面无从得知哪条是后端当前默认。
+    // 2026-10-16：发信邮箱默认「未选」。刻意**不**默认成列表第一条、也不自动选那条
+    // `is_default` —— 那是在替用户做「用哪个邮箱发信」的决定。空选的真代价是「发不出信」
+    // （后端 21701），不是选错邮箱，所以由告警 + 按钮禁用承担（见 `sendDisabled`）。
     sender_account_id: null,
   };
 }
@@ -283,11 +284,12 @@ export const useMailDigestStore = defineStore('mail-digest', () => {
 
   /** 「刷新」按钮：本域三条读端点 + 邮箱列表（2026-10-16 起）全刷。
    *
-   *  ⚠️ 邮箱列表在这里**必须**一起刷：本页的「发信邮箱」下拉显示的是邮箱的**自定义名称**，
-   *  而「邮箱设置」tab 里的改名是**另一条前缀**（`qk.mailPrefix`）下的写端点，本域的失效
-   *  编排覆盖不到它 ⇒ 用户在那边改完名切回来，下拉里还是旧名字，除非他自己点刷新。这是
-   *  「跨页面写操作不做穷举失效」这条既定策略下的已知缺口，补一条用户可及的「刷新」比
-   *  做跨前缀精确失效便宜得多（后者要求枚举所有改名入口，穷举不可持续）。
+   *  邮箱列表在这里**不是**补偿某个失效缺口：交期汇总的「发信邮箱」下拉与「邮箱设置」列表
+   *  **共用 `qk.mailAccounts()` 那一条 key**，邮箱域四条写端点失效 `qk.mailPrefix` 时会连带
+   *  刷到它 ⇒ 同页改完名切回来，下拉已经是新的。把 `fetchList()` 放在这里是**用户显式点了
+   *  「刷新」**（语义是「全部给我重来一遍」），不是修补跨前缀失效 —— 真正刷不到的是别的
+   *  标签页 / 别的管理员改的名（另一个 QueryClient 实例，本域零 WS 失效通道），那属于
+   *  CLAUDE.md「跨页面写操作不做穷举失效」的既定策略。
    *
    *  配置强制覆盖（用户主动要的就是服务端那份）。
    *  ⚠️ 2026-10-14（review 第 1 轮 T-2，非缺陷、记一笔）：`dirty` 为真时点本按钮会
@@ -533,13 +535,19 @@ export const useMailDigestStore = defineStore('mail-digest', () => {
     save,
     preview,
     sendNow,
-    /** 壳的「立即发送」按钮的禁用判据：正在发 / 明确一个可用邮箱都没有。
-     *  ⚠️ **只在 `noAccounts`（完全没有邮箱）时禁用，不在 `senderMissing`（有邮箱但没选）
-     *  时禁用**：后端在 `sender_account_id` 为 null 时会回落到**默认邮箱**，所以没选也能
-     *  真的发出去；把「没选」也禁掉等于让用户必须先回邮箱设置走一趟才能试发一次。
-     *  `accountsLoaded === null`（列表还在飞）**不禁用** —— 那会让按钮在首屏无故灰着，
+    /** 壳的「立即发送」按钮的禁用判据：正在发 / 明确一个可用邮箱都没有 / 有邮箱但本条配置
+     *  **没选**。⚠️ 后两条缺一不可，而它们背后的后端事实是：`mail_digest::service::
+     *  resolve_sender` 对 `sender_account_id IS NULL` **直接返 21701（HTTP 503）**，
+     *  **没有任何回落到默认邮箱的分支**（全仓 `is_default` 在 `mail_digest/` 下零命中，
+     *  它只被 `scheduled_task::repo` 用于列表排序与那条唯一索引）。所以「不选也能发」是
+     *  一句**假承诺**：不可撤销的「立即发送」上给这种承诺 = 用户点一次、确认一次、
+     *  然后吃一个 503。
+     *
+     *  `accountsLoaded === null`（列表还在飞）**不禁用** —— 那会让按钮在首屏无故灰着；
      *  真发失败时后端会返 21701，页面照样弹人话提示。 */
-    sendDisabled: computed(() => sendMutation.isPending.value || noAccounts.value),
+    sendDisabled: computed(
+      () => sendMutation.isPending.value || noAccounts.value || senderMissing.value,
+    ),
   };
 
   return {

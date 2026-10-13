@@ -25,6 +25,19 @@
       </div>
     </el-card>
 
+    <!-- 「有邮箱但一个默认都没有」：后端**新建邮箱永远不设默认**（建邮箱与「让它成为默认发信
+         通道」是两个意图），而「删掉默认邮箱」也**不会**自动转给别的（库里就变成零个默认）
+         ⇒ 这是正常使用下必然出现的一种状态，不提示的话用户会以为建好就能直接发信。 -->
+    <el-alert
+      v-if="showNoDefaultHint"
+      class="default-hint"
+      type="warning"
+      show-icon
+      :closable="false"
+      title="还没有默认发信邮箱"
+      description="新建邮箱不会自动成为默认。在下方点「设为默认」选定一条后，交期汇总才能用它发信。"
+    />
+
     <el-card shadow="never">
       <el-empty
         v-if="!store.query.loading && store.query.accounts.length === 0"
@@ -33,7 +46,10 @@
       <el-table v-else :data="store.query.accounts" row-key="id" class="accounts-table">
         <el-table-column prop="name" label="名称" min-width="140" show-overflow-tooltip />
         <el-table-column label="预设" min-width="110">
-          <template #default="{ row }">{{ presetLabel(row.preset) }}</template>
+          <!-- 标签**直接取行上的 `preset_label`**（后端下发），不查 `/mail/meta`：
+               meta 还在飞或失败时这一列会整列显示 `NET_EASE_163` 原文。降级到字面量的
+               唯一情形是后端对未知 preset 的既定降级（那时 `preset_label` 是空串）。 -->
+          <template #default="{ row }">{{ row.preset_label || row.preset }}</template>
         </el-table-column>
         <el-table-column prop="account" label="登录账号" min-width="200" show-overflow-tooltip />
         <!-- 恒显示「已配置」：授权码不出参（见文件头），没有任何可展示的值。 -->
@@ -58,6 +74,7 @@
               link
               type="primary"
               :disabled="row.is_default"
+              :loading="store.actions.settingDefaultRowId === row.id"
               @click="store.actions.makeDefault(row as MailAccountData)"
             >
               设为默认
@@ -70,7 +87,9 @@
               @confirm="onDelete(row as MailAccountData)"
             >
               <template #reference>
-                <el-button link type="danger">删除</el-button>
+                <el-button link type="danger" :loading="store.actions.deletingRowId === row.id">
+                  删除
+                </el-button>
               </template>
             </el-popconfirm>
           </template>
@@ -99,29 +118,25 @@
 //
 // 2026-10-16 新建：见文件头。
 
-import { onBeforeUnmount, onMounted } from 'vue';
+import { computed, onBeforeUnmount, onMounted } from 'vue';
 import { Refresh } from '@element-plus/icons-vue';
 import MailAccountDialog from './MailAccountDialog.vue';
 import { useMailAccountsStore } from './composables/useMailAccountsStore';
-import type {
-  MailAccountData,
-  MailAccountFormModel,
-  MailPresetOptionData,
-} from './mailAccountSchema';
+import type { MailAccountData, MailAccountFormModel } from './mailAccountSchema';
 
 // 不变量 #1：壳 setup 顶部首调 store（$dispose 绑到首个创建它的组件）。
 const store = useMailAccountsStore();
 
-/** 预设枚举 → 中文 label。**只认 `/mail/meta` 下发的选项**（`presetOptions`），认不到就
- *  显示枚举原文 —— 不在前端硬编一张 `NET_EASE_163 → '网易 163'` 的映射：那是这个域的
- *  第二个真源，后端改 label 时它不会报错，只会静默显示旧文案。 */
-function presetLabel(preset: string): string {
-  const hit = store.query.presetOptions.find((p: MailPresetOptionData) => p.value === preset);
-  return hit?.label ?? preset;
-}
+/** 「有邮箱但一个默认都没有」的提示条。⚠️ 判据的「已加载」由 `accounts.length > 0` 顺带
+ *  承担（列表还在飞时它必然是 0）：不必再叠一个 `!loading`，那会在后台 refetch 期间把
+ *  已经成立的提示条藏掉一瞬。 */
+const showNoDefaultHint = computed(
+  () => store.query.accounts.length > 0 && !store.query.hasDefault,
+);
 
 function onDelete(row: MailAccountData): void {
-  void store.actions.remove(row.id);
+  // 传整行：动作端点的 body 必填 `version`（OCC 锚），store 从行上取。
+  void store.actions.remove(row);
 }
 
 /** 弹窗的整体显隐（× / Esc / 点遮罩都走这里）。**刻意不另发业务事件** ——
@@ -180,5 +195,9 @@ onBeforeUnmount(() => {
 
 .cell-muted {
   color: var(--text-secondary);
+}
+
+.default-hint {
+  margin-bottom: 0;
 }
 </style>

@@ -152,7 +152,11 @@ const ACCOUNTS = [
     version: 1,
     name: '采购部邮箱',
     preset: 'NET_EASE_163',
+    preset_label: '网易 163',
     account: 'purchase@example.com',
+    host: 'smtp.163.com',
+    port: 465,
+    tls_mode: 'WRAPPED',
     is_default: true,
     created_at: '2026-10-16 08:00:00',
     updated_at: '2026-10-16 08:00:00',
@@ -210,7 +214,7 @@ beforeEach(() => {
   fetchMailDigestMetaMock.mockResolvedValue(META);
   listMailDigestLogsMock.mockResolvedValue(LOGS);
   // 2026-10-16：默认给一条邮箱（默认档 = 「有邮箱、已选中」）；各用例按需覆盖。
-  listMailAccountsMock.mockResolvedValue(ACCOUNTS);
+  listMailAccountsMock.mockResolvedValue({ items: ACCOUNTS });
   saveMailDigestConfigMock.mockResolvedValue(CONFIG);
   previewMailDigestMock.mockResolvedValue({
     subject: '交期汇总 2026-10-13',
@@ -611,7 +615,7 @@ describe('useMailDigestStore — 预览与立即发送', () => {
   });
 
   it('SND3：一条邮箱都没有时 noAccounts=true（壳据此禁用「立即发送」并弹告警）', async () => {
-    listMailAccountsMock.mockResolvedValue([]);
+    listMailAccountsMock.mockResolvedValue({ items: [] });
     const store = useMailDigestStore();
     store.query.openGate();
     await tick();
@@ -635,20 +639,32 @@ describe('useMailDigestStore — 预览与立即发送', () => {
     expect(store.actions.sendDisabled).toBe(false);
   });
 
-  it('SND5：有邮箱但本条配置没选时 senderMissing=true，而 sendDisabled 仍为 false（后端会回落默认邮箱）', async () => {
+  it('SND5：有邮箱但本条配置没选时 senderMissing=true ⇒ **「立即发送」禁用**（后端无回落分支）', async () => {
     fetchMailDigestConfigMock.mockResolvedValue({ ...CONFIG, sender_account_id: null });
-    listMailAccountsMock.mockResolvedValue(ACCOUNTS);
+    listMailAccountsMock.mockResolvedValue({ items: ACCOUNTS });
     const store = useMailDigestStore();
     store.query.openGate();
     await tick();
 
     expect(store.query.senderMissing).toBe(true);
-    // ⚠️ 不禁用「立即发送」：没选邮箱时后端回落到默认邮箱，仍能真发出去。
+    // ⚠️ 禁用：后端 `mail_digest::service::resolve_sender` 对 `sender_account_id IS NULL`
+    // 直接返 21701（503），**没有**回落到默认邮箱的分支 —— 「不选也能发」是假承诺，
+    // 而「立即发送」是不可撤销操作。
+    expect(store.actions.sendDisabled).toBe(true);
+  });
+
+  it('SND5b：选了发信邮箱 ⇒ sendDisabled=false（发得出去，不该灰着）', async () => {
+    listMailAccountsMock.mockResolvedValue({ items: ACCOUNTS });
+    const store = useMailDigestStore();
+    store.query.openGate();
+    await tick();
+
+    expect(store.query.senderMissing).toBe(false);
     expect(store.actions.sendDisabled).toBe(false);
   });
 
   it('SND6：配置里的 sender_account_id 原样 hydrate 进表单（雪花 ID 不过 Number()）', async () => {
-    listMailAccountsMock.mockResolvedValue(ACCOUNTS);
+    listMailAccountsMock.mockResolvedValue({ items: ACCOUNTS });
     const store = useMailDigestStore();
     store.query.openGate();
     await tick();

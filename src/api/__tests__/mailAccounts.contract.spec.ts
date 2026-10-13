@@ -14,10 +14,13 @@
 //     守门在 `views/mail/accounts/composables/useMailAccountsQuery.ts`。Zod 的 parse 入口
 //     返回**深拷贝**，在 api 层再走一遍等于每屏数据被校验并克隆两遍；而且两处校验点会随
 //     字段增删各自漂移。
-//   - N2：四条**写**端点（建档 / 改档 / 删除 / 设为默认）**必须** parse —— 它们走
+//   - N2：三条**有对象出参**的写端点（建档 / 改档 / 设为默认）**必须** parse —— 它们走
 //     useMutation、**没有 queryFn 承载**（CLAUDE.md 为这类调用留的口子）。漏掉 parse 时
 //     坏响应会一路流到「刚建的邮箱 `id` 是 undefined / `version` 是 undefined」，下一次
 //     编辑/删除就会拿 undefined 打 URL（`/mail/accounts/undefined`）。
+//   - N2b：**删除端点不做 parse**，因为后端 `delete_account` 返 `R<()>`、信封 `data` 是
+//     `null` —— 没有形状可守（`parse(null)` 必抛，那正是「删除永远失败」的成因）。软删成功
+//     与否由 HTTP 状态码表达：失败一律 reject（21706 / 21708），store 的 onError 转人话。
 // 少了 N1，把 parse 搬回 api 层是零信号；少了 N2，把 parse 从写端点删掉也是零信号。
 // 两个方向都要有人在。
 //
@@ -37,14 +40,15 @@ const schemaParse = vi.hoisted(() => ({
   account: vi.fn(),
   list: vi.fn(),
   meta: vi.fn(),
-  deleteResult: vi.fn(),
 }));
 
+// ⚠️ mock 里**没有**删除结果的 schema（该 schema 已随 N2b 一并删除）：这个形状本身就是
+// 「删除端点不许有出参守门」的负向守卫 —— 有人把它加回来时这里必须同步，否则本文件变成
+// 「有一道闸门却没有断言它接在返回路径上」。
 vi.mock('@/views/mail/accounts/mailAccountSchema', () => ({
   mailAccountSchema: { parse: schemaParse.account },
   mailAccountListSchema: { parse: schemaParse.list },
   mailMetaSchema: { parse: schemaParse.meta },
-  mailAccountDeleteResultSchema: { parse: schemaParse.deleteResult },
 }));
 
 const httpGetMock = vi.fn();
@@ -67,6 +71,7 @@ import {
 } from '../mailAccounts';
 
 const ACCOUNT = { id: '9000000000000902', name: '采购部邮箱' };
+const VERSION_BODY = { version: 7 };
 const CREATE_BODY = {
   name: '采购部邮箱',
   preset: 'NET_EASE_163' as const,
@@ -84,16 +89,15 @@ async function postArgs(run: () => Promise<unknown>): Promise<[string, unknown]>
 
 beforeEach(() => {
   schemaParse.account.mockReset().mockReturnValue(ACCOUNT);
-  schemaParse.list.mockReset().mockReturnValue([ACCOUNT]);
+  schemaParse.list.mockReset().mockReturnValue({ items: [ACCOUNT] });
   schemaParse.meta.mockReset().mockReturnValue({ presets: [] });
-  schemaParse.deleteResult.mockReset().mockReturnValue({ deleted: true });
-  httpGetMock.mockReset().mockResolvedValue({ data: [] });
+  httpGetMock.mockReset().mockResolvedValue({ data: { items: [] } });
   httpPostMock.mockReset().mockResolvedValue({ data: ACCOUNT });
 });
 
 describe('mailAccounts api — 两条读端点不做 Zod 校验（负向守卫 N1）', () => {
   it('N1：fetchMailMeta / listMailAccounts 一律不调用 schema.parse', async () => {
-    httpGetMock.mockResolvedValue({ data: [] });
+    httpGetMock.mockResolvedValue({ data: { items: [] } });
     await fetchMailMeta();
     await listMailAccounts();
 
@@ -117,14 +121,24 @@ describe('mailAccounts api — 四条写端点必须 Zod 校验（N2）', () => 
   it('N2a：建档 / 改档 / 设为默认 三个出参都过 mailAccountSchema.parse', async () => {
     await createMailAccount(CREATE_BODY);
     await updateMailAccount('9000000000000902', { ...CREATE_BODY, version: 2 });
-    await setDefaultMailAccount('9000000000000902');
+    await setDefaultMailAccount('9000000000000902', VERSION_BODY);
 
     expect(schemaParse.account).toHaveBeenCalledTimes(3);
   });
 
-  it('N2b：删除出参过 mailAccountDeleteResultSchema.parse', async () => {
-    await deleteMailAccount('9000000000000902');
-    expect(schemaParse.deleteResult).toHaveBeenCalledTimes(1);
+  it('N2b：删除端点**不做** parse 且返回 undefined（后端 `data` 是 `null`，无可守）', async () => {
+    // 后端 `delete_account` → `R<()>` ⇒ 信封 `data: null`。曾经凭空发明一个
+    // `{deleted: boolean}` 的 schema 去 parse 它，于是删除**永远**走 onError，而后端行已软删。
+    httpPostMock.mockResolvedValue({ data: null });
+    await expect(deleteMailAccount('9000000000000902', VERSION_BODY)).resolves.toBeUndefined();
+    // 那道闸门确实不存在：三个 parse 计数一个都没动
+    expect(schemaParse.account).not.toHaveBeenCalled();
+  });
+
+  it('N2b2：删除失败（后端返 21708 信封）照常 reject 出 api 层', async () => {
+    const err = Object.assign(new Error('该邮箱已被定时任务选中'), { code: 21708 });
+    httpPostMock.mockRejectedValue(err);
+    await expect(deleteMailAccount('9000000000000902', VERSION_BODY)).rejects.toThrow('已被定时任务选中');
   });
 
   it('N2c：守门失败时 api 层**抛**（不把坏响应透传给 store）', async () => {
@@ -144,8 +158,8 @@ describe('mailAccounts 五个端点的 URL / method / body 契约', () => {
     expect(httpGetMock.mock.calls[0]![0]).toBe('/mail/meta');
   });
 
-  it('U2：读列表打 GET /mail/accounts（无入参 —— 端点一次性返全部、无分页信封）', async () => {
-    httpGetMock.mockReset().mockResolvedValue({ data: [] });
+  it('U2：读列表打 GET /mail/accounts（无入参 —— 端点一次性返全部、无分页参数）', async () => {
+    httpGetMock.mockReset().mockResolvedValue({ data: { items: [] } });
     await listMailAccounts();
     expect(httpGetMock.mock.calls[0]![0]).toBe('/mail/accounts');
     // 没有第二个实参（没有 params 形参）⇒ 不会有 `?limit=&offset=` 那种空串 query。
@@ -166,13 +180,21 @@ describe('mailAccounts 五个端点的 URL / method / body 契约', () => {
     expect(body).toMatchObject({ version: 7, secret: 'abc123' });
   });
 
-  it('U5：删除与设为默认打各自的 action 路径（**不是 DELETE 方法**）', async () => {
-    const [delUrl, delBody] = await postArgs(() => deleteMailAccount('9000000000000902'));
+  it('U5：删除与设为默认打各自的 action 路径（**不是 DELETE 方法**），body 必带 version', async () => {
+    // ⚠️ 两条端点的 `DeleteAccountRequest` / `SetDefaultAccountRequest` 都**只有**
+    // `{version: i32}` 且**无 `#[serde(default)]`** ⇒ 发 `{}` 是 HTTP 422 纯文本、拿不到
+    // 业务码、查表文案全部落空（本仓后端零 PUT/PATCH/DELETE，走 action 路径 ≠ 无 body）。
+    const [delUrl, delBody] = await postArgs(() =>
+      deleteMailAccount('9000000000000902', VERSION_BODY),
+    );
     expect(delUrl).toBe('/mail/accounts/9000000000000902/delete');
-    expect(delBody).toEqual({});
+    expect(delBody).toEqual({ version: 7 });
 
-    const [defUrl] = await postArgs(() => setDefaultMailAccount('9000000000000902'));
+    const [defUrl, defBody] = await postArgs(() =>
+      setDefaultMailAccount('9000000000000902', VERSION_BODY),
+    );
     expect(defUrl).toBe('/mail/accounts/9000000000000902/set-default');
+    expect(defBody).toEqual({ version: 7 });
   });
 });
 

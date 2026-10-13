@@ -32,10 +32,18 @@ export const MAIL_ACCOUNT_CONTRACT_DRIFT_TEXT = '服务端返回的数据格式�
  *     `mailAccountErrorText.spec.ts`（钉死映射表的回归用例，它就是要让「码值变了」红起来
  *     的那一处）。
  *
- *  ⚠️ 这三个码与 `views/mail/digest/mailDigestErrorText.ts` 的六个码**同段（217xx）但不
- *  重叠** —— 后端 mail_digest 域占 21701..21705，本域从 21706 起顺延。改本域码段时顺手
- *  核一眼 `MAIL_DIGEST_ERROR_CODES` 有没有跟着挪。 */
+ *  ⚠️ 这四个码与 `views/mail/digest/mailDigestErrorText.ts` 的六个码**同段（217xx）** ——
+ *  后端 mail_digest 域占 21701..21705，本域 21706 起顺延，**唯一的交叠是 21704**
+ *  （`BIZ_MAIL_CONFIG_INVALID` 两域共用，见 `MAIL_ACCOUNT_ERROR_CODES.CONFIG_INVALID` 的
+ *  doc）。改本域码段时顺手核一眼 `MAIL_DIGEST_ERROR_CODES` 有没有跟着挪。 */
 export const MAIL_ACCOUNT_ERROR_CODES = {
+  /** 写入内容不符合服务端校验。⚠️ **两域共用码**（后端 `BIZ_MAIL_CONFIG_INVALID`）：
+   *  本域用它报「名称超长 / 账号不是完整邮箱地址 / 授权码含控制字符 / 预设字面量非法」，
+   *  mail_digest 域用它报「频率与配套字段组合非法」。所以下面那张表的措辞必须两边都说得通，
+   *  且**交期汇总页不会显示这一条** —— `mailDigestErrorText()` 先查本域自己的表、
+   *  21704 在那里命中（`MAIL_DIGEST_ERROR_CODES.INVALID_FREQUENCY_COMBO`），查表顺序见
+   *  `views/mail/digest/mailDigestErrorText.ts`。 */
+  CONFIG_INVALID: 21704,
   /** 账号不存在（改档 / 删除 / 设为默认的目标 id 已被别人删掉）。 */
   ACCOUNT_NOT_FOUND: 21706,
   /** 自定义名称重复（同一部署内名称唯一，便于在选择器里区分两条同名登录账号）。 */
@@ -48,8 +56,14 @@ export const MAIL_ACCOUNT_ERROR_CODES = {
  *
  *  ⚠️ 21708 的文案刻意**点名引用方**（「已被定时任务选中」）而不是笼统说「无法删除」：
  *  用户的下一步动作是「去那条定时任务里换成别的邮箱」，文案不告诉他去哪他只能猜。
- *  具体的哪一条任务由后端 message 带（进 console），不在这里硬编码。 */
+ *  具体的哪一条任务由后端 message 带（进 console），不在这里硬编码。
+ *
+ *  ⚠️ 21704 是本域用得**最频繁**的一条（用户填错登录账号 / 超长 / 授权码带控制字符都会撞
+ *  它），而它的后端 message 是给日志看的（「SMTP 登录账号应为一个完整邮箱地址…收到 `xxx`」），
+ *  直接糊到 toast 上等于让用户自己翻译。这里给一句覆盖两域的可执行提示。 */
 export const MAIL_ACCOUNT_ERROR_TEXT: Partial<Record<number, string>> = {
+  [MAIL_ACCOUNT_ERROR_CODES.CONFIG_INVALID]:
+    '填写内容未通过服务端校验（邮箱：登录账号须为完整邮箱地址、授权码不可含换行；定时：频率与配套字段须匹配）',
   [MAIL_ACCOUNT_ERROR_CODES.ACCOUNT_NOT_FOUND]: '邮箱账号不存在，请刷新列表后重试',
   [MAIL_ACCOUNT_ERROR_CODES.NAME_DUPLICATED]: '名称已存在，请换一个名称',
   [MAIL_ACCOUNT_ERROR_CODES.ACCOUNT_IN_USE]: '该邮箱已被定时任务选中，请先在对应任务里改选其它邮箱',

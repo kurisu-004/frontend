@@ -105,8 +105,9 @@ const mailDigestConfigFields = {
   /** 标题模板；null = 用后端默认标题。 */
   subject_template: z.string().nullable(),
   /** 2026-10-16 新增：发信邮箱（`/api/v2/mail/accounts` 的一行）。
-   *  **null = 未选**（不是「用默认邮箱」—— 默认邮箱由后端在 null 时回落，页面无从得知
-   *  实际会落到哪一条，所以选择器必须让用户显式选一条）。雪花 ID ⇒ JSON string。
+   *  **null = 未选**（不是「用默认邮箱」—— 后端 `mail_digest::service::resolve_sender`
+   *  对 null **直接返 21701（503）**，全仓没有任何回落到默认邮箱的分支，所以选择器必须
+   *  让用户显式选一条）。雪花 ID ⇒ JSON string。
    *  ⚠️ 它同时出现在 `GET /config` 与 `GET /meta` 的 `defaults` 里（同一份
    *  `mailDigestConfigFields`），所以两端到齐后缺键会当场抛而不是静默 strip 成 undefined。 */
   sender_account_id: z.string().nullable(),
@@ -307,12 +308,17 @@ export interface MailDigestFormModel {
   visible_columns: string[];
   subject_template: string;
   /** 2026-10-16：发信邮箱 id（`/api/v2/mail/accounts` 的雪花 id，JSON string）。
-   *  null = 未选。表单校验**不拦**它（空选是合法配置：定时任务不注册、手动发送由后端
-   *  回落默认邮箱），但页面顶部会给一条告警 —— 见 `MailDigestSettings.vue` 的
-   *  `senderMissing`。 */
+   *  null = 未选。表单校验**不拦**它 —— **空选是合法保存**（用户可能只想先改收件人清单，
+   *  拦了就等于强迫他先建邮箱再干别的）。代价是「真要发信时」后端以 21701 失败，所以
+   *  页面顶部给告警、「立即发送」按钮给禁用（见 `MailDigestSettings.vue` 的
+   *  `senderMissing` 与 `useMailDigestStore` 的 `sendDisabled`）。 */
   sender_account_id: string | null;
 }
 
+// ⚠️ `sender_account_id` 的键名与 wire 上**逐字一致**：Zod issue 的 `path[0]` 就是 schema
+// 的键名，模板读的也是这个键。写成 `'sender_account'` 的话 `errors.sender_account` 永远拿不到
+// （潜伏项：那处校验当前因 preprocess 已把 `''` 归一成 null 而不可达，但它是留给将来
+// 「未选也拦」那条规则的接口）。
 export type MailDigestFormField =
   | 'frequency'
   | 'send_time'
@@ -323,7 +329,7 @@ export type MailDigestFormField =
   | 'upcoming_days'
   | 'visible_columns'
   | 'subject_template'
-  | 'sender_account';
+  | 'sender_account_id';
 
 export type MailDigestFormFieldErrors = Partial<Record<MailDigestFormField, string>>;
 
@@ -413,11 +419,15 @@ export function makeMailDigestFormSchema(
     visible_columns: z.array(z.string()).min(1, '至少选择一列'),
     // 留空合法（= 用后端默认标题），超长才拒。
     subject_template: z.string().trim().max(200, '标题模板长度不能超过 200 个字符'),
-    // 2026-10-16：发信邮箱。**刻意不拦空选** —— 「没选发信邮箱」是合法配置（定时任务
-    // 不注册时根本不发信；手动发送由后端回落到默认邮箱），把它拦成红字会让用户在
-    // 「只想保存收件人清单」时被迫先建一个邮箱。空选的提示由页面顶部的告警条承担
-    // （见 `MailDigestSettings.vue` 的 `senderMissing`），而不是表单红字。
+    // 2026-10-16：发信邮箱。**刻意不拦空选** —— 「没选发信邮箱」是**合法保存**（用户可能
+    // 只想先改收件人清单，拦成红字会强迫他先建一个邮箱才能干别的）。**理由不是「空选也能
+    // 发」**：后端 `resolve_sender` 对 `sender_account_id IS NULL` 直接返 21701（503），
+    // 全仓没有回落到默认邮箱的分支 ⇒ 空选的代价落在**真发信那一刻**，由页面顶部告警 +
+    // 「立即发送」按钮禁用承担（见 `MailDigestSettings.vue` 的 `senderMissing` 与
+    // `useMailDigestStore` 的 `sendDisabled`），而不是表单红字。
     // `el-select` 清空给出的是 `''`，归一成 null（= 未选）后才不会把空串塞上 wire。
+    // ⚠️ 这里只做**归一**（issue 的 path 仍是 `sender_account_id`，与 `MailDigestFormField`
+    // 的键名逐字一致，模板才读得到红字）。
     sender_account_id: z.preprocess(
       (v) => (v === '' || v === undefined ? null : v),
       z.string({ error: '请选择发信邮箱' }).trim().min(1, '请选择发信邮箱').nullable(),

@@ -93,7 +93,11 @@ const SENDER_ACCOUNTS: readonly MailAccountData[] = [
     version: 1,
     name: '采购部邮箱',
     preset: 'NET_EASE_163',
+    preset_label: '网易 163',
     account: 'purchase@example.com',
+    host: 'smtp.163.com',
+    port: 465,
+    tls_mode: 'WRAPPED',
     is_default: true,
     created_at: '2026-10-16 08:00:00',
     updated_at: '2026-10-16 08:00:00',
@@ -103,7 +107,11 @@ const SENDER_ACCOUNTS: readonly MailAccountData[] = [
     version: 1,
     name: '仓库邮箱',
     preset: 'TENCENT_QQ',
-    account: '123456789',
+    preset_label: 'QQ 邮箱',
+    account: 'warehouse@qq.com',
+    host: 'smtp.qq.com',
+    port: 465,
+    tls_mode: 'WRAPPED',
     is_default: false,
     created_at: '2026-10-16 08:00:00',
     updated_at: '2026-10-16 08:00:00',
@@ -347,6 +355,17 @@ describe('MailScheduleSection — 发信邮箱下拉（2026-10-16）', () => {
     const { wrapper, latest } = mountSection(baseForm({ sender_account_id: '9000000000000902' }));
     senderSelectEmit(wrapper)('');
     expect(latest().sender_account_id).toBeNull();
+    wrapper.unmount();
+  });
+
+  it('S5：⚠️ placeholder **不承诺**「不选也能发」（后端 resolve_sender 对 null 直接 21701）', () => {
+    // 「立即发送」是真发、不可撤销。placeholder 曾经写「未选（发送时使用默认邮箱）」——
+    // 那是一条假承诺：后端 `mail_digest::service::resolve_sender` 对
+    // `sender_account_id IS NULL` 直接返 21701（HTTP 503），全仓没有回落到默认邮箱的分支。
+    const { wrapper } = mountSection(baseForm({ sender_account_id: null }));
+    const placeholder = wrapper.find('.sender-select').attributes('data-placeholder') ?? '';
+    expect(placeholder).toContain('未选');
+    expect(placeholder).not.toMatch(/默认邮箱|也能发|回落/);
     wrapper.unmount();
   });
 });
