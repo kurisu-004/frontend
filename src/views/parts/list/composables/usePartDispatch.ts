@@ -49,8 +49,9 @@ export function usePartDispatch(): UsePartDispatchReturn {
 
   // ============ 强制完成（2026-09-30）============
   // 系统管理员专属：绕过状态机把工单 + 所有非取消批次置为 COMPLETED。
-  // 零件走 `POST /parts/{id}/force-complete`，装配件走
-  // `POST /prod/assemblies/{id}/force-complete`（后端只把这条写端点挂在 prod 前缀下）。
+  // 零件走 `POST /prod/parts/{id}/force-complete`，装配件走
+  // `POST /prod/assemblies/{id}/force-complete`（2026-10-13：两侧都在 prod 前缀下，
+  // 形状完全对称，只差资源名；URL 各自被 api 层的 spec 钉死）。
   // 守卫 canForceComplete 收口三个维度：
   //   - isManager：仅 MANAGER 可见 / 可点；
   //   - 非子件行（__is_child）：装配件整体完成走父行的入口，子件行不再提供第二个

@@ -4,7 +4,7 @@
 // （vitest node 环境）。
 //
 // 背景：零件一览操作列有 MANAGER 专属「完成」按钮，零件打
-// POST /api/v2/parts/{part_id}/force-complete、装配件打
+// POST /api/v2/prod/parts/{part_id}/force-complete、装配件打
 // POST /api/v2/prod/assemblies/{id}/force-complete，把工单 + 所有非取消批次强推为
 // COMPLETED。本 spec 覆盖两个正交面：
 //
@@ -216,8 +216,10 @@ describe('usePartDispatch — canForceComplete / onForceComplete', () => {
   //
   // 这一层与 canForceComplete 是正交的：守卫只回答「按钮可不可见」，真正决定
   // 「这一行打哪条 URL」的是 mutationFn 里的 rowType 分发。分流接错时（装配件行
-  // 打 /parts/{assembly_id}/force-complete）上面 5 条守卫用例仍然全绿 —— 必须
+  // 打零件侧那条 URL）上面 5 条守卫用例仍然全绿 —— 必须
   // 驱动一次真实点击路径才拦得住。
+  // 两条 URL 各自的形状由 api 层 spec 钉死（`@/api/__tests__/` 下的
+  // part / assembly forceComplete 两个 spec），本 spec 只守「这一行打哪个函数」。
   // ==========================================================================
 
   it('R6：ASSEMBLY 行只打 forceCompleteAssembly（零件端点一次都不许碰）', async () => {

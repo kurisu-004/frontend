@@ -151,8 +151,9 @@
               守卫 canForceComplete 收口：isManager && 非子件行 && 非 COMPLETED && 非 CANCELLED。
               弹窗 useConfirm.dangerous（warning，含工单号/子件数提示/不可撤销）；
               per-row loading 走 forceCompletingMap reactive。
-              零件端点 `POST /api/v2/parts/{part_id}/force-complete`，装配件端点
-              `POST /api/v2/prod/assemblies/{assembly_id}/force-complete`（雪花 ID 严格 string，URL 拼接不经 Number()）。
+              零件端点 `POST /api/v2/prod/parts/{part_id}/force-complete`，装配件端点
+              `POST /api/v2/prod/assemblies/{assembly_id}/force-complete`（两侧都在 prod 前缀下；
+              雪花 ID 严格 string，URL 拼接不经 Number()）。
             -->
             <el-button
               v-if="store.dispatch.canForceComplete(row as PartListItem)"

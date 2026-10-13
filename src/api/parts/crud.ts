@@ -71,7 +71,7 @@ export type PartDetailDto = PartDetailData;
 /** 写端点出参里的 part 级窄投影（后端 `PartOut`，**10 字段**，投影自
  *  `TPartInspected`）。
  *
- *  返它的端点：`POST /parts/{id}/cancel`、`POST /parts/{id}/force-complete`、
+ *  返它的端点：`POST /parts/{id}/cancel`、`POST /prod/parts/{id}/force-complete`、
  *  `POST /prod/batches/{batch_id}/cancel`、`/deliver`、`/complete`、`/start-repair`、
  *  `/complete-repair`、`/repair-dispatch`、`/place-on-shelf`、
  *  `/release-from-programming`、`/scan-inspect`、`/scan/deliver`，
@@ -319,7 +319,9 @@ export async function createPart(payload: PartCreatePayload): Promise<PartDetail
 // 2026-10-02：以下 lifecycle 端点的操作对象是**批次**（t_part_batch），路由锚点
 // 统一迁到 prod 域 `POST /api/v2/prod/batches/{batch_id}/<action>`，故第一形参一律是
 // batchId，payload 里的 batch_id 一并删除（它已是路径参数）。part 域只留
-// 「多批次动作 + part 级动作」（cancel / force-complete / soft-delete / batches 读）。
+// 「多批次动作 + part 级动作」（cancel / soft-delete / batches 读）。
+// 2026-10-13：force-complete 也离开 part 域（`POST /prod/parts/{id}/force-complete`）——
+// 它的唯一实质写入是批次，见 forceCompletePart 的 doc。
 //
 // 2026-10-10：这几个端点的 `shelf_id` **后端一并删除** —— 目标货架改由后端按负载
 // 自动选择（见 CLAUDE.md「货架自动选择」）。`placeOnShelf` / `releaseFromProgramming`
@@ -381,11 +383,30 @@ export interface ForceCompletePayload {
   note?: string | null;
 }
 
+/**
+ * 强制完成工单及其所有非取消批次（MANAGER 专属）。
+ *
+ * 2026-10-13：端点硬切到 `POST /api/v2/prod/parts/{id}/force-complete`，**带 `prod`
+ * 前缀**，与装配件侧 `forceCompleteAssembly` 对称（旧路径 `/parts/{id}/force-complete`
+ * 下线、无 alias）。分水岭是「谁是主写入对象 + OCC 锚在哪张表」：force-complete 的
+ * 唯一实质写入是批次（`t_part_batch.status` 强推 COMPLETED）⇒ 归 prod；`cancel` 不搬，
+ * 它的主写入是 `t_part.status`、OCC 锚也在 `part.version`，级联取消批次只是副作用。
+ *
+ * 请求 / 响应契约逐字未变：body `{ note?: string | null }`、**无 version**（后端 OCC
+ * 豁免端点），响应仍是 `R<PartOut>`（→ `PartOutDto`）。
+ *
+ * ⚠️ **部署顺序：后端必须先上。** 后端未部署时 MANAGER 点零件行的「完成」就是一次
+ * 404（装配件行不受影响，它自 2026-10-11 起就在 `prod` 前缀下）。失败发生在网络层：
+ * 现场只看到一句 axios 错误，用户视角是「点了没反应」。
+ *
+ * URL 由 `src/api/__tests__/part.forceComplete.spec.ts` 钉死 —— 零件域其余端点全在
+ * `/parts/*`，照邻居抄一条 `/parts/{id}/force-complete` 是零报错信号的错。
+ */
 export async function forceCompletePart(
   id: number | string,
   payload?: ForceCompletePayload,
 ): Promise<PartOutDto> {
-  const resp = await api.post<PartOutDto>(`/parts/${id}/force-complete`, payload ?? {});
+  const resp = await api.post<PartOutDto>(`/prod/parts/${id}/force-complete`, payload ?? {});
   return resp.data;
 }
 

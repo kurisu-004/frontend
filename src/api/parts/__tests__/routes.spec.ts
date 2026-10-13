@@ -13,14 +13,17 @@
 // 判据（与后端域划分一致）：
 //   - 操作对象是**单个批次** → `/prod/batches/{batch_id}/<action>`（batch_id 是路径参数，
 //     不再进 body）；
-//   - 操作对象是**多个批次**或**根本不是批次** → 留在 part 域
-//     （`POST /parts/{id}/cancel` / `force-complete` / `soft-delete`、批次集合读
-//     `GET /parts/{id}/batches`）。本文件末尾有反断言守住这批「不该动」的路径。
+//   - 操作对象是**多个批次**或**主写入对象是 part 行** → 留在 part 域
+//     （`POST /parts/{id}/cancel` / `soft-delete`、批次集合读 `GET /parts/{id}/batches`）。
+//     本文件末尾有反断言守住这批「不该动」的路径。
+//   - **例外（2026-10-13）**：force-complete 虽然锚在 part id 上，但唯一实质写入是批次
+//     （强推 `t_part_batch.status`），故归 prod 域 `POST /prod/parts/{part_id}/force-complete`
+//     —— 它的守卫在本文件之外（`src/api/__tests__/part.forceComplete.spec.ts`）。
 //
 // 2026-10-03 补：本文件**同时钉 body 形态** —— R2b / R2c / R4 三条都断言 body
 //   （原先只钉 URL，字段名与 number/string 之差的契约缺口正是这么漏出去的）。
 //   pick-up 迁出后，**批次锚定的写端点已全部离开 part 域**；part 域仍留 part 级 /
-//   多批次写端点（create / update / cancel / force-complete / soft-delete / scan），
+//   多批次写端点（create / update / cancel / soft-delete / scan），
 //   上面「判据」一节列的就是它们，R6 反断言守住批次集合读那一类。
 //   另：`changePartStatus`（`POST /parts/{id}/change-status`）已随无用封装删除 ——
 //   在后端仓 `src/` 与 `tests/` 全仓 grep 过 `change-status`，零路由注册、零测试引用，
