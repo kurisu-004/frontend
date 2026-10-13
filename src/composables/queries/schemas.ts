@@ -35,21 +35,34 @@ import { z } from 'zod';
 import { ORDER_STATUSES } from '@/types/parts';
 
 /** 2026-09-26 新增：客户实体。字段对齐 backend-rust `CustomerOut`
- * （`backend-rust/docs/api/customers.md:142-153`，8 字段）：雪花 id / name /
- * parent_id / parent_name / serial_prefix / version / created_at / updated_at。
+ * （契约载体：`backend-rust/src/modules/com/customer/vo/customer.rs` —— com 域没有
+ * `docs/api/` 整域文档，此前注释引的 `backend-rust/docs/api/customers.md:142-153`
+ * 是失效路径）：雪花 id / name / parent_id / parent_name / serial_prefix / version /
+ * created_at / updated_at。
  * serial_prefix 与 parent_name 一级客户必为 null，前端仅消费 nullable 不强制 None
  * 语义。version 是乐观锁 i32（每次写操作 +1）；created_at / updated_at 是
  * Asia/Shanghai naive datetime，前端按 string 处理（与项目 Zod 约定一致）。
  *
  * 2026-09-26（M-1 修复）：首轮漏列 version / created_at / updated_at 三字段。
  * zod 默认 `.object()` strip 模式会静默丢弃未声明字段，运行时不会报错，导致
- * Zod 校验守门失效。补齐与后端契约对齐。 */
+ * Zod 校验守门失效。补齐与后端契约对齐。
+ *
+ * 2026-10-17 新增（客户无限层级改造）：`customer_path` **必填、非 nullable** ——
+ * 口径是「第 2 层到叶子的名称用 ` / ` 拼接、不含 L1；根节点等于自己的 name」。
+ * 根节点也不为空串，所以不给 `.nullable()`。⚠️ **部署顺序：后端必须先上** ——
+ * 反序时 `customerSchema.parse` 抛 ZodError ⇒ `useCustomersQuery` 数据恒空 ⇒
+ * 全站客户筛选器与客户一览页集体空白且零报错（失败发生在 Zod 契约层，不会有红色
+ * 报错提示）。本仓刻意不加 `.optional()` / `?? ''` 兼容分支：那样只会把「后端没上」
+ * 变成「树上少一段路径名」的静默错误，比集体空白更难排查。
+ * 空串在 schema 上合法（z.string()），但后端不会给空串 —— 任何节点的路径至少含
+ * 它自己那一段名字；空串出现即后端拼装逻辑漂移，由展示层兜底成 `name` 即可。 */
 export const customerSchema = z.object({
   id: z.string(),
   name: z.string(),
   parent_id: z.string().nullable(),
   parent_name: z.string().nullable(),
   serial_prefix: z.string().nullable(),
+  customer_path: z.string(),
   version: z.number(),
   created_at: z.string(),
   updated_at: z.string(),

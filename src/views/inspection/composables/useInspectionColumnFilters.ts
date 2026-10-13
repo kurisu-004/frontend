@@ -20,7 +20,7 @@
 
 import { computed, ref, type ComputedRef, type Ref } from 'vue';
 import { useCustomerTree } from '@/composables/useCustomerTree';
-import type { CustomerCascaderNode } from '@/composables/useCustomerTree';
+import type { CustomerTreeNode } from '@/api/customer.tree';
 
 /** 待品检页的 search state shape。**由 store 持有**（reactive），本 composable 只读它
  *  并按各列的确认动作写回 —— 与 `usePartsColumnFilters` 消费 `PartsSearchState` 的
@@ -87,7 +87,7 @@ export interface UseInspectionColumnFiltersReturn {
   systemDateFilter: DateRangeFilter;
   customerFilter: CustomerFilter;
   /** 客户树（共享 `useCustomersQuery` 缓存，ElTreeSelect 的 data）。 */
-  customerTree: ComputedRef<CustomerCascaderNode[]>;
+  customerTree: ComputedRef<CustomerTreeNode[]>;
 }
 
 export function useInspectionColumnFilters(

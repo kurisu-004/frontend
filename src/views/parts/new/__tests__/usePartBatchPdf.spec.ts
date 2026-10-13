@@ -145,6 +145,9 @@ function plusDays(iso: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+// 2026-10-17（客户无限层级改造）：Customer 新增必填 customer_path（口径：第 2 层到
+// 叶子用 ` / ` 拼接、**不含 L1**；根节点等于自己的 name）。本 fixture 只有两层，
+// 于是根与二级节点的 customer_path 都等于各自 name —— 不动 parent_name / 其它逻辑。
 function customer(id: string, name: string, parentId: string | null): Customer {
   return {
     id,
@@ -152,6 +155,7 @@ function customer(id: string, name: string, parentId: string | null): Customer {
     parent_id: parentId,
     parent_name: null,
     serial_prefix: null,
+    customer_path: name,
     version: 1,
     created_at: '',
     updated_at: '',

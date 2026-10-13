@@ -23,7 +23,7 @@ import { computed, ref, type Ref } from 'vue';
 import { ORDER_STATUS_LABEL, type OrderStatus } from '@/types/parts';
 import { useCustomerTree } from '@/composables/useCustomerTree';
 import { splitLocationSelection, usePartLocationTree } from '@/views/parts/list/composables/usePartLocationTree';
-import type { CustomerCascaderNode } from '@/composables/useCustomerTree';
+import type { CustomerTreeNode } from '@/api/customer.tree';
 import type { LocationTreeNode } from '@/types/parts';
 import type { PartsSearchState } from './usePartsListQuery';
 import { PARTS_STATUS_FILTER_WHITELIST } from './usePartsListQuery';
@@ -101,7 +101,7 @@ export interface UsePartsColumnFiltersReturn {
   requestDateFilter: DateRangeFilter;
   plannedDateFilter: DateRangeFilter;
   systemDateFilter: DateRangeWithNullFilter;
-  customerTree: ComputedRef<CustomerCascaderNode[]>;
+  customerTree: ComputedRef<CustomerTreeNode[]>;
   customerFilter: CustomerFilter;
   locationTree: ReturnType<typeof usePartLocationTree>['tree'];
   locationFilter: LocationFilter;
@@ -486,5 +486,5 @@ export function usePartsColumnFilters(
   };
 }
 
-// 让 TypeScript 推断时拿得到 CustomerCascaderNode / LocationTreeNode 形状
-export type { CustomerCascaderNode, LocationTreeNode };
+// 让 TypeScript 推断时拿得到 CustomerTreeNode / LocationTreeNode 形状
+export type { CustomerTreeNode, LocationTreeNode };

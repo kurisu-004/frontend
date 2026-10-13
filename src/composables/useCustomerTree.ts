@@ -7,7 +7,12 @@
 // usePartsColumnFilters.ts）零改动即可工作。
 //
 // 注意：
-//   - 树形转换 + resolveRootCustomerId 逻辑原样保留（拆 L1 root + L2 children）；
+//   - 2026-10-17（客户无限层级改造）：树形转换从「内联硬编码两层」改成调
+//     `api/customer.tree` 的 `buildCustomerTree` / `rootCustomerIdOf`（任意深度 + 环 /
+//     孤儿 / 重复 id 兜底），本文件不再持有拼树逻辑；旧的两层拼法在 3 层以上会把
+//     节点整片丢掉。节点类型由宽松的 `CustomerCascaderNode`（`{id,name,children?}`
+//     + 任意索引签名）收紧成 `CustomerTreeNode`（多 `parent_name` / `serial_prefix` /
+//     `customer_path` / `root_id` / `depth`，children 恒为数组）；
 //   - 2026-09-26 二改：删除 dead API `load()`（grep 确认零 caller；写操作刷新走
 //     invalidateCustomersQuery，常规读取走 useQuery 自动 fetch），对齐同仓
 //     usePartDispatch 暴露 `processesLoading: processQuery.isFetching` 的形态，
@@ -20,19 +25,14 @@
 import { computed, watch, type ComputedRef } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { Customer } from '@/api/customer';
+import { buildCustomerTree, rootCustomerIdOf, type CustomerTreeNode } from '@/api/customer.tree';
 import { useCustomersQuery } from './queries/useCustomersQuery';
-
-export interface CustomerCascaderNode {
-  id: string;
-  name: string;
-  children?: CustomerCascaderNode[];
-  [key: string]: unknown;
-}
 
 /** 2026-09-21 显式返回类型。 */
 export interface UseCustomerTreeReturn {
   customers: ComputedRef<Customer[]>;
-  tree: ComputedRef<CustomerCascaderNode[]>;
+  /** ElTreeSelect 的 data；节点形状见 `@/api/customer.tree` 的 `CustomerTreeNode`。 */
+  tree: ComputedRef<CustomerTreeNode[]>;
   loading: ReturnType<typeof useCustomersQuery>['isFetching'];
   resolveRootCustomerId: (pickedId: string | null) => string | null;
 }
@@ -56,22 +56,11 @@ export function useCustomerTree(): UseCustomerTreeReturn {
     },
   );
 
-  const tree = computed<CustomerCascaderNode[]>(() => {
-    const all = customers.value;
-    const roots = all.filter((c) => c.parent_id === null);
-    return roots.map((r) => ({
-      id: r.id,
-      name: r.name,
-      children: all.filter((c) => c.parent_id === r.id).map((c) => ({ id: c.id, name: c.name })),
-    }));
-  });
+  const tree = computed<CustomerTreeNode[]>(() => buildCustomerTree(customers.value));
 
-  /** Resolve picked cascader node id back to its root customer id (L1 group)。 */
+  /** 选中任意层级节点 → 回溯到它的 L1 根 id（跨任意深度）。 */
   function resolveRootCustomerId(pickedId: string | null): string | null {
-    if (!pickedId) return null;
-    const found = customers.value.find((c) => c.id === pickedId);
-    if (!found) return null;
-    return found.parent_id ?? found.id;
+    return rootCustomerIdOf(customers.value, pickedId);
   }
 
   return { customers, tree, loading, resolveRootCustomerId };

@@ -5,15 +5,18 @@
 // 「Zod 校验守门失效」）。
 //
 // 覆盖：
-//   - S1：customerSchema.parse 接受 backend-rust CustomerOut 8 字段结构（id /
-//     name / parent_id / parent_name / serial_prefix / version / created_at /
-//     updated_at），不抛错。
+//   - S1：customerSchema.parse 接受 backend-rust CustomerOut 8 字段结构 + customer_path
+//     （id / name / parent_id / parent_name / serial_prefix / customer_path / version /
+//     created_at / updated_at），不抛错。
 //   - S2：customerSchema 对一级客户（parent_id = null, parent_name = null,
 //     serial_prefix = 'A'）也接受。
 //   - S3：customerSchema 对二级客户（parent_id / parent_name 非 null,
 //     serial_prefix = null）也接受。
 //   - S4：customerSchema 缺 version → 抛 ZodError（核心 regression guard：
 //     首轮漏列 version 字段会导致 backend-rust 真返回被 strip 掉，仍 parse 成功）。
+//   - S4d~S4g（2026-10-17 客户无限层级改造）：customer_path 必填键的四条 —— 深层节点的
+//     ` / ` 拼接串能过 / 缺键必抛（部署顺序守卫）/ null 必抛 / 空串合法（值不美不
+//     一致把整页打成空白，由展示层兜底）。
 //   - S5：customerListResultSchema 接受分页结构（items / total / limit / offset）。
 //   - S6：processSchema.parse 接受 backend-rust ProcessOut 12 字段结构。
 //   - S7：processSchema 对 INHOUSE / OUTSOURCE 两种 category 都接受。
@@ -77,7 +80,9 @@
 // 本文件此后只覆盖**跨域共用的基础数据层** schema。
 //
 // 数据来源：
-//   - backend-rust/docs/api/customers.md:142-153（CustomerOut 8 字段）
+//   - backend-rust/src/modules/com/customer/vo/customer.rs（CustomerOut 8 字段 ——
+//     com 域没有 `docs/api/` 整域文档，此前注释引的 `docs/api/customers.md:142-153`
+//     是失效路径，2026-10-17 改正）
 //   - backend-rust/docs/api/production/processes.md:159-173（ProcessOut 12 字段）
 //   - backend-rust/docs/api/parts.md（PartListOut / PartListItem 字段）
 //   - backend-rust/src/modules/assembly/vo/assembly.rs:17-119
@@ -101,13 +106,14 @@ import {
 
 describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () => {
   describe('customerSchema', () => {
-    it('S1：解析 backend-rust CustomerOut 完整 8 字段不抛错', () => {
+    it('S1：解析 backend-rust CustomerOut 完整 8 字段 + customer_path 不抛错', () => {
       const customer = customerSchema.parse({
         id: '190000000000001',
         name: '客户A',
         parent_id: null,
         parent_name: null,
         serial_prefix: 'A',
+        customer_path: '客户A',
         version: 3,
         created_at: '2026-09-26 10:00:00',
         updated_at: '2026-09-26 11:00:00',
@@ -123,6 +129,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
         parent_id: null,
         parent_name: null,
         serial_prefix: 'B',
+        customer_path: 'L1-客户',
         version: 1,
         created_at: '2026-01-01 00:00:00',
         updated_at: '2026-01-01 00:00:00',
@@ -138,6 +145,9 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
         parent_id: '190000000000001',
         parent_name: 'L1-客户',
         serial_prefix: null,
+        // 2026-10-17（客户无限层级改造）：第 2 层节点的 customer_path **不含 L1**，
+        // 就是它自己那一段名字。
+        customer_path: 'L2-叶子客户',
         version: 1,
         created_at: '2026-01-01 00:00:00',
         updated_at: '2026-01-01 00:00:00',
@@ -158,6 +168,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
           parent_id: null,
           parent_name: null,
           serial_prefix: 'A',
+          customer_path: 'X',
           // version: 故意缺
           created_at: '',
           updated_at: '',
@@ -173,6 +184,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
           parent_id: null,
           parent_name: null,
           serial_prefix: 'A',
+          customer_path: 'X',
           version: 1,
           // created_at: 故意缺
           updated_at: '',
@@ -188,6 +200,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
           parent_id: null,
           parent_name: null,
           serial_prefix: 'A',
+          customer_path: 'X',
           version: 1,
           created_at: '',
           // updated_at: 故意缺
@@ -205,12 +218,89 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
         parent_id: null,
         parent_name: null,
         serial_prefix: 'A',
+        customer_path: 'X',
         version: 1,
         created_at: '',
         updated_at: '',
         extra_field: 'should-be-stripped',
       });
       expect((parsed as unknown as Record<string, unknown>).extra_field).toBeUndefined();
+    });
+
+    // 2026-10-17（客户无限层级改造）：customer_path 必填键的三条守门用例。
+    it('S4d：customer_path = 第 2 层起的 ` / ` 拼接串 → 解析通过（深层节点口径）', () => {
+      // 树：华强(L1) / 终端BG(L2) / 手机部(L3) / 影像组(L4)；L4 的 path 不含 L1。
+      const customer = customerSchema.parse({
+        id: '190000000000004',
+        name: '影像组',
+        parent_id: '190000000000003',
+        parent_name: '手机部',
+        serial_prefix: null,
+        customer_path: '终端BG / 手机部 / 影像组',
+        version: 1,
+        created_at: '',
+        updated_at: '',
+      });
+      expect(customer.customer_path).toBe('终端BG / 手机部 / 影像组');
+      // 契约要点：name / parent_name 仍各是「单段名」，不被拼接串污染
+      expect(customer.name).toBe('影像组');
+      expect(customer.parent_name).toBe('手机部');
+    });
+
+    it('S4e：缺 customer_path → 抛 ZodError（必填键守门，M-1 同形态 guard）', () => {
+      // ⚠️ 这是部署顺序的守卫：后端没上 customer_path 时，前端 parse 必须当场抛，
+      // 而不是静默 strip 后让筛选器按空路径名筛（那是更难排查的静默错误）。
+      expect(() =>
+        customerSchema.parse({
+          id: '190000000000001',
+          name: '客户A',
+          parent_id: null,
+          parent_name: null,
+          serial_prefix: 'A',
+          // customer_path: 故意缺
+          version: 1,
+          created_at: '',
+          updated_at: '',
+        }),
+      ).toThrow();
+    });
+
+    it('S4f：customer_path = null → 抛 ZodError（刻意不给 .nullable()）', () => {
+      // 根节点也有值（= 自己的 name），任何节点的路径至少含自己那一段 ⇒ 后端恒发
+      // 非 null 字符串；null 说明后端拼装逻辑漂移，宁可当场抛也不当兜底放行。
+      expect(() =>
+        customerSchema.parse({
+          id: '190000000000001',
+          name: '客户A',
+          parent_id: null,
+          parent_name: null,
+          serial_prefix: 'A',
+          customer_path: null,
+          version: 1,
+          created_at: '',
+          updated_at: '',
+        }),
+      ).toThrow();
+    });
+
+    it('S4g：customer_path = 空串 → 解析通过（schema 只锁 string，不锁非空）', () => {
+      // 为什么不加 `.min(1)`：口径是「第 2 层到叶子的名称拼接」，空串只可能来自后端
+      // 拼装漂移（脏数据），而**这是共享基础数据层 schema**——一棵树里一条脏节点抛
+      // ZodError 会让整页客户数据恒空（连带全站筛选器空白）。展示层兜底成 `name`
+      // 即可，值不值得为此把整页打成空白由展示层决定，不由契约层一刀切。
+      // 换言之：这里锁的是「键必须存在且是字符串」，不是「字符串必须好看」。
+      const customer = customerSchema.parse({
+        id: '190000000000001',
+        name: '客户A',
+        parent_id: null,
+        parent_name: null,
+        serial_prefix: 'A',
+        customer_path: '',
+        version: 1,
+        created_at: '',
+        updated_at: '',
+      });
+      expect(customer.customer_path).toBe('');
     });
   });
 
@@ -224,6 +314,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
             parent_id: null,
             parent_name: null,
             serial_prefix: 'A',
+            customer_path: 'A',
             version: 1,
             created_at: '',
             updated_at: '',

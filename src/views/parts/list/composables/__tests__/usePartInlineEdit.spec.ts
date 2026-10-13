@@ -34,7 +34,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, readonly, ref, type ComputedRef } from 'vue';
 import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 import type { PartListItem } from '@/types/parts';
-import type { CustomerCascaderNode } from '@/composables/useCustomerTree';
+import type { CustomerTreeNode } from '@/api/customer.tree';
 
 vi.mock('element-plus', () => ({
   ElMessage: {
@@ -151,7 +151,7 @@ function setup(src: PartListItem): {
   const edit = testApp.runWithContext(() =>
     usePartInlineEdit({
       items: rows as unknown as ComputedRef<PartListItem[]>,
-      customerTree: ref<CustomerCascaderNode[]>([]) as unknown as never,
+      customerTree: ref<CustomerTreeNode[]>([]) as unknown as never,
       canEdit: true,
       isBatchMode: () => false,
     }),

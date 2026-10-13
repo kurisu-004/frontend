@@ -148,6 +148,9 @@ const Harness = defineComponent({
           // 2026-09-26（M-1 修复）：Customer 补齐 version / created_at / updated_at 后，
           // 测试 fixture 同步补齐（与 backend-rust CustomerOut 8 字段对齐）。
           version: 1,
+          // 2026-10-17（客户无限层级改造）：新增必填 customer_path；本 fixture 的节点
+          // 是一级客户（parent_id = null），按口径等于自己的 name。
+          customer_path: '客户A',
           status: 'ACTIVE',
           created_at: '',
           updated_at: '',
