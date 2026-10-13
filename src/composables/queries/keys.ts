@@ -788,4 +788,42 @@ export const qk = {
   permissionsList: () => ['iam-roles', 'permissions'] as const,
   /** 系统菜单树全集键（面板右区 el-tree 的数据源）。 */
   menusTree: () => ['iam-roles', 'menus'] as const,
+  // ============================================================
+  // 2026-10-16 新增：mail 域（定时任务 → 邮件的**邮箱账号**子域）queryKey 工厂。
+  //
+  // 根命名空间取 `mail`（与页面路由 `/mail`、后端 URL 段 `/mail/*` 逐段对齐，便于按 URL
+  // 反查键），**不**挂 `partsPrefix` 下 —— 理由沿本文件 `inspection` /
+  // `process-design` / `statistics` / `iam-roles` 几段的「根命名空间」取舍：键的根只要求
+  // 「同根前缀匹配」才有意义，挂了才有共享写点。本域的四条写端点（建档 / 改档 / 删除 /
+  // 设为默认）写的是邮箱账号表，交期汇总那条写端点（`POST /mail-digest/config`）写的是
+  // 自己的配置表 —— 两者与零件域、生产队列**零共享写点**；挂 parts 下只会让全仓最热的
+  // `qk.partsPrefix` 一把全刷把邮箱列表捎带重拉。
+  //
+  // ⚠️ **与上方 mail-digest 那组是两个独立前缀**（`mail` vs `mail-digest`），刻意**不**
+  // 合并：`mail-digest/*` 那组键是 2026-10-13 上线时定的，它的失效编排点（保存配置 /
+  // 立即发送，含失败路径）已经在用；合并会让既有的
+  // `invalidate({ queryKey: qk.mailDigestPrefix })` 变成「保存一次定时配置把邮箱列表也刷
+  // 了」，而两者毫无数据依赖。同理本域的四条写端点**不会**去失效交期汇总那份配置缓存
+  // （那需要跨前缀的精确失效），属既定策略（CLAUDE.md「跨页面写操作不做穷举失效」）：
+  // 改完邮箱名后，交期汇总页那个邮箱下拉要等它自己的挂载重取或用户点「刷新」才更新。
+  //
+  // 两条读键：
+  //   - mailAccounts()      —— GET /mail/accounts（**常量键**：端点不接 Query extractor，
+  //     一次性返全部，没有分页 / 筛选 / 维度可言）
+  //   - mailMeta()          —— GET /mail/meta（**常量键**：SMTP 预设选项，后端不接受入参）
+  //
+  // 失效编排点（消费方 `views/mail/accounts/composables/useMailAccountsStore.ts`）：
+  //   四条写端点的 onSuccess **与 onError** 都失效 `qk.mailPrefix` 一把。**失败也失效**的
+  //   理由不是「怕漏刷自己那笔」，而是本端副本在失败那一刻**已经不等于真源**：21708
+  //   （被定时任务引用禁止删除）说明引用关系只有后端知道，列表页无从自证；21706 / 21707
+  //   同理（那两条是「你的副本错了」的信号）。理由同 `useQueueDispatch` 的 OCC 分支。
+  // ============================================================
+  /** 邮箱账号列表键（`GET /api/v2/mail/accounts`）。**常量键**：端点不接 Query extractor、
+   *  一次性返全部（无分页信封）。⚠️ 不要在调用点拼 `['mail','accounts']` 字面量。 */
+  mailAccounts: () => ['mail', 'accounts'] as const,
+  /** SMTP 预设选项键（`GET /api/v2/mail/meta`）。**常量键**：端点不接受任何入参。 */
+  mailMeta: () => ['mail', 'meta'] as const,
+  /** mail 域前缀 —— 四条写端点在**成功与失败两条路径**上都失效（理由见上方「失效编排点」）。
+   *  同时覆盖将来新加的 `['mail', …]` 读键。 */
+  mailPrefix: ['mail'] as const,
 } as const;

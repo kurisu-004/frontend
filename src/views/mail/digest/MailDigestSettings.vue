@@ -1,13 +1,13 @@
 <!--
   MailDigestSettings.vue — 交期汇总邮件定时任务管理页（薄壳）
 
-  2026-10-13 新建。路由 `/mail/digest`（`menuCode: 'mail_digest'`，与后端
-  `seeds/menu.sql` 的菜单 code 逐字一致 —— 不一致会被路由守卫第 3 条踢回首一个有 path
-  的节点）。
+  2026-10-13 新建。**2026-10-16 起本页是 `/mail` 下的一个 el-tab-pane**
+  （壳 `views/mail/MailCenter.vue`），不再直接挂路由。
 
   本页只做**组件拼装 + 生命周期编排**，所有页面态在
   `composables/useMailDigestStore.ts`（Pinia setup store，4 不变量见该文件头）：
-    - SMTP 状态条（`GET /meta` 的 `smtp` 段；未配置时顶部一条 warning，并禁用「立即发送」）
+    - 发信邮箱状态条（**2026-10-16 改**：SMTP 不再是部署级环境变量，判据变成「一个可用
+      邮箱都没有 / 有邮箱但本条配置没选」；文案里**不再出现任何环境变量名**）
     - 工具条：保存 / 预览 / 立即发送（**el-popconfirm 二次确认**，真发不可撤销）/ 刷新
     - 四个配置卡片（调度 / 收件人 / 内容）+ 预览弹窗 + 发送历史 + 分页
 
@@ -20,28 +20,36 @@
 -->
 <template>
   <div v-loading="store.query.configLoading" class="mail-digest-page">
-    <!-- SMTP 未配置：定时与手动发送都会失败，提前说清楚 + 禁用「立即发送」。
-         ⚠️ 2026-10-14：**标题刻意不提错误码**（原先写的是「都会返回 21501」）。业务码
-         是前后端契约的实现细节，对运维/管理员没有可操作性 —— description 里已经写清了
-         该设哪几个环境变量；而码值一旦进 UI 文案，它就是第二个会漂移的来源（本轮就因
-         后端把 215xx 段换成 217xx 而变成错码）。真失败时弹的那句人话由
-         `mailDigestErrorText.ts` 按码查表给出，管理员需要码值时看控制台/后端日志即可。
-         ⚠️ 判据是 store 的 `smtpMissing`（= `smtp.configured === false`）而不是
-         「取不到」：meta 还没回来时它是 false，此时**不**弹这条，否则首屏会先闪一条
-         假告警再消失。 -->
+    <!-- 2026-10-16：原来的「SMTP 未配置」告警改成两条「发信邮箱」告警。
+         ⚠️ 判据用 store 的 `noAccounts` / `senderMissing`（各自都是**三态**派生的
+         `=== true`）而不是「取不到」：邮箱列表还在飞时它们是 false，此时**不**弹，
+         否则首屏会先闪一条假告警再消失（与原 `smtpMissing` 同一坑、同一处处置）。
+         ⚠️ **标题刻意不提环境变量名**（原先写的是 MAIL_SMTP_USERNAME 等）：SMTP 已改成
+         页面内可维护的邮箱账号，运维不需要、也不应该去改服务端 env；这些名字留在文案里
+         只会让用户去改一个已经不起作用的地方。业务码同理不进 UI 文案 —— 真失败时弹的
+         那句人话由 `mailDigestErrorText.ts` 按码查表给出。 -->
     <el-alert
-      v-if="store.query.smtpMissing"
-      class="smtp-alert"
+      v-if="store.query.noAccounts"
+      class="sender-alert"
       type="warning"
       show-icon
       :closable="false"
-      title="SMTP 未配置，定时与手动发送都会失败"
-      description="需在服务端设置 MAIL_SMTP_USERNAME / MAIL_SMTP_PASSWORD / MAIL_FROM_ADDRESS（以及 MAIL_SMTP_HOST / MAIL_SMTP_PORT）后重启；本域其余配置仍可正常保存。"
+      title="还没有可用邮箱，定时与手动发送都会失败"
+      description="请先到「邮箱设置」里新增一条邮箱账号（填写服务商授权码），再回到本页选择发信邮箱。"
+    />
+    <el-alert
+      v-else-if="store.query.senderMissing"
+      class="sender-alert"
+      type="warning"
+      show-icon
+      :closable="false"
+      title="尚未选择发信邮箱"
+      description="可在下方「发信邮箱」里选一条；不选时将由系统使用默认邮箱发送。本页其余配置仍可正常保存。"
     />
 
     <el-alert
       v-if="store.query.configErrorText"
-      class="smtp-alert"
+      class="sender-alert"
       type="error"
       show-icon
       :closable="false"
@@ -82,6 +90,7 @@
       <MailScheduleSection
         :model-value="store.query.form"
         :frequency-options="store.query.frequencyOptions"
+        :sender-accounts="store.query.senderAccounts"
         :errors="store.query.fieldErrors"
         :focus-field="store.query.focusField"
         @update:model-value="onFormChange"
@@ -194,13 +203,20 @@ watch(
 );
 
 onMounted(() => {
-  // 开 enabled 闸门 → 三条 query 首屏 fetch（配置 / meta / 日志第一页）。
+  // 开 enabled 闸门 → 四条 query 首屏 fetch（配置 / meta / 日志第一页 / 邮箱列表，
+  // 邮箱列表是 2026-10-16 为「发信邮箱」下拉加的）。
   store.query.openGate();
 });
 
 onBeforeUnmount(() => {
   // 不变量 #2：Pinia 单例，离开页面销毁，下次进入重建 fresh 状态
   // （否则未保存的表单改动 / 预览弹窗态 / 日志页码会泄漏到下次进入）。
+  // ⚠️ 2026-10-16：销毁时机的口径 —— 本页现在挂在 `MailCenter.vue` 的 `el-tab-pane`
+  // 里。element-plus 2.14.6 的 `tab-pane` 在 `lazy` 下**只延迟首次挂载，已渲染过的
+  // pane 用 `v-show` 常驻**（`tab-pane.vue`：`shouldBeRender = !lazy || loaded ||
+  // active`，渲染分支带 `vShow`）⇒ **切走 tab 不会**触发这里，`$dispose` 的真实触发点
+  // 是**离开 /mail 这一页**（本壳卸载，两个 pane 一并卸载）。「不跨 tab 保留未保存改动」
+  // 不是本页的契约，是「离开 /mail 就丢」——本次没有改变它。
   store.$dispose();
 });
 </script>
@@ -212,7 +228,7 @@ onBeforeUnmount(() => {
   gap: 12px;
 }
 
-.smtp-alert {
+.sender-alert {
   margin-bottom: 0;
 }
 

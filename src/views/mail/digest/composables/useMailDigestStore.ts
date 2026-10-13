@@ -27,6 +27,7 @@ import { useMutation, useQueryClient } from '@tanstack/vue-query';
 import { previewMailDigest, saveMailDigestConfig, sendMailDigestNow } from '@/api/mailDigest';
 import { qk } from '@/composables/queries/keys';
 import type { MailDigestRunPayload } from '@/types/mailDigest';
+import type { MailAccountData } from '@/views/mail/accounts/mailAccountSchema';
 import {
   DEFAULT_MAIL_DIGEST_FREQUENCY_FLAGS,
   DEFAULT_MAIL_DIGEST_FREQUENCY_OPTIONS,
@@ -45,6 +46,12 @@ import {
   useMailDigestLogsQuery,
   useMailDigestMetaQuery,
 } from './useMailDigestQuery';
+// 2026-10-16：邮箱列表的读 hook 从**另一个域**（`views/mail/accounts/`）引。
+// 这条边是允许的：它只引 query hook（无自有状态、无写端点），且两条 useQuery 共用
+// 同一条 `qk.mailAccounts()` 缓存 —— 「邮箱设置」tab 与本页的「发信邮箱」下拉拿到的
+// 是同一份数据。守门 schema 仍留在 accounts 域自己的目录里（CLAUDE.md「域 schema 与
+// query hook 同居」），本 store 不引它。
+import { useMailAccountsQuery } from '@/views/mail/accounts/composables/useMailAccountsQuery';
 
 /** 表单初值。刻意不用 `meta.defaults`：本 store 的表单态由 `GET /config` 单方面 hydrate
  *  （config 是真源、meta.defaults 只是后端给的参考值），两者不一致时以 config 为准。 */
@@ -63,6 +70,9 @@ function initialFormModel(): MailDigestFormModel {
     upcoming_days: 7,
     visible_columns: [],
     subject_template: '',
+    // 2026-10-16：发信邮箱默认「未选」。刻意**不**默认成列表第一条 / 后端默认邮箱 ——
+    // 那是在替用户做「用哪个邮箱发信」的决定，而页面无从得知哪条是后端当前默认。
+    sender_account_id: null,
   };
 }
 
@@ -139,6 +149,8 @@ export const useMailDigestStore = defineStore('mail-digest', () => {
       visible_columns: [...config.visible_columns],
       // 留空串 = 用后端默认标题（提交时转 null），页面不绑 null。
       subject_template: config.subject_template ?? '',
+      // 2026-10-16：发信邮箱 id 原样搬过来（雪花 ID 恒为 string，不做数字化）。
+      sender_account_id: config.sender_account_id,
     });
     savedSnapshot.value = snapshot(form);
   }
@@ -172,14 +184,31 @@ export const useMailDigestStore = defineStore('mail-digest', () => {
   const logsTotal = computed(() => logsQuery.data.value?.total ?? 0);
   const logsLoading = logsQuery.isFetching;
   const configLoading = configQuery.isFetching;
-  /** SMTP 是否已配置。**三态**：`null` = meta 还没回来（此刻不该弹「未配置」告警，
-   *  否则首屏会先闪一条假告警再消失）。判据的单一真源是 `GET /meta` 的 `smtp.configured`。 */
-  const smtpConfigured = computed<boolean | null>(() => {
-    const configured = metaQuery.data.value?.smtp.configured;
-    return typeof configured === 'boolean' ? configured : null;
-  });
-  /** SMTP 明确**未**配置（只在此时弹告警 + 禁用「立即发送」）。 */
-  const smtpMissing = computed(() => smtpConfigured.value === false);
+
+  // 2026-10-16：SMTP 不再是部署级环境变量，改由**页面内可维护的邮箱账号实体**承载
+  // （后端 `/api/v2/mail/accounts`，前端 `views/mail/accounts/`）。本页因此多挂一条
+  // `qk.mailAccounts()` 的 query —— 与「邮箱设置」那个 tab **共用同一条缓存**（同屏去重
+  // / 切 tab 不重新打）。发信地址、授权码、选哪条发信三件事全在这个域里。
+  const accountsQuery = useMailAccountsQuery({ enabled: ready });
+  /** 可选的发信邮箱（`MailScheduleSection` 的「发信邮箱」下拉选项）。 */
+  const senderAccounts = computed<readonly MailAccountData[]>(() => accountsQuery.data.value ?? []);
+  /** 邮箱列表是否已到达（`null` = 还在飞）。**三态**不是为了花哨，是因为首屏有一条
+   *  「还没有可用邮箱 / 尚未选择发信邮箱」的告警 —— 用二值判据（`length === 0`）会在
+   *  列表还在飞时**先闪一条假告警再消失**（与原 `smtpMissing` 同一坑，同一处处置）。 */
+  const accountsLoaded = computed<boolean | null>(() =>
+    accountsQuery.data.value === undefined ? null : true,
+  );
+  /** 明确**没有**任何邮箱账号（只在此时说「还没有可用邮箱」）。 */
+  const noAccounts = computed(
+    () => accountsLoaded.value === true && senderAccounts.value.length === 0,
+  );
+  /** 明确**尚未选择**发信邮箱（邮箱存在、但本条配置没指定）。⚠️ 判据里**不含**
+   *  「当前选中的 id 在列表里找不到」那一支：那属于数据不一致（别的会话删了它），
+   *  由写端点的 21706 报，页面照常显示已选中的 id、不擅自把用户的配置改掉。 */
+  const senderMissing = computed(
+    () =>
+      accountsLoaded.value === true && senderAccounts.value.length > 0 && !form.sender_account_id,
+  );
   const configErrorText = computed<string | null>(() => {
     const e = configQuery.error.value;
     return e ? mailDigestErrorText(e, '定时配置加载失败') : null;
@@ -252,14 +281,26 @@ export const useMailDigestStore = defineStore('mail-digest', () => {
     ready.value = true;
   }
 
-  /** 「刷新」按钮：三条读端点全刷，配置强制覆盖（用户主动要的就是服务端那份）。
+  /** 「刷新」按钮：本域三条读端点 + 邮箱列表（2026-10-16 起）全刷。
    *
+   *  ⚠️ 邮箱列表在这里**必须**一起刷：本页的「发信邮箱」下拉显示的是邮箱的**自定义名称**，
+   *  而「邮箱设置」tab 里的改名是**另一条前缀**（`qk.mailPrefix`）下的写端点，本域的失效
+   *  编排覆盖不到它 ⇒ 用户在那边改完名切回来，下拉里还是旧名字，除非他自己点刷新。这是
+   *  「跨页面写操作不做穷举失效」这条既定策略下的已知缺口，补一条用户可及的「刷新」比
+   *  做跨前缀精确失效便宜得多（后者要求枚举所有改名入口，穷举不可持续）。
+   *
+   *  配置强制覆盖（用户主动要的就是服务端那份）。
    *  ⚠️ 2026-10-14（review 第 1 轮 T-2，非缺陷、记一笔）：`dirty` 为真时点本按钮会
    *  **无提示地丢弃未保存改动**（工具条上只有「有未保存的修改」这句提示，没有二次确认）。
    *  刻意不加 `ElMessageBox.confirm`：刷新是低频的自我纠错动作，而这里每个动作都弹一次
    *  确认会把它变成肌肉记忆式的「随手点掉」；真要防误触，入口级的 dirty 提示已经在了。 */
   async function refreshAll(): Promise<void> {
-    await Promise.all([reloadConfig(true), metaQuery.fetchMeta(), logsQuery.fetchLogs()]);
+    await Promise.all([
+      reloadConfig(true),
+      metaQuery.fetchMeta(),
+      logsQuery.fetchLogs(),
+      accountsQuery.fetchList(),
+    ]);
   }
 
   const query = {
@@ -270,8 +311,13 @@ export const useMailDigestStore = defineStore('mail-digest', () => {
     dirty,
     configLoading,
     configErrorText,
-    smtpConfigured,
-    smtpMissing,
+    // 2026-10-16：原 `smtpConfigured` / `smtpMissing` 一对换成下面三个（理由见定义处
+    // 的注释）。**改动点提醒**：`smtpConfigured` 已**无消费方**（页面顶部与「立即发送」
+    // 的禁用判据都改读 `senderAccounts` / `senderMissing`），故不保留。
+    accountsLoaded,
+    noAccounts,
+    senderMissing,
+    senderAccounts,
     frequencyOptions,
     columnOptions,
     upcomingDaysRange,
@@ -313,6 +359,8 @@ export const useMailDigestStore = defineStore('mail-digest', () => {
       upcoming_days: Number(form.upcoming_days ?? 0),
       visible_columns: [...form.visible_columns],
       subject_template: form.subject_template.trim() === '' ? null : form.subject_template.trim(),
+      // 2026-10-16：发信邮箱 id（雪花 ID ⇒ JSON string，**不要**过 Number()）。
+      sender_account_id: form.sender_account_id,
     };
   }
 
@@ -441,6 +489,7 @@ export const useMailDigestStore = defineStore('mail-digest', () => {
         upcoming_days: Number(form.upcoming_days ?? 0),
         visible_columns: [...form.visible_columns],
         subject_template: form.subject_template.trim() === '' ? null : form.subject_template.trim(),
+        sender_account_id: form.sender_account_id,
       });
     } catch {
       /* 错误已由 mutation 的 onError 提示，表单保持打开让用户改完重试 */
@@ -484,10 +533,13 @@ export const useMailDigestStore = defineStore('mail-digest', () => {
     save,
     preview,
     sendNow,
-    /** 壳的「立即发送」按钮的禁用判据：正在发 / SMTP 明确未配置。
-     *  `smtpConfigured === null`（meta 未回来）**不禁用** —— 那会让按钮在首屏无故灰着，
+    /** 壳的「立即发送」按钮的禁用判据：正在发 / 明确一个可用邮箱都没有。
+     *  ⚠️ **只在 `noAccounts`（完全没有邮箱）时禁用，不在 `senderMissing`（有邮箱但没选）
+     *  时禁用**：后端在 `sender_account_id` 为 null 时会回落到**默认邮箱**，所以没选也能
+     *  真的发出去；把「没选」也禁掉等于让用户必须先回邮箱设置走一趟才能试发一次。
+     *  `accountsLoaded === null`（列表还在飞）**不禁用** —— 那会让按钮在首屏无故灰着，
      *  真发失败时后端会返 21701，页面照样弹人话提示。 */
-    sendDisabled: computed(() => sendMutation.isPending.value || smtpMissing.value),
+    sendDisabled: computed(() => sendMutation.isPending.value || noAccounts.value),
   };
 
   return {

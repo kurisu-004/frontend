@@ -21,6 +21,13 @@
 //   - **计数 / 版本号 / 时分天一律 JSON number**：`version` / `upcoming_days` /
 //     `send_hour` / `overdue_count` / `html_bytes` / `total` 等。`version` 不是 ID。
 //
+// 2026-10-16：SMTP 从「部署级环境变量」改为「页面内可维护的邮箱账号实体」
+// （后端 `/api/v2/mail/*`，前端 `views/mail/accounts/`），本文件随之两处改动：
+//   - 配置字段新增 `sender_account_id`（选哪条邮箱发信，null = 未选），因为它与其它
+//     配置项同属一份 `mailDigestConfigFields`（同时进 `GET /config` 与 `meta.defaults`）；
+//   - `mailDigestMetaSchema` 删掉整段 `smtp` —— 它描述的是部署级 SMTP，与页面里配置的
+//     邮箱账号是**两个会打架的真源**。
+//
 // ⚠️ **`.strict()` 的取舍**：信封 / 行层一律 `.strict()`，与 `views/users/usersSchema.ts`
 // 同款 —— 后端给本域加派生字段（例如「上次发送时间」）时会被这里挡住、需要显式决策，
 // 而不是被 Zod 默认的 strip 静默吞掉（吞掉后前端「照样通过校验」，那一列整列失效且
@@ -97,6 +104,12 @@ const mailDigestConfigFields = {
   visible_columns: z.array(z.string()),
   /** 标题模板；null = 用后端默认标题。 */
   subject_template: z.string().nullable(),
+  /** 2026-10-16 新增：发信邮箱（`/api/v2/mail/accounts` 的一行）。
+   *  **null = 未选**（不是「用默认邮箱」—— 默认邮箱由后端在 null 时回落，页面无从得知
+   *  实际会落到哪一条，所以选择器必须让用户显式选一条）。雪花 ID ⇒ JSON string。
+   *  ⚠️ 它同时出现在 `GET /config` 与 `GET /meta` 的 `defaults` 里（同一份
+   *  `mailDigestConfigFields`），所以两端到齐后缺键会当场抛而不是静默 strip 成 undefined。 */
+  sender_account_id: z.string().nullable(),
 } as const;
 
 // ============================================================
@@ -115,7 +128,13 @@ export const mailDigestConfigSchema = z
     /** OCC 锚，`POST /config` 必填（无行时为 0）。 */
     version: z.number(),
     ...mailDigestConfigFields,
-    /** SMTP 是否已配置（等价于 `meta.smtp.configured`，冗余返一份省一次判断）。 */
+    /** SMTP 是否已配置。
+     *
+     *  ⚠️ 2026-10-16：本字段**保留**是因为后端仍在 `GET /config` 里下发它（契约未删），
+     *  但**前端已无消费方** —— SMTP 判定改由邮箱账号实体承载（`accounts.length === 0`
+     *  或未选 `sender_account_id`，见 `useMailDigestStore` 的 `noAccounts` /
+     *  `senderMissing`）。留着它是因为它是**必填键**、schema 是 `.strict()`：后端哪天把它
+     *  删掉会当场抛（响亮的失败，要显式决策），而不是被 Zod 默认的 strip 静默吞掉。 */
     smtp_configured: z.boolean(),
     created_at: z.string(),
     updated_at: z.string(),
@@ -146,15 +165,12 @@ export const mailDigestMetaSchema = z
         max: z.number(),
       })
       .strict(),
-    smtp: z
-      .object({
-        configured: z.boolean(),
-        host: z.string(),
-        port: z.number(),
-        from_address: z.string(),
-        from_name: z.string(),
-      })
-      .strict(),
+    // 2026-10-16：`smtp` 段（configured / host / port / from_address / from_name）**已
+    // 删除**。SMTP 配置不再是部署级的环境变量，而是**页面内可维护的邮箱账号实体**
+    // （`views/mail/accounts/`，后端 `/api/v2/mail/*`）：发信地址、授权码、选哪条发信
+    // 全部改由那几张表承载，`meta` 里再留一段「部署级 SMTP」只会变成第二个真源，且两者
+    // 迟早会打架（运维改了 env、页面里配的邮箱是另一个地址，报错时没头绪）。
+    // 页面顶部的告警判据随之改为「邮箱列表为空 / 未选发信邮箱」。
   })
   .strict();
 
@@ -290,6 +306,11 @@ export interface MailDigestFormModel {
   upcoming_days: number | undefined;
   visible_columns: string[];
   subject_template: string;
+  /** 2026-10-16：发信邮箱 id（`/api/v2/mail/accounts` 的雪花 id，JSON string）。
+   *  null = 未选。表单校验**不拦**它（空选是合法配置：定时任务不注册、手动发送由后端
+   *  回落默认邮箱），但页面顶部会给一条告警 —— 见 `MailDigestSettings.vue` 的
+   *  `senderMissing`。 */
+  sender_account_id: string | null;
 }
 
 export type MailDigestFormField =
@@ -301,7 +322,8 @@ export type MailDigestFormField =
   | 'cc_recipients'
   | 'upcoming_days'
   | 'visible_columns'
-  | 'subject_template';
+  | 'subject_template'
+  | 'sender_account';
 
 export type MailDigestFormFieldErrors = Partial<Record<MailDigestFormField, string>>;
 
@@ -391,6 +413,15 @@ export function makeMailDigestFormSchema(
     visible_columns: z.array(z.string()).min(1, '至少选择一列'),
     // 留空合法（= 用后端默认标题），超长才拒。
     subject_template: z.string().trim().max(200, '标题模板长度不能超过 200 个字符'),
+    // 2026-10-16：发信邮箱。**刻意不拦空选** —— 「没选发信邮箱」是合法配置（定时任务
+    // 不注册时根本不发信；手动发送由后端回落到默认邮箱），把它拦成红字会让用户在
+    // 「只想保存收件人清单」时被迫先建一个邮箱。空选的提示由页面顶部的告警条承担
+    // （见 `MailDigestSettings.vue` 的 `senderMissing`），而不是表单红字。
+    // `el-select` 清空给出的是 `''`，归一成 null（= 未选）后才不会把空串塞上 wire。
+    sender_account_id: z.preprocess(
+      (v) => (v === '' || v === undefined ? null : v),
+      z.string({ error: '请选择发信邮箱' }).trim().min(1, '请选择发信邮箱').nullable(),
+    ),
   });
 
   return base.superRefine((v, ctx) => {

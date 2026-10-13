@@ -81,8 +81,13 @@ export async function saveMailDigestConfig(
  * 读本域元数据（`GET /api/v2/mail-digest/meta`）。
  *
  * 返回频率选项（含三个 `needs_*` 判据）、表格列白名单候选、默认配置、`upcoming_days`
- * 的取值范围、SMTP 状态。**SMTP 未配置时 `smtp.configured` 为 false**（其余字段仍返，
- * 不因为没配就整段空）。
+ * 的取值范围。
+ *
+ * ⚠️ 2026-10-16：**`smtp` 段已从出参删除**。SMTP 不再是部署级环境变量，而是页面内可
+ * 维护的邮箱账号实体（`GET /api/v2/mail/accounts`，前端 `views/mail/accounts/`）——
+ * 发信地址、授权码、选哪条发信都由那几张表承载。`defaults` 段里的
+ * `sender_account_id`（选哪条邮箱发信）取的就是那个域的行 id，页面顶部的告警判据随之
+ * 从「`meta.smtp.configured === false`」改为「邮箱列表为空 / 未选发信邮箱」。
  *
  * 失败抛 `ApiError`：40101 未登录 / 403 非 MANAGER。
  */

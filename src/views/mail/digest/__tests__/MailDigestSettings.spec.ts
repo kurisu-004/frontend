@@ -6,10 +6,12 @@
 //
 //  1. **v-model 回写**：section emit 出来的整份表单模型真的写回 store 的 `query.form`
 //     （壳是唯一接线点，写错的表现是「改了输入框、保存时发的还是旧值」）；
-//  2. **SMTP 状态条**：meta 说没配 SMTP ⇒ 顶部出 warning + 「立即发送」禁用；配了就不出
-//     （首屏 meta 未回来时也不出 —— 否则会先闪一条假告警）；
+//  2. **发信邮箱状态条**（2026-10-16 取代原「SMTP 状态条」）：一条邮箱都没有 ⇒ 顶部出
+//     warning + 「立即发送」禁用；有邮箱但本条配置没选 ⇒ 出 warning 但**不**禁用（后端
+//     会回落到默认邮箱，仍能真发）；都正常 ⇒ 不出（邮箱列表还没回来时也不出 —— 否则会
+//     先闪一条假告警）；
 //  3. **「立即发送」走二次确认**：只有 `el-popconfirm` 的 confirm 才发请求（真发不可撤销，
-//     点一下就发是事故）；按钮本身在 SMTP 未配时禁用。
+//     点一下就发是事故）；按钮本身在「一条邮箱都没有」时禁用。
 //
 // section 子组件在本 spec 里用桩替换（VTU 的 `stubs` 优先于 SFC 的局部 import）：
 // 被测的是壳的接线，不是三个 section 的内部渲染（那三份各有 spec）。被桩替掉的组件
@@ -17,7 +19,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, type Directive } from 'vue';
-import { flushPromises, mount } from '@vue/test-utils';
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 
@@ -31,6 +33,14 @@ const sendMailDigestNowMock = vi.fn();
 const fetchMailDigestConfigMock = vi.fn();
 const fetchMailDigestMetaMock = vi.fn();
 const listMailDigestLogsMock = vi.fn();
+
+// 2026-10-16：邮箱列表（「发信邮箱」下拉的选项来源；与「邮箱设置」tab 共用一条缓存）。
+const listMailAccountsMock = vi.fn();
+
+vi.mock('@/api/mailAccounts', () => ({
+  fetchMailMeta: vi.fn(),
+  listMailAccounts: (...args: unknown[]) => listMailAccountsMock(...args),
+}));
 
 vi.mock('@/api/mailDigest', () => ({
   fetchMailDigestConfig: (...args: unknown[]) => fetchMailDigestConfigMock(...args),
@@ -60,6 +70,7 @@ const CONFIG = {
   upcoming_days: 7,
   visible_columns: ['part_no'],
   subject_template: '',
+  sender_account_id: '9000000000000902',
   smtp_configured: true,
   created_at: '2026-10-01 08:00:00',
   updated_at: '2026-10-02 08:00:00',
@@ -85,7 +96,9 @@ const META = {
   columns: [{ key: 'part_no', label: '零件号' }],
   // ⚠️ `defaults` 段与 `config` 的**配置字段**同构（少了 id / version / 时间戳 / smtp 标志），
   // 且守门 schema 是 `.strict()`：多塞一个键整个 meta 查询就进 error 态、页面永远拿不到
-  // `smtp` 段（那正是「SMTP 未配置告警」不显示的成因）。
+  // `frequencies` 段（那正是「频率单选组是空的」的成因）。
+  // ⚠️ 2026-10-16：`defaults` 里**新增** `sender_account_id`，且 `meta` 顶层**不再有** `smtp`
+  // 段 —— 多塞一个键同样会让整个 meta 查询进 error 态。
   defaults: {
     enabled: true,
     frequency: 'DAILY',
@@ -100,16 +113,24 @@ const META = {
     upcoming_days: 7,
     visible_columns: ['part_no'],
     subject_template: null,
+    sender_account_id: null,
   },
   upcoming_days_range: { min: 1, max: 60 },
-  smtp: {
-    configured: true,
-    host: 'smtp.example.com',
-    port: 465,
-    from_address: 'noreply@example.com',
-    from_name: '工厂 ERP',
-  },
 };
+
+/** 2026-10-16：SMTP 改由邮箱账号实体承载，本页顶部告警的判据换成下面两条。 */
+const ACCOUNTS = [
+  {
+    id: '9000000000000902',
+    version: 1,
+    name: '采购部邮箱',
+    preset: 'NET_EASE_163',
+    account: 'purchase@example.com',
+    is_default: true,
+    created_at: '2026-10-16 08:00:00',
+    updated_at: '2026-10-16 08:00:00',
+  },
+];
 
 // ---------------------------------------------------------------- 桩
 const loadingDirective: Directive<HTMLElement, unknown> = {
@@ -277,6 +298,7 @@ beforeEach(() => {
   fetchMailDigestConfigMock.mockResolvedValue(CONFIG);
   fetchMailDigestMetaMock.mockResolvedValue(META);
   listMailDigestLogsMock.mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 });
+  listMailAccountsMock.mockResolvedValue(ACCOUNTS);
   saveMailDigestConfigMock.mockResolvedValue(CONFIG);
   previewMailDigestMock.mockResolvedValue({
     subject: 's',
@@ -330,28 +352,54 @@ describe('MailDigestSettings — section 的 v-model 回写', () => {
   });
 });
 
-describe('MailDigestSettings — SMTP 状态条与「立即发送」', () => {
-  it('SMTP 未配置：出 warning 告警 + 「立即发送」按钮禁用', async () => {
-    fetchMailDigestMetaMock.mockResolvedValue({
-      ...META,
-      smtp: { ...META.smtp, configured: false },
-    });
+describe('MailDigestSettings — 发信邮箱状态条与「立即发送」（2026-10-16 起）', () => {
+  /** 顶部 warning 告警（页面可能同时渲染 error 型的 config 告警，故按 class 筛）。 */
+  function warningAlerts(wrapper: VueWrapper) {
+    return wrapper.findAll('.mock-alert').filter((n) => n.classes().includes('mock-alert-warning'));
+  }
+
+  function sendButton(wrapper: VueWrapper) {
+    return wrapper.findAll('.mock-button').find((n) => n.text() === '立即发送');
+  }
+
+  it('一条邮箱都没有：出「还没有可用邮箱」告警 + 「立即发送」按钮禁用', async () => {
+    listMailAccountsMock.mockResolvedValue([]);
     const { wrapper } = await mountPage();
 
-    const alert = wrapper
-      .findAll('.mock-alert')
-      .find((n) => n.classes().includes('mock-alert-warning'));
-    expect(alert?.text()).toContain('SMTP 未配置');
-    const sendBtn = wrapper.findAll('.mock-button').find((n) => n.text() === '立即发送');
-    expect(sendBtn?.attributes('disabled')).toBeDefined();
+    const alerts = warningAlerts(wrapper);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]?.text()).toContain('还没有可用邮箱');
+    expect(sendButton(wrapper)?.attributes('disabled')).toBeDefined();
     wrapper.unmount();
   });
 
-  it('SMTP 已配置：不出告警、按钮可点', async () => {
+  it('有邮箱但本条配置没选：出「尚未选择发信邮箱」告警，但**不禁用**立即发送', async () => {
+    // 后端在 sender_account_id 为 null 时回落到默认邮箱，仍能真发 ⇒ 只告警不禁用。
+    fetchMailDigestConfigMock.mockResolvedValue({ ...CONFIG, sender_account_id: null });
     const { wrapper } = await mountPage();
-    expect(wrapper.findAll('.mock-alert-warning')).toHaveLength(0);
-    const sendBtn = wrapper.findAll('.mock-button').find((n) => n.text() === '立即发送');
-    expect(sendBtn?.attributes('disabled')).toBeUndefined();
+
+    const alerts = warningAlerts(wrapper);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]?.text()).toContain('尚未选择发信邮箱');
+    expect(sendButton(wrapper)?.attributes('disabled')).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it('已选好发信邮箱：不出告警、按钮可点', async () => {
+    const { wrapper } = await mountPage();
+    expect(warningAlerts(wrapper)).toHaveLength(0);
+    expect(sendButton(wrapper)?.attributes('disabled')).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it('告警文案里**不出现任何环境变量名**（SMTP 已改成页面内配置）', async () => {
+    listMailAccountsMock.mockResolvedValue([]);
+    const { wrapper } = await mountPage();
+    const text = wrapper
+      .findAll('.mock-alert')
+      .map((n) => n.text())
+      .join('|');
+    expect(text).not.toMatch(/MAIL_SMTP|SMTP_HOST|SMTP_PORT|USERNAME|PASSWORD/);
     wrapper.unmount();
   });
 

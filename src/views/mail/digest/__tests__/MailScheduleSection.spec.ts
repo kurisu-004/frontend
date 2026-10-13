@@ -9,7 +9,9 @@
 //     MONTHLY 多月号），判据读 `frequencyOptions` 的三个 `needs_*`（meta 驱动，不是硬编码）；
 //  3. 切频率时把「当前频率用不到」的配套字段置 null（⚠️ 2026-10-14 订正：后端对「多填」
 //     是清空 / 忽略而非 21704，前端归一是为了表单自洽 + 红字落在可见字段上，见 M-2）；
-//  4. 字段红字与 focusField 高亮落到对应行上（字段聚焦的视觉层）。
+//  4. 字段红字与 focusField 高亮落到对应行上（字段聚焦的视觉层）；
+//  5. 2026-10-16 新增的「发信邮箱」一行：**选项来自 `senderAccounts` prop（query 数据）、
+//     不是组件内硬编码**，label 用管理员起的自定义名称，清空归一成 null（= 未选）。
 //
 // 用 EP 模板桩而不是真 EP 组件：被测的是「本组件有没有按 needs_* 正确分支」，不复刻
 // el-select / el-radio-group 的内部实现（桩法照 `views/users/components/__tests__/WxBindDialog.spec.ts`
@@ -29,6 +31,7 @@ import {
   type MailDigestFrequencyOptionData,
 } from '../mailDigestSchema';
 import type { MailDigestFrequency } from '@/types/mailDigest';
+import type { MailAccountData } from '@/views/mail/accounts/mailAccountSchema';
 
 // ---------------------------------------------------------------- EP 桩
 const ElSwitchStub = {
@@ -51,18 +54,22 @@ const ElRadioButtonStub = {
   template: '<label class="mock-radio-button"><slot /></label>',
 };
 
+// 2026-10-16：这两个桩加了 `<slot />`（渲染 el-option 子项）与 `label` 文本输出。
+// 加 slot 的原因不是「更像真的」，而是「发信邮箱」那一组用例要断言**选项集**（标签取自
+// `senderAccounts` prop）；没有 slot 的话 el-option 永远不会被渲染，选项断言全是空的。
+// 既有用例不受影响：它们只断言 `.time-select` / `.weekday-select` 的存在与 placeholder。
 const ElSelectStub = {
   name: 'ElSelect',
   props: ['modelValue', 'placeholder'],
   emits: ['update:modelValue'],
   template:
-    '<div class="mock-select" :data-placeholder="placeholder || \'\'" @click="$emit(\'update:modelValue\', 1)" />',
+    '<div class="mock-select" :data-placeholder="placeholder || \'\'" @click="$emit(\'update:modelValue\', 1)"><slot /></div>',
 };
 
 const ElOptionStub = {
   name: 'ElOption',
   props: ['label', 'value'],
-  template: '<div class="mock-option" />',
+  template: '<div class="mock-option">{{ label }}</div>',
 };
 
 const ElInputNumberStub = {
@@ -77,6 +84,31 @@ const ElAlertStub = {
   props: ['title', 'description'],
   template: '<div class="mock-alert"><span class="alert-title">{{ title }}</span></div>',
 };
+
+/** 2026-10-16：「发信邮箱」下拉的候选（query `GET /mail/accounts` 的行）。
+ *  label 是**管理员起的自定义名称**，不是登录账号 —— 同一家服务商的多个账号靠它区分。 */
+const SENDER_ACCOUNTS: readonly MailAccountData[] = [
+  {
+    id: '9000000000000902',
+    version: 1,
+    name: '采购部邮箱',
+    preset: 'NET_EASE_163',
+    account: 'purchase@example.com',
+    is_default: true,
+    created_at: '2026-10-16 08:00:00',
+    updated_at: '2026-10-16 08:00:00',
+  },
+  {
+    id: '9000000000000903',
+    version: 1,
+    name: '仓库邮箱',
+    preset: 'TENCENT_QQ',
+    account: '123456789',
+    is_default: false,
+    created_at: '2026-10-16 08:00:00',
+    updated_at: '2026-10-16 08:00:00',
+  },
+];
 
 const globalConfig = {
   components: {
@@ -105,6 +137,7 @@ function baseForm(over: Partial<MailDigestFormModel> = {}): MailDigestFormModel 
     upcoming_days: 7,
     visible_columns: ['part_no'],
     subject_template: '',
+    sender_account_id: null,
     ...over,
   };
 }
@@ -124,6 +157,7 @@ function mountSection(
   form: MailDigestFormModel,
   opts: {
     frequencyOptions?: MailDigestFrequencyOptionData[];
+    senderAccounts?: readonly MailAccountData[];
     errors?: Record<string, string>;
     focusField?: MailDigestFormField | null;
   } = {},
@@ -133,6 +167,9 @@ function mountSection(
     props: {
       modelValue: form,
       frequencyOptions: opts.frequencyOptions ?? optionsFor(),
+      // 默认给两条邮箱：不传时组件要能渲染（prop 可选），但**带选项**才是真实场景，
+      // 下面的 S1/S2 都靠它断言「选项来自 props 而不是组件内硬编码」。
+      senderAccounts: opts.senderAccounts ?? SENDER_ACCOUNTS,
       // `onUpdate:modelValue` prop 形式接 emit（`<script setup>` 组件的 `wrapper.vm.$on`
       // 不可用 —— vm 代理只暴露 setup 里的绑定，不含实例方法）。
       'onUpdate:modelValue': (next: MailDigestFormModel) => {
@@ -260,6 +297,56 @@ describe('MailScheduleSection — 字段红字与聚焦高亮', () => {
   it('focusField 指到的行加 is-focus（字段聚焦的视觉层；默认值不额外标红）', () => {
     const { wrapper } = mountSection(baseForm(), { focusField: 'frequency' });
     expect(wrapper.findAll('.field-row').some((n) => n.classes().includes('is-focus'))).toBe(true);
+    wrapper.unmount();
+  });
+});
+
+// ============================================================
+// 2026-10-16：「发信邮箱」一行
+// ============================================================
+
+describe('MailScheduleSection — 发信邮箱下拉（2026-10-16）', () => {
+  /** 「发信邮箱」那个 select 的 emit 通道。⚠️ 不能用 `findComponent(ElSelectStub)`：
+   *  页面里同时有时刻 / 星期两个同款 select，`findComponent` 返回的是第一个（时刻），
+   *  拿它 emit 等于在测「改时刻」那条路。 */
+  function senderSelectEmit(wrapper: ReturnType<typeof mount>): (v: unknown) => void {
+    const target = wrapper
+      .findAllComponents(ElSelectStub)
+      .find((c) => c.classes().includes('sender-select'));
+    const vm = target!.vm as unknown as { $emit: (e: string, v: unknown) => void };
+    return (v: unknown) => vm.$emit('update:modelValue', v);
+  }
+
+  it('S1：选项 = `senderAccounts` prop 的每一行，label 用自定义名称（不是登录账号）', () => {
+    const { wrapper } = mountSection(baseForm({ sender_account_id: '9000000000000902' }));
+    const labels = wrapper
+      .findAll('.sender-select')[0]!
+      .findAll('.mock-option')
+      .map((n) => n.text());
+    expect(labels).toEqual(['采购部邮箱', '仓库邮箱']);
+    // 自定义名称才是展示口径：登录账号不该顶上来当标签。
+    expect(labels.join('|')).not.toContain('purchase@example.com');
+    wrapper.unmount();
+  });
+
+  it('S2：一个邮箱都没有时给「还没有可用邮箱」的指路提示（选项区自然为空）', () => {
+    const { wrapper } = mountSection(baseForm(), { senderAccounts: [] });
+    expect(wrapper.findAll('.sender-select')[0]!.findAll('.mock-option')).toHaveLength(0);
+    expect(wrapper.text()).toContain('还没有可用邮箱');
+    wrapper.unmount();
+  });
+
+  it('S3：选中发信邮箱时 patch 出的是雪花 id 原样字符串（不过 Number）', () => {
+    const { wrapper, latest } = mountSection(baseForm({ sender_account_id: null }));
+    senderSelectEmit(wrapper)('9000000000000903');
+    expect(latest().sender_account_id).toBe('9000000000000903');
+    wrapper.unmount();
+  });
+
+  it('S4：清空（el-select 给空串）归一成 null = 未选，不把空串塞上 wire', () => {
+    const { wrapper, latest } = mountSection(baseForm({ sender_account_id: '9000000000000902' }));
+    senderSelectEmit(wrapper)('');
+    expect(latest().sender_account_id).toBeNull();
     wrapper.unmount();
   });
 });

@@ -87,6 +87,8 @@ const CONFIG_PAYLOAD: SaveMailDigestConfigPayload = {
   upcoming_days: 7,
   visible_columns: ['part_no', 'customer'],
   subject_template: null,
+  // 2026-10-16 新增（契约跟着后端走）：发信邮箱 id，null = 未选。
+  sender_account_id: '9000000000000902',
 };
 
 beforeEach(() => {

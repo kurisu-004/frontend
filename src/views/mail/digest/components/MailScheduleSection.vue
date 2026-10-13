@@ -27,9 +27,35 @@
   字段上**（多填的 issue 挂 `send_time` / `weekday` / `day_of_month`，而 MANUAL_ONLY 下
   那一整行连同红字都不渲染 ⇒ 不归一就是一条看不见的死路）。store 的 `applyConfigToForm`
   对服务端配置做同一套归一（`GET /config` 也会返 MANUAL_ONLY + 非空时刻的行）。
+
+  2026-10-16 新增「发信邮箱」一行（`senderAccounts` prop + `sender_account_id` 字段）：
+  SMTP 不再是部署级环境变量，而是页面内可维护的邮箱账号实体（`views/mail/accounts/`，后端
+  `/api/v2/mail/accounts`），发信用哪一条由**用户在本页选**。选项取自 **query**（壳传下来
+  的 `senderAccounts`），**不在本组件硬编码**、也不 props 传一堆预设文案 —— 邮箱列表是
+  会变的运行时数据，props 硬编码等于把「有什么邮箱」写在模板里。
 -->
 <template>
   <div class="mail-schedule">
+    <!-- 2026-10-16：发信邮箱。放最前面是因为它是「能不能发出去」的前置条件，
+         比「什么时候发」更该先看见。空值 = 未选（合法，页面顶部会给告警）。 -->
+    <div :class="['field-row', rowClass('sender_account')]">
+      <span class="field-label">发信邮箱</span>
+      <el-select
+        :model-value="modelValue.sender_account_id"
+        class="sender-select"
+        clearable
+        placeholder="未选（发送时使用默认邮箱）"
+        aria-label="发信邮箱"
+        @update:model-value="patch({ sender_account_id: toNullableString($event) })"
+      >
+        <el-option v-for="acc in senderAccounts" :key="acc.id" :label="acc.name" :value="acc.id" />
+      </el-select>
+      <span v-if="senderAccounts.length === 0" class="field-hint">
+        还没有可用邮箱，请先到「邮箱设置」里新增一条
+      </span>
+      <span v-if="errors?.sender_account" class="field-error">{{ errors.sender_account }}</span>
+    </div>
+
     <div class="field-row">
       <span class="field-label">启用定时</span>
       <el-switch
@@ -147,12 +173,19 @@ import {
   type MailDigestFrequencyOptionData,
 } from '../mailDigestSchema';
 import type { MailDigestFrequency } from '@/types/mailDigest';
+// 2026-10-16：只用 `import type` 引邮箱那一行的 wire 类型 —— 本组件不碰守门
+// schema（它在 `views/mail/accounts/mailAccountSchema.ts`，由 accounts 域自己的
+// query hook 守门），也不碰 api 层。digest 域与 accounts 域之间只共享一条 query 缓存。
+import type { MailAccountData } from '@/views/mail/accounts/mailAccountSchema';
 
 const props = defineProps<{
   /** 整个表单模型（本组件只碰自己那几个键）。 */
   modelValue: MailDigestFormModel;
   /** 频率选项，取自 `GET /meta` 的 `frequencies[]`；meta 未到达时壳传兜底表。 */
   frequencyOptions: readonly MailDigestFrequencyOptionData[];
+  /** 2026-10-16：可选的发信邮箱（`GET /mail/accounts` 的行）。选项 label 用管理员
+   *  起的自定义名称（同名登录账号靠它区分）。空数组 = 还没建任何邮箱。 */
+  senderAccounts?: readonly MailAccountData[];
   /** 字段红字（Zod / 后端 21703·21704）。 */
   errors?: MailDigestFormFieldErrors;
   /** 需要高亮的字段（store 的 `focusField`）。 */
@@ -184,6 +217,9 @@ const flags = computed(() => {
   return opt ?? DEFAULT_MAIL_DIGEST_FREQUENCY_FLAGS[props.modelValue.frequency];
 });
 
+/** 可选的发信邮箱。缺省 prop 给空数组（模板里 v-for 空数组天然不渲染 option）。 */
+const senderAccounts = computed<readonly MailAccountData[]>(() => props.senderAccounts ?? []);
+
 function patch(patchValue: Partial<MailDigestFormModel>): void {
   emit('update:modelValue', { ...props.modelValue, ...patchValue });
 }
@@ -198,6 +234,13 @@ function toNullableInt(v: unknown): number | null {
   if (v === '' || v === null || v === undefined) return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+/** 发信邮箱 id 同款归一：空串 / undefined ⇒ `null`（= 未选）。雪花 ID 是 JSON string，
+ *  `el-option :value` 给的就是字符串，**不要**过一遍 `Number()`（19 位 ID 会丢精度）。 */
+function toNullableString(v: unknown): string | null {
+  if (v === '' || v === null || v === undefined) return null;
+  return String(v);
 }
 
 function onFrequencyChange(value: unknown): void {
@@ -274,6 +317,10 @@ function rowClass(field: MailDigestFormField): Record<string, boolean> {
 
 .weekday-select {
   width: 160px;
+}
+
+.sender-select {
+  width: 240px;
 }
 
 .day-input {

@@ -61,6 +61,11 @@ export interface SaveMailDigestConfigPayload {
   visible_columns: string[];
   /** 标题模板；null = 用后端默认标题（页面留空即 null）。 */
   subject_template: string | null;
+  /** 2026-10-16 新增：发信邮箱 id（`/api/v2/mail/accounts` 一行的雪花 id，JSON string）。
+   *  null = 未选（合法：定时任务不注册时根本不发信；手动发送由后端回落到默认邮箱）。
+   *  页面顶部的告警条会提示，但**不拦保存** —— 拦了就等于强迫用户先建一个邮箱才能改
+   *  收件人清单。 */
+  sender_account_id: string | null;
 }
 
 /** POST /mail-digest/preview 与 POST /mail-digest/send 共用的请求体。
