@@ -22,10 +22,24 @@
 //   2. 数一遍该 struct 的字段个数，与清单键数 / 注释里的「N 键」是否一致；
 //   3. 逐个比字段名与本清单的键名。
 //
+// ⚠️ **区间必须是整个 struct（含闭合 `}`），不能截在最后一个字段之前**：截断的指针指不到
+//   全体，第 2 步数出来的字段数会与紧邻的「N 键」直接矛盾 —— 而第 2 步正是要抓这个错。
+//   同理**区间末端不得超过该 struct 的闭合行**：多写一行指的是别的声明，人工复核时会对着
+//   一个无关的 struct 数字段，还以为清单错了。
 // ⚠️ 本文件**刻意不在测试里读后端仓文件**：CI 上前端仓不一定有后端检出，那样的读法会在缺
 //   检出时**静默跳过全部断言**（假阴），比没有护栏更糟。行号只写在注释里供人工核对。
 // ⚠️ 行号会随后端插入字段而漂 —— **漂了以字段名为准**，顺手把行号改对即可；「键数」那
 //   条断言守的是注释里的「N 键」与清单条目数一致，不会被行号漂移误伤。
+//
+// ============================================================================
+// K1 锁的是**键名**，仅此而已
+// ============================================================================
+// 逐条断言比的是 `Object.keys(node.shape).sort()` 与清单键名排序后的两个集合，所以：
+//   - **不锁可空性 / 类型 / 取值域** —— 把 `z.string()` 改成 `z.string().nullable()` 是零
+//     信号，那由各 schema 自己的用例守；
+//   - **不锁声明顺序** —— 清单里刻意也按后端 struct 的声明顺序书写（人工第 3 步能一眼扫过去），
+//     但**那是纯约定、不被任何断言固定**：`keysOf()` 与 `keys` 两边都 `.sort()`，重排清单或
+//     重排 schema 都是绿的。别把它当「顺序也已守住」的凭据。
 //
 // ============================================================================
 // 两个方向的后果都严重，故两个方向都断言
@@ -40,11 +54,18 @@
 // 守卫清单
 // ============================================================================
 //   · K1：每条出参 schema 的键集 == `KEY_SETS` 里的键集（逐条一个用例，失败信息带后端真源）。
-//   · K2：每条 `backend` 注释里标的「N 键」== 该条清单的条目数（防注释陈旧）。
+//   · K2：每条 `backend` 注释里标的「N 键」== 该条清单的条目数（防注释陈旧；失败信息带
+//     「注释说 X 个 / 清单 Y 个」两个数）。
 //   · K3：两个 schema 模块导出的**每个** ZodObject 都已登记（新增出参 schema 漏登记即红）。
 //   · K4：send 与 logs 的行 schema 是同一个对象引用（后端同结构体，结构上不可能分叉）。
 //   · K5：日志信封 `items` 的元素就是那条行 schema（信封不会挂到另一份形状上）。
+//   · K3c：`NOT_OUT_PARAM` 恒等于那一份显式名单（防「加个名字就把 K3 变绿」的滥用豁免）。
+//   · K3d：豁免名单里的名字确实还存在（防 schema 被删后留下一个什么也豁免不掉的悬空豁免）。
 // （K3 的反向 —— 清单里每条都确实指向一个 ZodObject —— 由同组的 K3b 断言。）
+//
+// ⚠️ **K3 只覆盖清单里那两个硬编码模块**（`mailDigestSchema` + `mailAccountSchema`），
+//   **不是「mail 域全部」的自动发现**：mail 域的出参 schema 若挪进第三个模块，K3 会
+//   **静默失效**（扫不到 = 不红）。挪文件 / 新开 schema 模块时要一并更新 `modules` 数组。
 //
 // 环境：默认 node（本文件不碰 DOM，也不发请求）。
 // ============================================================================
@@ -131,7 +152,7 @@ const KEY_SETS: readonly KeySetEntry[] = [
   },
   {
     label: 'mailDigestConfigDefaultsSchema',
-    backend: 'mail_digest/dto.rs:537-551::ConfigDefaultsOut（14 键）',
+    backend: 'mail_digest/dto.rs:537-554::ConfigDefaultsOut（14 键）',
     node: mailDigestConfigDefaultsSchema,
     keys: [
       'enabled',
@@ -194,7 +215,7 @@ const KEY_SETS: readonly KeySetEntry[] = [
   },
   {
     label: 'mailDigestLogListSchema',
-    backend: 'mail_digest/dto.rs:657-664::LogListOut（4 键）',
+    backend: 'mail_digest/dto.rs:657-663::LogListOut（4 键）',
     node: mailDigestLogListSchema,
     keys: ['items', 'total', 'limit', 'offset'],
   },
@@ -252,7 +273,10 @@ function elementOf(arrayField: unknown): unknown {
 }
 
 /** 表单校验器是 `.superRefine()` 的产物、类型上仍是 ZodObject，但它**不接任何后端出参**
- *  ⇒ 显式排除。其余任何新导出的 ZodObject 漏登记都会被 K3 拦下。 */
+ *  ⇒ 显式排除。其余任何新导出的 ZodObject 漏登记都会被 K3 拦下。
+ *
+ * ⚠️ 这份名单是**豁免名单、不是白名单的补充**：谁都能把名字加进来让 K3 变绿。所以它的
+ *   内容本身被 K3c 断言钉死 —— 加名字必须同时改那条断言，届时就是一次显式决定。 */
 const NOT_OUT_PARAM = new Set(['mailDigestFormSchema']);
 
 // ============================================================================
@@ -271,7 +295,11 @@ describe('mail 域出参键集清单（schema ↔ 后端 DTO，逐字对账）',
   it('K2：每条 backend 注释里标的键数 == 该条清单的条目数（防注释陈旧）', () => {
     const stale = KEY_SETS.filter(
       (e) => /（(\d+) 键/.exec(e.backend)?.[1] !== String(e.keys.length),
-    ).map((e) => `${e.label}：注释与清单条目数不一致`);
+    ).map((e) => {
+      // 两个数都带上：只说「不一致」的话，读者还得自己回查一遍才知道该改注释还是该改清单。
+      const said = /（(\d+) 键/.exec(e.backend)?.[1] ?? '（没标键数）';
+      return `${e.label}：${e.backend} 注释说 ${said} 个，清单实际 ${e.keys.length} 个`;
+    });
     expect(stale).toEqual([]);
   });
 });
@@ -303,6 +331,27 @@ describe('mail 域出参键集登记的完整性', () => {
     expect(
       stale,
       `下列登记项的 node 不是 ZodObject（多半是写错了引用）：${stale.join('、')}`,
+    ).toEqual([]);
+  });
+
+  it('K3c：豁免名单 NOT_OUT_PARAM 恒等于那一份显式清单（加名字必须改本条断言）', () => {
+    // K3 是「扫模块导出 vs 清单」的方向；NOT_OUT_PARAM 是这条扫描的**逃逸口**，谁都能把
+    // 名字加进去让 K3 变绿（新增一个表单 schema 就足以让整个出参登记形同虚设）。所以用
+    // 与 K2 同款的「防清单陈旧」思路，把这份名单的内容本身钉死 —— 加名字是一次显式决定。
+    expect([...NOT_OUT_PARAM].sort()).toEqual(['mailDigestFormSchema']);
+  });
+
+  it('K3d：豁免名单里的名字确实还存在于被扫的模块里（删掉 schema 后别留悬空豁免）', () => {
+    const exported = new Set([
+      ...Object.keys(digestSchemaModule),
+      ...Object.keys(accountSchemaModule),
+    ]);
+    const dangling = [...NOT_OUT_PARAM].filter((name) => !exported.has(name));
+    // 悬空豁免本身不致命（它什么也豁免不掉），但它说明有人删/改了 schema 却没收拾名单，
+    // 此时真正的风险是「他以为 K3 还盖着某个东西」—— 指出来比静默留着强。
+    expect(
+      dangling,
+      `NOT_OUT_PARAM 里的下列名字已不存在于任何 schema 模块：${dangling.join('、')}`,
     ).toEqual([]);
   });
 });

@@ -89,7 +89,8 @@ withDefaults(
   { loading: false },
 );
 
-/** 触发来源的中文名。字面量与后端 `LogItem.trigger_source` 的两个取值逐字对齐。
+/** 触发来源的中文名。字面量与后端 `SendResultOut.trigger_source` 的两个取值逐字对齐
+ *  （日志行与 `/send` 响应同体，见 `mailDigestSchema.ts` 该节头注释）。
  *  槽里的 `row` 是 EP 注入的 `any`，所以走函数 + 收窄，不在模板里直接索引映射表。 */
 const TRIGGER_LABEL: Record<MailDigestTriggerSource, string> = {
   SCHEDULED: '定时',

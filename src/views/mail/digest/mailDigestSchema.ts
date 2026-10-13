@@ -2,8 +2,10 @@
 //
 // 2026-10-13 新建：交期汇总邮件域的 Zod schema，两组用途（形态照 `views/users/usersSchema.ts`）：
 //
-//   1. **守门**：`mailDigestConfigSchema` / `mailDigestMetaSchema` /
-//      `mailDigestPreviewSchema` / `mailDigestSendResultSchema` / `mailDigestLogListSchema`。
+//   1. **守门**：`mailDigestConfigSchema` / `mailDigestConfigDefaultsSchema` /
+//      `mailDigestFrequencyOptionSchema` / `mailDigestColumnOptionSchema` /
+//      `mailDigestMetaSchema` / `mailDigestPreviewSchema` / `mailDigestSendResultSchema`
+//      （**含其别名 `mailDigestLogSchema`**）/ `mailDigestLogListSchema`。
 //      三条读端点（config / meta / logs）的守门点在 queryFn
 //      （`composables/useMailDigestQuery.ts`）；两条「跑一次」的端点（preview / send）
 //      走 useMutation、没有 queryFn 承载，**守门留在 api 层**（CLAUDE.md 为「没有
