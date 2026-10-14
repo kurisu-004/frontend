@@ -105,7 +105,7 @@ function onEditorCancel(): void {
 async function onDeleteGroup(g: DeliveryGroupData): Promise<void> {
   try {
     await ElMessageBox.confirm(
-      `确认删除分组「${g.name}」？该分组下的 DRAFT 草稿将不再路由。`,
+      `确认删除分组「${g.name}」？该分组下的客户会回到未分组，打印时各自独立成页。`,
       '删除分组',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
     );

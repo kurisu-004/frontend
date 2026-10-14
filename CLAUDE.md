@@ -159,8 +159,11 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 | `views/customers/CustomerList.vue` 新建/编辑弹窗「父客户」行 | 可编辑 `el-select`，placeholder `不选 = 一级客户；选了一个一级客户 = 二级`（编辑模式下能改父客户） | 只读 `el-input` + hint `客户层级不可移动；如需调整请删除后在目标父节点下重建。`（编辑模式不再能改父层级，newChild 模式显示完整祖先路径） |
 | `views/customers/CustomerList.vue` 删除确认框后代计数 | `（一级客户「X」仍有 N 个二级子节点，删除将一起拒绝）` | `（客户「X」下仍有 N 个子节点，删除将被拒绝）` |
 | `views/parts/new/composables/usePartBatchPdf.ts` 三处报错 | `以下 N 行未指定分厂（二级客户），请补全后再提交：` / `第 i-j 行（分厂 xxx）：` / `N 个分厂组请求失败` | `以下 N 行未指定客户（单据只能挂在末级部门），请补全后再提交：` / `第 i-j 行（客户 xxx）：` / `N 个客户组请求失败` |
-| `views/com/delivery/components/DeliveryGroupEditor.vue` label / placeholder / hint | `L2 成员` / `选择该一级客户下的 L2 客户（可空）` / `扫码时如果工件的 L2 客户命中这里任一成员，将按 GROUP 路由到本分组对应草稿。` | `分组成员` / `选择该一级客户下的末级部门（可空）` / `打印送货单时，这里每个成员的行会单独打一张打印页，便于按收货单位分批打单。` |
+| `views/com/delivery/components/DeliveryGroupEditor.vue` label / placeholder / hint | `L2 成员` / `选择该一级客户下的 L2 客户（可空）` / `扫码时如果工件的 L2 客户命中这里任一成员，将按 GROUP 路由到本分组对应草稿。` | `分组成员` / `选择该一级客户下的末级部门（可空）` / `打印送货单时，同一分组的成员归入同一组打印页（组内行数多时再分页），各分组之间不混页，便于按收货单位拆单。` |
 | `views/com/delivery/components/DeliveryGroupPanel.vue` 空态 / 未分组行标题 | `该一级客户下还没有 L2 客户` / `未分组 L2` | `该一级客户下还没有末级部门` / `未分组` |
+| `views/com/delivery/components/DeliveryGroupPanel.vue` 删除确认框后半句 | `该分组下的 DRAFT 草稿将不再路由。` | `该分组下的客户会回到未分组，打印时各自独立成页。` |
+
+⚠️ **上表 `DeliveryGroupEditor.vue` 那行的「改前」hint 本身也是一句假承诺**：它在基线里就写着「将按 GROUP 路由到本分组对应草稿」，而送货单草稿只按 `customer_id`=**L1** 查（扫码台拉草稿的 query 只有 `statuses=DRAFT` + `customer_id=l1Id`），全仓 `delivery_group_id` 零引用 —— 后端早已没有「按 GROUP 找草稿」的能力。**真要回退这一行，别把这句原样装回去。**
 
 **本批新增、改前无对应字符串的用户可见文案**（回退它们等于回退行为，不在上面的「改文案」表里，单列在此免得漏看）：
 

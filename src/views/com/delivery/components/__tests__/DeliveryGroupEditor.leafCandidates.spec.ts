@@ -153,7 +153,7 @@ describe('送货分组编辑器：候选 = 所选 L1 子树内的叶子', () => 
     for (const stale of ['L2 成员', 'L2 客户', '工件的 L2']) {
       expect(text, `分组编辑器还留着带层级数的文案「${stale}」`).not.toContain(stale);
     }
-    expect(text).toContain('打印送货单时，这里每个成员的行会单独打一张打印页');
+    expect(text).toContain('打印送货单时，同一分组的成员归入同一组打印页');
     w.unmount();
   });
 });

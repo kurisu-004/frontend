@@ -131,7 +131,7 @@ function onClosed(): void {
           <el-option v-for="c in leafCustomerOptions" :key="c.id" :label="c.name" :value="c.id" />
         </el-select>
         <p class="form-hint">
-          打印送货单时，这里每个成员的行会单独打一张打印页，便于按收货单位分批打单。
+          打印送货单时，同一分组的成员归入同一组打印页（组内行数多时再分页），各分组之间不混页，便于按收货单位拆单。
         </p>
       </el-form-item>
     </el-form>
