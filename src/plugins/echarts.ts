@@ -1,8 +1,11 @@
-// 2026-09-30 新增：vue-echarts 8.3 按需注册模块。
-// 全仓统一在此 use() 一次；业务组件只 import VChart，无需各自 use。
-// 2026-09-30（review #1）修正：v5 主题副作用 import 绑死到本 plugin，
-// 不再依赖 src/components/EChart.vue 顺手 import（CLAUDE.md 已把 EChart.vue
-// 标记为「历史兜底壳不再扩展」），后续清理 EChart.vue 时 v5 主题不丢。
+// vue-echarts 8.3 按需注册模块（2026-09-30 新增）。
+// 全仓唯一的 echarts.use() 落点：业务组件只消费全局 <v-chart>，不各自 use、
+// 不值导入 echarts/core。下面的集合按站内实际用到的图表 / 组件 / 特性枚举，
+// 引全量 echarts 会把约 900KB bundle 拉进来。
+//
+// v5 主题的副作用 import 绑死在本文件：echarts 6 的默认主题在配色与 legend 默认
+// 位置上都与 v5 不同，图表组件统一用 theme="v5" 显式锁回既有视觉，因此主题必须
+// 在本模块被加载时就完成注册，图表组件自己不碰主题。
 import 'echarts/theme/v5';
 import * as echarts from 'echarts/core';
 import { BarChart, LineChart, PieChart } from 'echarts/charts';
@@ -18,7 +21,6 @@ import {
 import { LabelLayout, UniversalTransition } from 'echarts/features';
 import { CanvasRenderer } from 'echarts/renderers';
 
-// 与 src/components/EChart.vue:46-60 锁定的 modules 集合对齐（不引入全量 ~900KB）。
 echarts.use([
   BarChart,
   LineChart,
