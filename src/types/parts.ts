@@ -266,7 +266,25 @@ export interface LocationTreeNode {
 /** 行类型筛选：全部 / 仅零件 / 仅装配件 */
 export type PartRowTypeFilter = 'ALL' | 'PART' | 'ASSEMBLY';
 
-/** 后端 PartEventType 枚举 */
+/**
+ * `t_part_event.event_type` 的前端注册表。
+ *
+ * ⚠️ **三处副本，人工同步**（本 union / `PART_EVENT_LABEL` / `PART_EVENT_TAG_TYPE`）：
+ * 后端 `t_part_event.event_type` 是 `varchar(30)`、**无 CHECK 约束、无 DB ENUM、
+ * 无 Rust enum** ⇒ 本表是事实上的注册表，漏一个成员 = 时间线直接显示英文原文
+ * （`usePartDetail.ts::eventLabel` 的兜底是 `PART_EVENT_LABEL[t] ?? t`，
+ * 而 `partDetailSchema` 的 `event_type` 是 `z.string()` 不是 `z.enum`，
+ * 未知值**静默**渲染、不会报错）。
+ *
+ * 后端侧的权威清单是 `backend-rust/src/shared/part_event/mod.rs` 的模块 doc
+ * 事件 × 写侧域对照表 —— **加 / 删事件类型必须同时改那一侧**（纪律同
+ * `DELIVERY_STATUSES` 三副本：后端常量 / 后端域常量 / 前端常量）。
+ * ⚠️ **不要**让前端在构建期读后端源码文件（Docker 构建上下文里只有 frontend 仓，
+ * 任何跨仓文件引用都会直接断构建）。同步只能靠人。
+ *
+ * 下方 12 个成员是 2026-10-17 补齐的：后端早就在写、前端一直没登记 ⇒ 零件详情
+ * 时间线对它们一律显示原文。
+ */
 export type PartEventType =
   | 'CREATED'
   | 'RELEASED'
@@ -283,13 +301,53 @@ export type PartEventType =
   | 'SENT_TO_OUTSOURCE'
   | 'RECEIVED_FROM_OUTSOURCE'
   // 2026-10-03 新增：外协直送品检。外协件不走普通送检、直接进品检架时落这条事件。
+  // ⚠️ 2026-10-10 起后端**已停写**（外协回收统一改写 RECEIVED_FROM_OUTSOURCE），
+  // 保留仅为读存量历史行 —— **不要**因为「没人写了」就删，删了老工单时间线变原文。
   | 'RECEIVED_TO_INSPECTION'
   | 'QUOTE_CREATED'
   | 'QUOTE_APPROVED'
   | 'CANCELLED'
   | 'COMPLETED'
   | 'SPLIT'
-  | 'RECALLED'; // 2026-08-05 召回：ON_SHELF/PROGRAMMING → PENDING/PROGRAMMING
+  | 'RECALLED' // 2026-08-05 召回：ON_SHELF/PROGRAMMING → PENDING/PROGRAMMING
+  // ==========================================================================
+  // 2026-10-17 补齐：以下 12 个字面量后端一直在写（见
+  // backend-rust/src/shared/part_event/mod.rs 模块 doc 的「写侧域对照表」），
+  // 本注册表此前一个都没有 ⇒ 零件详情时间线直接显示 `RETURNED_TO_SHELF` 原文。
+  // 逐条写侧：RETURNED_TO_SHELF / SENT_TO_INSPECTION / TRANSFERRED = prod::scan；
+  // TAKEN_FROM_POOL / MOVED = prod::queue；BATCH_PASSED / BATCH_CANCELLED /
+  // DELIVERED = prod::batch；FORCE_COMPLETED = prod::batch + assembly + part；
+  // SERIAL_RELEASED = shared::batch（终态序列号归档）；SOFT_DELETED = part。
+  // ==========================================================================
+  /**
+   * ⚠️ 易混①：`RETURNED` 与 `RETURNED_TO_SHELF` **语义相同**（放回货架），两者都保留：
+   * - `RETURNED` 是 **Python 时代**写进 `t_part_event.event_type` 的历史字面量，
+   *   生产库仍有存量行，删 alias 老工单时间线立刻变原文；
+   * - `RETURNED_TO_SHELF` 是 **Rust 侧现行**写侧（`prod::scan::service::worker_scan`
+   *   的 `event_type: "RETURNED_TO_SHELF"`）。
+   * 同一个词今天还有第三重身份：**扫码台的 action 字面量**仍是 `RETURNED`
+   * （`SCAN_EVENT_TYPE_OPTIONS` 与后端 `scan_out.action` 都用它），action 层
+   * 与 event_type 层刻意不同名，不要「统一」成同一个。
+   */
+  | 'RETURNED_TO_SHELF'
+  | 'SENT_TO_INSPECTION'
+  | 'TAKEN_FROM_POOL'
+  | 'MOVED'
+  | 'BATCH_PASSED'
+  | 'BATCH_CANCELLED'
+  /**
+   * ⚠️ 易混②：这是 `t_part_event.event_type` 的**事件类型**，
+   * 与 `ORDER_STATUS_LABEL.DELIVERED`（`t_part.status` 的订单状态）**同名但不同语义、
+   * 不同表、不同取值域**。两者都在本文件里，改状态表时不要顺手动这里。
+   */
+  | 'DELIVERED'
+  | 'FORCE_COMPLETED'
+  | 'SERIAL_RELEASED'
+  | 'SOFT_DELETED'
+  | 'TRANSFERRED'
+  // 2026-10-17 新增事件类型（后端同批上线）：强制送检。与 `SENT_TO_INSPECTION`
+  //（工人主动送检）tag 同为 warning，中文以「强制」二字区分。
+  | 'FORCED_SENT_TO_INSPECTION';
 
 export const PART_EVENT_LABEL: Record<PartEventType, string> = {
   CREATED: '创建',
@@ -313,6 +371,19 @@ export const PART_EVENT_LABEL: Record<PartEventType, string> = {
   COMPLETED: '完成',
   SPLIT: '批次拆分',
   RECALLED: '召回',
+  // ===== 2026-10-17 补齐的 12 条（见 PartEventType 上的同批注释）=====
+  RETURNED_TO_SHELF: '归还',
+  SENT_TO_INSPECTION: '送检',
+  TAKEN_FROM_POOL: '队列取件',
+  MOVED: '队列移动',
+  BATCH_PASSED: '品检通过',
+  BATCH_CANCELLED: '批次取消',
+  DELIVERED: '已送货',
+  FORCE_COMPLETED: '强制完成',
+  SERIAL_RELEASED: '序列号释放',
+  SOFT_DELETED: '工单删除',
+  TRANSFERRED: '扫码接管',
+  FORCED_SENT_TO_INSPECTION: '强制送检',
 };
 
 export const PART_EVENT_TAG_TYPE: Record<
@@ -342,9 +413,30 @@ export const PART_EVENT_TAG_TYPE: Record<
   COMPLETED: 'success',
   SPLIT: 'info',
   RECALLED: 'warning',
+  // ===== 2026-10-17 补齐的 12 条（与 PART_EVENT_LABEL 同批，键集必须逐字相同）=====
+  // tag 取色口径：正向推进 = success、主流程动作 = primary / info、
+  // 需要人介入的强推 / 接管 = warning、不可逆的负面终态 = danger。
+  RETURNED_TO_SHELF: 'info',
+  SENT_TO_INSPECTION: 'primary',
+  TAKEN_FROM_POOL: 'warning',
+  MOVED: 'info',
+  BATCH_PASSED: 'success',
+  BATCH_CANCELLED: 'danger',
+  DELIVERED: 'success',
+  FORCE_COMPLETED: 'warning',
+  SERIAL_RELEASED: 'info',
+  SOFT_DELETED: 'danger',
+  TRANSFERRED: 'warning',
+  FORCED_SENT_TO_INSPECTION: 'warning',
 };
 
-/** 扫码台允许的 event_type 子集 */
+/**
+ * 扫码台（`scan_out.action`）允许的 event_type 子集 —— ⚠️ **刻意不含**上面
+ * 2026-10-17 补齐的 12 条：它们是服务端**派生**出来的事件类型（工人放回、
+ * 队列取件、品检通过……），不是用户能在扫码台手动选的 action。
+ * action 侧至今只有 `PICKED_UP` / `RETURNED` / `INSPECTED` 三选一。
+ * ⚠️ 别把本表与 `PartEventType` 当成同一维度：一个是**可选项**，一个是**全集**。
+ */
 export const SCAN_EVENT_TYPE_OPTIONS: PartEventType[] = ['PICKED_UP', 'RETURNED', 'INSPECTED'];
 
 export interface PartItem {
