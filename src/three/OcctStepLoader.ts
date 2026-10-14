@@ -475,8 +475,16 @@ export async function loadStepFromBytes(
   const kernel = await getKernel();
   options.onProgress?.(40, 'parse');
 
-  // 解析
-  let shape: ShapeHandle;
+  // 2026-10-20（review 第 2 轮）：从「拿到句柄」到「返回 LoadedShape」**整段**包在一个 try 里。
+  // 判据是「本函数一旦 reject，句柄就再也没人能清」：调用方拿不到 LoadedShape，
+  // `StepViewer` 的三条 releaseCurrentShape() 路径（切模型 / src 清空 / 卸载）全都够不着它。
+  // 过去只有三角化那两步自己带 catch，`buildTopology` / `buildStats`（在 try 之外）与
+  // `buildMeshGroup` / `fitToUnitSphere`（在入表之后）任一抛错都漏同一个口子。
+  // 所以 catch 统一走 releaseShape 的语义（forget + kernel.release，含 put 之后的缓存条目）
+  // 再抛，**不按失败点分叉**：阶段差异只落在 stage 与文案两个变量上。
+  let shape: ShapeHandle | null = null;
+  let stage: OcctLoadStage = 'parse';
+  let failLabel = `${format} 解析失败`;
   try {
     if (format === 'step') {
       // STEP 是文本，TextDecoder 解码；编码常见为 utf-8（ISO 10303-21 默认）
@@ -488,76 +496,65 @@ export async function loadStepFromBytes(
     } else {
       shape = kernel.importStl(bytes);
     }
-  } catch (e) {
-    throw new OcctLoadError(
-      `${format} 解析失败: ${e instanceof Error ? e.message : String(e)}`,
-      'parse',
-      e,
-    );
-  }
 
-  // 拓扑 + 统计（**此处不入表**，入表位置见三角化之后那行）
-  const topology = buildTopology(kernel, shape);
-  const stats = buildStats(kernel, shape);
+    // 拓扑 + 统计（**此处不入表**，入表位置见三角化之后那行）
+    failLabel = '拓扑提取失败';
+    const topology = buildTopology(kernel, shape);
+    const stats = buildStats(kernel, shape);
 
-  options.onProgress?.(60, 'tessellate');
+    options.onProgress?.(60, 'tessellate');
 
-  const linDef = options.linearDeflection ?? 0.1;
-  const angDef = options.angularDeflection ?? 0.5;
+    const linDef = options.linearDeflection ?? 0.1;
+    const angDef = options.angularDeflection ?? 0.5;
 
-  // mesh + wireframe
-  let faceMesh: ReturnType<OcctKernel['meshShape']>;
-  let edgeData: ReturnType<OcctKernel['wireframe']>;
-  try {
-    faceMesh = kernel.meshShape(shape, { linearDeflection: linDef, angularDeflection: angDef });
     // 用默认 source:'curve'（OCCT 真实拓扑边，face↔face 边界），避免三角化内部网格线
-    edgeData = kernel.wireframe(shape, { deflection: linDef });
-  } catch (e) {
-    // 三角化失败 ⇒ 整次加载作废：调用方拿到的是 reject，**没有 LoadedShape**，
-    // `StepViewer` 的三条 releaseCurrentShape() 路径都拿不到这个句柄。所以这里既不能
-    // 把句柄留在 wasm arena 里，也不能把它留在两张缓存表里 —— 两者都只有本函数知道，
-    // 谁都清不掉（这正是 releaseShape 注释里点名的「僵尸条目」）。
-    // 此刻还没建任何 THREE 资源（buildMeshGroup 在后面），释放句柄不影响已拿到的数据。
-    try {
-      kernel.release(shape);
-    } catch {
-      /* 句柄已失效：照常把三角化失败抛给调用方，不要让清理动作盖掉原始错误 */
+    const faceMesh = kernel.meshShape(shape, {
+      linearDeflection: linDef,
+      angularDeflection: angDef,
+    });
+    const edgeData = kernel.wireframe(shape, { deflection: linDef });
+
+    // 2026-10-20：入表排在三角化**之后**。理由不是「失败路径会留僵尸」（那条现在由统一 catch
+    // 兜底），而是「网格没拿到就不算一个完整模型」—— 调试导出（inspectLastLoaded /
+    // getTopology / getStats）摆给控制台的条目不该是半成品。
+    shapeCache.put(shape, topology, stats);
+
+    stage = 'tessellate';
+    failLabel = '三角化 / 建模失败';
+
+    const rootName = topology.type === 'compound' ? 'model' : topology.type;
+    const group = buildMeshGroup(faceMesh, edgeData, rootName);
+
+    if (options.fitToUnitSphere !== false) {
+      fitToUnitSphere(group);
     }
+
+    options.onProgress?.(100, 'tessellate');
+
+    // 把边线 LineMaterial 暴露出来，供 ViewerCanvas 注册到 SceneManager 维护 resolution
+    const edgesChild = group.children.find((c) => c.name === 'edges');
+    const lineMat = (edgesChild as unknown as { material: LineMaterial } | undefined)?.material;
+
+    return {
+      root: group,
+      rootHandle: shape,
+      kernel,
+      topology,
+      stats,
+      triangleCount: faceMesh.triangleCount,
+      rootName,
+      lineMaterial: lineMat,
+    };
+  } catch (e) {
+    // 解析就炸的那一支还没有句柄可放（shape 仍是 null），其余一律交还内核 + 清掉入表条目。
+    // releaseShape 内部「forget 在 release 之前、且 release 另带一层 try」，正好是这里要的顺序。
+    if (shape !== null) releaseShape({ rootHandle: shape, kernel });
     throw new OcctLoadError(
-      `三角化失败: ${e instanceof Error ? e.message : String(e)}`,
-      'tessellate',
+      `${failLabel}: ${e instanceof Error ? e.message : String(e)}`,
+      stage,
       e,
     );
   }
-
-  // 2026-10-20：入表排在三角化**之后**。反过来（先 put 再三角化）时，三角化失败会在
-  // 两张表里各留一条永远没人来 forget 的条目。守卫见
-  // `components/cad-viewer/__tests__/stepShapeRelease.spec.ts`（三角化失败不留僵尸那组）。
-  shapeCache.put(shape, topology, stats);
-
-  const rootName = topology.type === 'compound' ? 'model' : topology.type;
-  const group = buildMeshGroup(faceMesh, edgeData, rootName);
-
-  if (options.fitToUnitSphere !== false) {
-    fitToUnitSphere(group);
-  }
-
-  options.onProgress?.(100, 'tessellate');
-
-  // 把边线 LineMaterial 暴露出来，供 ViewerCanvas 注册到 SceneManager 维护 resolution
-  const edgesChild = group.children.find((c) => c.name === 'edges');
-  const lineMat = (edgesChild as unknown as { material: LineMaterial } | undefined)?.material;
-
-  return {
-    root: group,
-    rootHandle: shape,
-    kernel,
-    topology,
-    stats,
-    triangleCount: faceMesh.triangleCount,
-    rootName,
-    lineMaterial: lineMat,
-  };
 }
 
 export async function loadStepFromArrayBuffer(

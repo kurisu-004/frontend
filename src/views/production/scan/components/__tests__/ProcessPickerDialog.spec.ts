@@ -33,6 +33,7 @@ vi.mock('@/api/process', () => ({ listProcesses: h.listProcesses }));
 vi.mock('element-plus', () => ({ ElMessage: h.ElMessage }));
 
 import ProcessPickerDialog from '../ProcessPickerDialog.vue';
+import { qk } from '@/composables/queries/keys';
 
 const stubs = {
   'el-dialog': {
@@ -54,6 +55,7 @@ const stubs = {
   HmiPickerCard: {
     name: 'HmiPickerCardStub',
     props: ['code', 'name', 'category', 'isSelected', 'disabled', 'hint'],
+    emits: ['select'],
     template:
       '<div class="stub-card" :data-code="code" :data-name="name" :data-category="category" />',
   },
@@ -97,9 +99,20 @@ function listResult(items: Record<string, unknown>[]): {
   return { items, total: items.length, limit: 200, offset: 0 };
 }
 
+/** 工序数据走共享 query 之后，用例级 QueryClient（见 beforeEach）。 */
+let qc: QueryClient;
+
+/** 桩数据的元素是 `Record<string, unknown>`（走 schema 前的原始形状），取 id 时收窄成 string。 */
+function idOf(p: Record<string, unknown>): string {
+  return p.id as string;
+}
+
 beforeEach(() => {
   h.listProcesses.mockReset().mockResolvedValue(listResult([]));
   h.ElMessage.error.mockReset();
+  // 2026-10-20（review 第 2 轮）：QueryClient 提到用例级变量，「后台重取换新数据落地」那条用例
+  // 需要在组件外面对同一个 client 调 invalidate —— 每个用例仍然是全新的一份缓存。
+  qc = new QueryClient({ defaultOptions: { queries: { retry: 0 } } });
 });
 
 /**
@@ -113,7 +126,12 @@ beforeEach(() => {
 type PickerKind = InstanceType<typeof ProcessPickerDialog>['$props']['kind'];
 
 function render(
-  props: { kind?: PickerKind; hint?: string; allowedProcessIds?: PickerAllowed } = {},
+  props: {
+    kind?: PickerKind;
+    hint?: string;
+    allowedProcessIds?: PickerAllowed;
+    currentProcessId?: string | null;
+  } = {},
 ) {
   return mount(ProcessPickerDialog, {
     props: { modelValue: true, ...props },
@@ -122,12 +140,7 @@ function render(
       // 2026-10-20：工序数据走 `useProcessesQuery`，vue-query 的 `useQueryClient()` 是
       // inject 来的，必须装插件。retry 显式设 0 与 main.ts 的全局默认同口径 —— 否则
       // 「工序列表加载失败」那条用例要等 3 次重试退避才落到 error 态。
-      plugins: [
-        [
-          VueQueryPlugin,
-          { queryClient: new QueryClient({ defaultOptions: { queries: { retry: 0 } } }) },
-        ],
-      ],
+      plugins: [[VueQueryPlugin, { queryClient: qc }]],
     },
   });
 }
@@ -267,9 +280,9 @@ describe('ProcessPickerDialog / allowedProcessIds 收窄候选', () => {
   // 空态文案已经翻到另一种「空」、卡片还停在上一份筛选结果 —— 同一屏两句话互相打脸，且
   // 两句都「有依据」（文案说的是真 prop、卡片说的是真数据）。
   //
-  // 断言方式：弹窗打开后把 `allowedProcessIds` 从 `[]` 改成 `null`，卡片集**不会**重跑
-  // （本组件刻意不重跑 `listProcesses`），那么文案也不许翻 —— 否则就是文案在描述一份
-  // 不再生效的快照。
+  // 断言方式：弹窗打开后把 `allowedProcessIds` 从 `[]` 改成 `null`，watch 依赖不含
+  // `allowedProcessIds`，快照**不会**重取（工序字典那条共享 query 不重发），那么文案也不许翻
+  // —— 否则就是文案在描述一份不再生效的快照。
   it('打开后改 allowedProcessIds：卡片不重跑，空态文案也不许翻（同一快照）', async () => {
     h.listProcesses.mockResolvedValue(listResult(PROCESSES));
     const w = render({ kind: 'takeover', allowedProcessIds: [] });
@@ -281,7 +294,7 @@ describe('ProcessPickerDialog / allowedProcessIds 收窄候选', () => {
     await w.setProps({ allowedProcessIds: null });
     await flushPromises();
 
-    // 候选集换了，但本组件的快照没换（`listProcesses` 刻意不重跑）
+    // 候选集换了，但本组件的快照没换（`allowedProcessIds` 刻意不进 watch 依赖 ⇒ 不重取数）
     expect(h.listProcesses, 'watch 依赖刻意不含 allowedProcessIds，不该重拉').toHaveBeenCalledTimes(
       1,
     );
@@ -289,5 +302,78 @@ describe('ProcessPickerDialog / allowedProcessIds 收窄候选', () => {
     for (const el of w.findAll('.tab-empty')) {
       expect(el.text()).toContain('你的工种暂无可选工序');
     }
+  });
+});
+
+// 2026-10-20 review 第 2 轮：选中态与「数据刷新」的关系。工序字典换成共享 query 之后，data
+// 会在弹窗开着的时候被后台 refetch 换掉（另一个组件改了工序字典就失效同一条 queryKey）。
+// 那时若把预填无条件重跑一遍，工人刚点完的工序会在眼皮底下被清空、确认键跟着变灰，而屏幕上
+// 一点提示都没有 —— 工序字典本身只是多了几行，谁也看不出发生过什么。
+describe('ProcessPickerDialog / 数据刷新时的预填与选中态', () => {
+  it('后台重取换新数据落地：工人刚选中的工序不被打回预填项', async () => {
+    h.listProcesses.mockResolvedValue(listResult(PROCESSES));
+    const w = render({ currentProcessId: idOf(PROCESSES[0]!) }); // 预填 CUT
+    await flushPromises();
+    expect(w.find('.confirm-btn').attributes('disabled')).toBeUndefined();
+
+    // 工人改选 WELD（渲染序：CUT / WELD / SUB，两个自产在前）。
+    w.findAllComponents({ name: 'HmiPickerCardStub' }).at(1)!.vm.$emit('select');
+    await flushPromises();
+
+    // 别的组件改了工序字典 → 后台重取落地（data 换了引用，watch 依赖命中）。
+    h.listProcesses.mockResolvedValue(
+      listResult([...PROCESSES, process({ id: '190000000000004', code: 'CLEAN', sort_order: 2 })]),
+    );
+    await qc.invalidateQueries({ queryKey: qk.processesPrefix });
+    await flushPromises();
+
+    expect(h.listProcesses, '失效后应当真的重取了一次').toHaveBeenCalledTimes(2);
+    expect(
+      w.find('.confirm-btn').attributes('disabled'),
+      '选中态不能被数据刷新清掉',
+    ).toBeUndefined();
+
+    await w.find('.confirm-btn').trigger('click');
+    expect(w.emitted('confirm')?.[0]?.[0]).toMatchObject({ code: 'WELD' });
+  });
+
+  // 反过来：新数据里已经没有那一道工序了（被软删 / 收窄集合变小），选中态必须跟着清 ——
+  // 「不能被数据刷新动」指的是**有数据的**换新，不是指向一张已不存在的卡片。
+  it('新数据里已没有选中的那一道：选中态清空、确认键禁用', async () => {
+    h.listProcesses.mockResolvedValue(listResult(PROCESSES));
+    const w = render();
+    await flushPromises();
+
+    w.findAllComponents({ name: 'HmiPickerCardStub' }).at(1)!.vm.$emit('select');
+    await flushPromises();
+    expect(w.find('.confirm-btn').attributes('disabled')).toBeUndefined();
+
+    // 只剩 CUT 与 SUB（自产那道被删掉了）
+    h.listProcesses.mockResolvedValue(listResult([PROCESSES[0]!, PROCESSES[2]!]));
+    await qc.invalidateQueries({ queryKey: qk.processesPrefix });
+    await flushPromises();
+
+    expect(w.find('.confirm-btn').attributes('disabled')).toBeDefined();
+  });
+
+  // 「还没选过任何工序」这一支仍要预填：数据在弹窗打开之后才到（冷启动 / 首开），此时
+  // selectedId 为空，推荐项就是应当出现的那一个。
+  it('数据在打开之后才到：照样按推荐项预填', async () => {
+    let settle!: (v: ReturnType<typeof listResult>) => void;
+    h.listProcesses.mockReturnValueOnce(
+      new Promise((res) => {
+        settle = res;
+      }),
+    );
+    const w = render({ currentProcessId: idOf(PROCESSES[0]!) });
+    await flushPromises();
+    expect(w.find('.loading-state').exists()).toBe(true);
+
+    // 首轮取数在弹窗开着的时候落地
+    settle(listResult(PROCESSES));
+    await flushPromises();
+
+    expect(w.findAll('.stub-card')).toHaveLength(3);
+    expect(w.find('.confirm-btn').attributes('disabled'), '推荐项应当已预填').toBeUndefined();
   });
 });

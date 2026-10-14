@@ -206,7 +206,13 @@ describe('StepViewer / 释放接线（源码契约守卫）', () => {
     expect(load.indexOf('releaseCurrentShape();')).toBeLessThan(load.indexOf('loadStepFromBytes'));
   });
 
-  // kernel 是模块级单例，多个 StepViewer 实例会同时活着（FileListCard 每个 3D 文件一个）。
+  // kernel 是模块级单例，多个 StepViewer 实例会同时活着 —— 三条同时存活的路径：
+  // ① tagsView 的 keep-alive 让多个路由实例并存（`layouts/MainLayout.vue` 的
+  // `<keep-alive :include="tags.cachedViewNames">` + `stores/tagsView.ts` 的 visitedViews），
+  // 开两个零件详情标签、各自打开一个 3D 预览即得两个实例；
+  // ② `views/parts/detail/components/PartFilesTabsCard.vue` 内那三个 `FileListCard` 挂载点是
+  // `v-if / v-else-if / v-else` **互斥**的，同一时刻只挂一个，且每个预览弹窗里只有一个 StepViewer；
+  // ③ `views/production/components/DrawingPreviewPane.vue` 是另一个承载点。
   // 组件生命周期上拆 kernel 会让其余实例的句柄全部失效。
   it('R6：组件不调 disposeKernel（共享单例只能整进程拆）', () => {
     expect(STEP_VIEWER_CODE).not.toMatch(/\bdisposeKernel\b/);
@@ -219,7 +225,7 @@ describe('StepViewer / 释放接线（源码契约守卫）', () => {
   });
 });
 
-describe('三角化失败不留僵尸（源码契约守卫，判位置不判行号）', () => {
+describe('加载失败不留僵尸（源码契约守卫，判位置不判行号）', () => {
   const loaderBody = (): string =>
     regionOf(
       LOADER_SRC,
@@ -227,26 +233,46 @@ describe('三角化失败不留僵尸（源码契约守卫，判位置不判行�
       'export async function loadStepFromArrayBuffer',
     );
 
-  // 病灶：`shapeCache.put` 排在三角化**之前**时，`meshShape` / `wireframe` 一抛错，本函数
-  // 直接 reject —— 调用方拿到的是错误而不是 LoadedShape，`StepViewer` 的三条释放路径都拿不到
-  // 这个句柄，两张表里各留一条永远没人 forget 的条目，wasm 句柄也永久占着。
-  // ⚠️ 断言的是**相对位置**（put 在 meshShape 之后），不是行号：行号必然过期。
-  it('R8：入表排在三角化之后，且三角化失败的 catch 里把句柄交还内核', () => {
+  // 病灶：`meshShape` / `wireframe` / `buildTopology` / `buildStats` / `buildMeshGroup` /
+  // `fitToUnitSphere` 里任一处抛错，`loadStepFromBytes` 都只 reject —— 调用方拿到的是错误而
+  // 不是 LoadedShape，`StepViewer` 的三条释放路径都拿不到这个句柄，wasm 句柄与两张缓存表里
+  // 的条目（入表之后那条）就都永远没人清了。
+  // ⚠️ 断言的是**相对位置**（这几步都必须落在同一个 try 内、catch 里必须有 releaseShape），
+  // 不是行号：行号必然过期。回退形态（各自带 catch，或干脆没有 catch）都会红。
+  it('R8：拿到句柄到返回 LoadedShape 整段包在一个 try 里，catch 走 releaseShape 语义', () => {
     const body = loaderBody();
-    const meshAt = body.indexOf('kernel.meshShape(');
-    const putAt = body.indexOf('shapeCache.put(');
-    expect(meshAt, '找不到三角化调用').toBeGreaterThanOrEqual(0);
-    expect(putAt, '找不到入表调用').toBeGreaterThanOrEqual(0);
-    expect(putAt, '入表必须排在三角化成功之后，否则失败路径留下僵尸条目').toBeGreaterThan(meshAt);
+    // try 的起点锚在「拿到 kernel 之后的第一处 try」：那是句柄作用域真正开始的地方
+    // （文件体积闸与 kernel 初始化在句柄存在之前，不属本条要守的范围）。
+    const kernelAt = body.indexOf('const kernel = await getKernel()');
+    expect(kernelAt, '找不到 kernel 获取点').toBeGreaterThanOrEqual(0);
+    const tryAt = body.indexOf('try {', kernelAt);
+    const catchAt = body.indexOf('catch (e) {');
+    expect(tryAt, '找不到包裹 shape 作用域的 try').toBeGreaterThan(kernelAt);
+    expect(catchAt, '找不到兜底 catch').toBeGreaterThan(tryAt);
 
-    // catch 分支的范围：从 wireframe 之后的第一个 catch 到 buildMeshGroup 调用之前。
-    const catchAt = body.indexOf('catch', body.indexOf('kernel.wireframe('));
-    const catchEnd = body.indexOf('buildMeshGroup(', catchAt);
-    expect(catchAt, '找不到三角化失败的 catch 分支').toBeGreaterThanOrEqual(0);
-    expect(catchEnd, '找不到三角化 catch 的结束位置').toBeGreaterThan(catchAt);
-    const tessCatch = body.slice(catchAt, catchEnd);
-    expect(tessCatch, '三角化失败时句柄必须交还内核').toMatch(/\.release\(\s*shape\s*\)/);
+    const tryBody = body.slice(tryAt, catchAt);
+    for (const call of [
+      'kernel.importStep(',
+      'buildTopology(',
+      'buildStats(',
+      'kernel.meshShape(',
+      'kernel.wireframe(',
+      'shapeCache.put(',
+      'buildMeshGroup(',
+      'fitToUnitSphere(',
+    ]) {
+      expect(tryBody, `${call} 必须落在 try 内，否则它抛错会绕过清位`).toContain(call);
+    }
+
+    const catchBody = body.slice(catchAt);
+    // 统一走 releaseShape：forget（两张表 + lastLoaded）与 kernel.release 都在里面，
+    // 且 release 自身带 try —— 清理动作不能盖掉原始错误。
+    expect(catchBody, '失败路径必须交还句柄并清掉入表条目').toContain(
+      'releaseShape({ rootHandle: shape, kernel })',
+    );
+    // 句柄可能压根没拿到（解析就炸了）：那种情况下不许去释放一个 null。
+    expect(catchBody).toMatch(/if \(shape !== null\)/);
     // 释放不能盖掉原始错误：失败仍然要抛给调用方。
-    expect(tessCatch).toContain('三角化失败');
+    expect(catchBody).toContain('OcctLoadError');
   });
 });

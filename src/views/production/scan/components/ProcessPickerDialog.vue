@@ -226,15 +226,16 @@ const activeTab = ref<'INHOUSE' | 'OUTSOURCE'>('INHOUSE');
 const processesQuery = useProcessesQuery({ limit: 200 }, { enabled: () => props.modelValue });
 
 /**
- * 列表三态由 query 直接派生。`loading` 取 `isPending`（无数据）而非 `isFetching`（含后台 refetch）：
- * 后台 refetch 时不该把已经在屏的卡片整片换成 loading 骨架，工人会以为弹窗坏了。
+ * 列表三态由 query 直接派生。`loading` 刻意只取 `isPending`（无数据），不取 `isFetching`（含
+ * 后台 refetch）：后台重取时不该把已经在屏的卡片整片换成 loading 骨架，工人会以为弹窗坏了。
+ * 这条也是工序字典换共享缓存后的主要收益之一 —— 30s staleTime 一过，重开弹窗照样拿缓存里的
+ * 卡片直出，只是后台悄悄换新数据。
  *
- * 而「上一轮失败过、这一轮正在重取」那一瞬也不需要额外照顾：query-core 的 `fetchState` 在
- * **无数据**时发起请求会把 `error` 清成 null、`status` 回落成 `pending` ⇒ `isPending` 为 true，
- * 重开弹窗照样先压骨架，不会闪一条上一轮的旧错误横幅（这条行为由
- * `__tests__/ProcessPickerDialog.processQuery.spec.ts` 的重开用例钉住）。
- * ⚠️ 别为了「以防万一」再加 `|| (isFetching && !data)`：无数据时 `isPending` 已覆盖，有数据时
- * 该子句恒 false，两种状态都推不出新结果 —— 是死代码。
+ * ⚠️ 因此「重开时上一轮的旧错误横幅原样闪在屏上」这件事**不能**靠 `loading` 解决，要靠下面的
+ * `errorMessage`：query-core 的 `fetchState` 只在 **无数据**时把 `error` 清成 null、`status`
+ * 回落成 `pending`；`data !== undefined` 时两样都不动 ⇒ 「先成功一次、后台重取失败、再关窗
+ * 重开」这一路上 `isPending` 恒 false、骨架不出、旧横幅直接占屏。见 errorMessage 的注释。
+ * （`isPending || isFetching` 能覆盖它，但代价是每次 stale 重取都压骨架，把上面那条收益吃掉。）
  */
 const loading = computed<boolean>(() => processesQuery.isPending.value);
 
@@ -244,7 +245,21 @@ function errorText(err: unknown): string {
   return msg || '加载失败';
 }
 
+/**
+ * 错误横幅文案。**重取在途的那一刻刻意不渲染**（2026-10-20 review 第 2 轮登记）：
+ *
+ * 可达路径 = 首开成功（缓存里已有 data）→ 30s stale 后重开触发后台 refetch → 该 refetch 失败
+ * （`status='error'`，data 仍在）→ 关窗再开窗。此时 query-core 的 `fetchState` 因为
+ * `data !== undefined` 既不清 `error`、也不把 `status` 回落成 `pending`，所以只判
+ * `isPending` 的 loading 压不出骨架，**上一轮的旧错误横幅会原样闪在屏上**。
+ *
+ * 判据用 `isFetching`（取数在途 = 当前这份错误已经不是「当下发生的事」）而不是另置一个
+ * 「本次打开已看过错误」的本地标志：它是从 query 状态直接派生的，不依赖任何一次性的 watch
+ * 时序 —— 关窗期间在途的取数、弹窗开着期间的在途取数，两条路都归它管。
+ * 反过来（真出错了）`isFetching` 落回 false、错误横幅与 toast 照常出现。
+ */
 const errorMessage = computed<string | null>(() => {
+  if (processesQuery.isFetching.value) return null;
   const err = processesQuery.error.value;
   return err ? errorText(err) : null;
 });
@@ -252,10 +267,11 @@ const errorMessage = computed<string | null>(() => {
 /**
  * 错误提示走 toast（error-state 那块横幅另有模板渲染）。用 watch 而不是模板副作用。
  *
- * ⚠️ watch 的是 **Error 对象**而不是文案字符串：「每次失败弹一次」因此只取决于**失败了几次**，
- * 不取决于「这次文案和上次是否相同」。query-core 在无数据时发起请求会把 `error` 清成 null，
- * 所以文案写法今天也能弹；但那是借来的库行为 —— 一旦某次重取不再清空 error，连续两次同文案
- * 失败就会静默只剩横幅。这里把触发源钉死在失败事件本身上。
+ * ⚠️ watch 的是 **Error 对象**而不是文案字符串：「失败 N 次弹 N 次」严格成立的前提是**每次失败
+ * 都产生一个新的错误对象**（生产环境 axios 每次抛新的 `ApiError` 实例，所以照常成立；但若两次
+ * 失败复用同一个 Error 实例，watch 只触发一次）。它与横幅那条判据互补：横幅按
+ * `isFetching` 决定显不显，这里按「新的错误对象出现」决定弹不弹，两边都不依赖库在发起请求
+ * 时清不清 error。
  */
 watch(processesQuery.error, (err) => {
   if (!err) return;
@@ -373,22 +389,33 @@ function tabEmptyText(label: string): string {
 // 缓存时 data 在 setup 期间就有值，本回调 immediate 跑一趟把快照取好）。
 watch(
   [() => props.modelValue, () => props.currentProcessId, () => processesQuery.data.value],
-  ([visible, currentId, data]) => {
+  ([visible, currentId, data], [prevVisible, prevCurrentId]) => {
     if (!visible || !data) return;
     // 收窄集合取成局部常量再与 items 一起塞进快照：见 snapshot 的注释。
     snapshot.value = { items: toProcesses(data.items), allowed: props.allowedProcessIds };
-    // 先把 selectedId + activeTab 用 currentId 预填
-    selectedId.value = currentId ?? null;
-    if (currentId) {
-      const matched = processes.value.find((p) => p.id === currentId);
-      if (matched) {
-        activeTab.value = matched.category === 'OUTSOURCE' ? 'OUTSOURCE' : 'INHOUSE';
+    // 2026-10-20 review 第 2 轮登记：预填只在三个时刻重做 —— **本次打开**（prevVisible 不是
+    // true，含 immediate 的首趟）、**调用方换了推荐项**、**用户还没选过任何工序**。
+    // 后台 refetch 换新数据落地**不再**无条件把 selectedId 打回预填项：那是把 data 放进 watch
+    // 依赖的直接副作用，工人刚点完的工序会在眼皮底下被清掉、确认键跟着变灰，而屏幕上什么
+    // 提示都没有。（"还没选过"这一条保住「数据在打开之后才到」的首开路径：那时 selectedId
+    // 为空，本就该按推荐项预填。）
+    const shouldPrefill =
+      prevVisible !== true || prevCurrentId !== currentId || selectedId.value === null;
+    if (shouldPrefill) {
+      // 先把 selectedId + activeTab 用 currentId 预填
+      selectedId.value = currentId ?? null;
+      if (currentId) {
+        const matched = processes.value.find((p) => p.id === currentId);
+        if (matched) {
+          activeTab.value = matched.category === 'OUTSOURCE' ? 'OUTSOURCE' : 'INHOUSE';
+        }
+      } else {
+        // 无 currentProcessId：默认自产 tab
+        activeTab.value = 'INHOUSE';
       }
-    } else {
-      // 无 currentProcessId：默认自产 tab
-      activeTab.value = 'INHOUSE';
     }
-    // 预填项不在本次候选集内（已被软删、或不落在收窄集合内）：清空让用户重选
+    // 候选集换新后，已选 / 已预填的那一道若不在集内（软删、收窄集合变小），清空让用户重选。
+    // 这一段**不**受 shouldPrefill 约束：它守的是「选中态不能指向一张已经不存在的卡片」。
     if (selectedId.value && !processes.value.some((p) => p.id === selectedId.value)) {
       selectedId.value = null;
     }

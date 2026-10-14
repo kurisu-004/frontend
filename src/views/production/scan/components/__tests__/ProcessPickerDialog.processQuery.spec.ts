@@ -19,8 +19,9 @@
 //     **同一个** QueryClient 上，`listProcesses` 全程只被调一次（这是 queryKey 机械相等的
 //     证明，**不假设两者同屏**），且弹窗直接渲染出卡片（零等待、无 loading 骨架）。
 //   - Q4（缓存热 ⇒ 打开即渲染）：同一个 QueryClient 内关窗再开窗，请求数仍为 1。
-//   - Q5（错误提示）：连续两次失败 ⇒ 各弹一次 toast（失败几次就弹几次）。
-//   - Q6（重开不留旧错误）：上一轮失败后重开弹窗、重取在途时压 loading 骨架，不闪旧横幅。
+//   - Q5（错误提示）：连续两次失败 ⇒ 各弹一次 toast（每次失败都产生新的错误对象时）。
+//   - Q6（重开不留旧错误，**无数据**分支）：上一轮失败后重开弹窗、重取在途时压 loading 骨架。
+//   - Q7（重开不留旧错误，**有数据**分支）：首开成功 → 后台重取失败 → 关窗重开，不闪旧横幅。
 //
 // 测试策略（沿 ProcessPickerDialog.spec.ts 同款）：
 //   - `vi.mock('@/api/process')` 桩住唯一的出网口（共享 hook 内部调的正是它），桩返回值
@@ -202,9 +203,10 @@ describe('ProcessPickerDialog / 工序字典走共享查询层', () => {
     expect(w.findAll('.stub-card')).toHaveLength(3);
   });
 
-  // 钉的是「失败几次 = 弹几次」这条不变量（去掉 watch、或加成只弹一次，这两条都会红）。
-  // ⚠️ 它**不**能区分 watch 的触发源是 Error 对象还是文案字符串：query-core 在无数据时发起请求
-  // 会把 error 清成 null，所以两种写法今天都弹两次（守卫见组件内同名注释）。
+  // 钉的是「失败 N 次弹 N 次」这条不变量（去掉 watch、或加成只弹一次，这两条都会红）。
+  // ⚠️ 它**不**能区分 watch 的触发源是 Error 对象还是文案字符串（生产 axios 每次抛新的
+  // ApiError 实例，所以两种写法今天都弹两次）；严格成立的前提是**每次失败都产生新的错误
+  // 对象**，守卫见组件内同名注释。
   it('Q5：连续两次失败各弹一次 toast（与两次文案是否相同无关）', async () => {
     mocks.listProcesses.mockRejectedValue(new Error('Network Error'));
     const w = mountDialog(true);
@@ -222,6 +224,8 @@ describe('ProcessPickerDialog / 工序字典走共享查询层', () => {
   // 钉的是「重开弹窗的那一瞬压骨架、不闪上一轮的旧错误横幅」这条可见行为。
   // 今天它靠的是 query-core 的 fetchState（无数据时 status 回落 pending ⇒ isPending 为 true），
   // 所以 `loading` 只取 isPending 就够 —— 这里是行为钉子，不是对某个实现的断言。
+  // ⚠️ 只覆盖「无数据」分支；**有数据**那条分支（先成功过一次、后台重取失败后再重开）fetchState
+  // 既不清 error 也不回落 status，钉在 Q7。
   it('Q6：上一轮失败后重开弹窗，重取在途时压 loading 骨架而不是闪旧错误横幅', async () => {
     mocks.listProcesses.mockRejectedValueOnce(new Error('Network Error'));
     const w = mountDialog(true);
@@ -237,5 +241,39 @@ describe('ProcessPickerDialog / 工序字典走共享查询层', () => {
 
     expect(w.find('.loading-state').exists(), '重取在途时压骨架').toBe(true);
     expect(w.find('.error-state').exists(), '不闪上一轮的旧错误横幅').toBe(false);
+  });
+
+  // Q7 钉的是「有数据」分支：首开成功 → 失效重取失败 → 关窗再开窗。
+  // 这条路上 query-core 的 fetchState（data !== undefined）既不清 error、也不把 status 回落成
+  // pending ⇒ 只判 isPending 的 loading 压不出骨架，旧错误横幅会原样闪在屏上。解法在
+  // `errorMessage`：重取在途（isFetching）时不渲染上一轮的错误。
+  // ⚠️ 顺带把「后台重取不压骨架、缓存卡片继续在屏」这条刻意保留的观感一起钉住 ——
+  // 换成 `isPending || isFetching` 也能让本用例的前两条断言通过，但它会把每次 stale 重开
+  // 都变成一次骨架闪烁，把工序字典换共享缓存的收益吃掉。
+  it('Q7：有数据时后台重取失败，关窗重开不闪上一轮的旧错误横幅（且不压骨架）', async () => {
+    const w = mountDialog(true);
+    await flushPromises();
+    expect(w.findAll('.stub-card')).toHaveLength(3);
+
+    // 第二轮：失效触发的后台重取失败（首轮成功 ⇒ data 仍在，正是「有数据」分支）。
+    mocks.listProcesses.mockRejectedValueOnce(new Error('Network Error'));
+    await qc.invalidateQueries({ queryKey: qk.processesPrefix });
+    await flushPromises();
+    expect(w.find('.error-state').exists(), '当前这一轮确实失败了').toBe(true);
+    expect(mocks.ElMessage.error).toHaveBeenCalledTimes(1);
+
+    // 第三轮挂起，把「重开时正在重取」这个瞬间定住。
+    mocks.listProcesses.mockImplementationOnce(() => new Promise(() => {}));
+    await w.setProps({ modelValue: false });
+    await flushPromises();
+    await w.setProps({ modelValue: true });
+    await flushPromises();
+
+    expect(mocks.listProcesses, '失败过的那条一定是 stale，重开应当重新取数').toHaveBeenCalledTimes(
+      3,
+    );
+    expect(w.find('.error-state').exists(), '不闪上一轮的旧错误横幅').toBe(false);
+    expect(w.find('.loading-state').exists(), '后台重取不压骨架').toBe(false);
+    expect(w.findAll('.stub-card'), '缓存里的卡片继续在屏').toHaveLength(3);
   });
 });
