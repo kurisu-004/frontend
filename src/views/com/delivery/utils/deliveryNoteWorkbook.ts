@@ -43,9 +43,10 @@ import { colIndexOf } from './deliveryNoteTemplate';
 
 /** 打印表头行（与模板 row 2 的表头一一对应；字段名沿用 line item 的 snake_case）。
  *
- *  ⚠️ 本接口是**两套版式的并集**，不是每套都用得上：检具版客户版式没有单位列 / 分厂列 /
- *  申请人列 / 备注列（见 GAUGE 契约的 `columns` 与那里的说明），渲染层按契约列反查驱动，
- *  检具版压根不会读到 `l2Customer` / `applicant` / `unit` / `note` —— 不是漏写，是版式如此。 */
+ *  ⚠️ 本接口是**两套版式的并集**，不是每套都用得上：检具版客户版式没有单位列 / 申请人列 /
+ *  备注列（见 GAUGE 契约的 `columns` 与那里的说明），渲染层按契约列反查驱动，检具版压根不会
+ *  读到 `applicant` / `unit` / `note` —— 不是漏写，是版式如此。`l2Customer` 两套版式都读到
+ *  （零件版 C 列键名 `l2_customer`、检具版 C 列键名 `customer_path`，见 COLUMN_FIELD）。 */
 export interface PrintSheetRow {
   orderNo: string;
   l2Customer: string;
@@ -174,12 +175,17 @@ function setCell(sheet: Sheet, y: number, x: number, value: CellValue): void {
  * 的列位差异全在契约里，本表只管两套版式共用的名字对应。
  *
  * 表外只有一项：`no` 不是打印行字段，由行序号特判（见渲染循环）。
- * 表内唯一「名字对不上」的是 `system_delivery_date` → 行字段 `etd`（值已预格式化成
- * `M月D日`，口径见 deliveryNotePrintRows::toSheetRows）。
+ * 表内两个键名与行字段**对不上**，都不是新字段：
+ *   · `customer_path` → `l2Customer`（2026-10-18 新增，检具版 C 列）。零件版 C 列的键名是
+ *     `l2_customer`，两者**指向同一个行字段、同一个值**（客户路径），键名不同只因检具版这一列
+ *     是新放上占位符的，不必背零件版那份「老模板占位符不许改名」的包袱；
+ *   · `system_delivery_date` → `etd`（值已预格式化成 `M月D日`，口径见
+ *     deliveryNotePrintRows::toSheetRows）。
  */
 const COLUMN_FIELD: Readonly<Record<string, keyof PrintSheetRow>> = {
   order_no: 'orderNo',
   l2_customer: 'l2Customer',
+  customer_path: 'l2Customer',
   applicant: 'applicant',
   drawing_no: 'drawingNo',
   name: 'name',
@@ -327,8 +333,8 @@ export async function renderDeliveryNoteWorkbook<
     return cloned;
   });
 
-  // 整块清空的范围由契约给（检具版因此含 C / G / H 三列：模板里可能残留客户样例值，
-  // 而这三列按约定是留给送货厂家手写的）。
+  // 整块清空的范围由契约给（检具版因此含 G / H 两列手写列：模板里可能残留客户样例值；
+  // 同一范围也含 C 列，但那列清空完随即被写入实参覆盖）。
   const firstCol = colIndexOf(c.dataColumns.first);
   const width = colIndexOf(c.dataColumns.last) - firstCol + 1;
   /** 契约列 → （列下标 + 该列绑的打印行字段）。`no` 特判成行序号故 rowField 为 null。

@@ -17,10 +17,14 @@
 // 覆盖：数据行写入 / 未填满的行整行清空（不漏出 {{order_no}} 字面量）/ 多 sheet /
 // 数量 null 写空 / 每 sheet 行数 / 占位符零残留 / 单元格样式与空行边框字节级保真。
 //
-// 2026-10-16 新增检具版一批：6 列落位 / C·G·H 手写列清空 / I2 拿送货日期 / 25 行满载
+// 2026-10-16 新增检具版一批：6 列落位 / G·H 手写列清空 / I2 拿送货日期 / 25 行满载
 // 拆 sheet / 零残留 / merges 保真 / 字节级样式计数，以及两条守卫 ——「数据列必须被整块清空
 // 范围覆盖」（越界即抛错，不静默留残值）与「契约与页脚必须配套」（**主要在编译期**，
 // 运行时断言只作兜底）。
+//
+// 2026-10-18：检具版 C 列也落位（键名 `customer_path`，与零件版 C 列同落一个
+// `PrintSheetRow.l2Customer`），手写列只剩 G / H；新增一条「同一组行数据在两套契约下 C 列
+// 都拿到同一个客户路径值」。
 
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -157,6 +161,12 @@ function row(i: number) {
     etd: '11月1日',
     note: '',
   };
+}
+
+/** 客户列给一条**多级路径**（2026-10-18 客户无限层级后的真实取值形态：
+ *  「第 2 层到叶子的 ` / ` 拼接、不含 L1」），用它断言 C 列拿到的是路径而不是单段名。 */
+function rowWithPath(i: number) {
+  return { ...row(i), l2Customer: '终端BG / 手机部 / 影像组' };
 }
 
 /** 检具版页脚实参：判别位 `kind` **必填**（契约与页脚在编译期绑定，见 FooterFor），
@@ -308,6 +318,21 @@ describe('renderDeliveryNoteWorkbook', () => {
     expect(Number(styles.match(/<fonts count="(\d+)"/)?.[1] ?? 0)).toBeGreaterThan(1);
   });
 
+  it('零件版 C 列仍取 l2_customer 键的值（键名被老模板的 {{l2_customer}} 占位符钉死）', async () => {
+    // 守卫的是「检具版给 C 列新增 `customer_path` 键之后，零件版那条路一个字没动」：
+    // 列位声明 + 渲染产物两半都在这里。未填满的数据行 C 列必须为空（清空范围含 C）。
+    expect(DELIVERY_NOTE_TEMPLATE_CONTRACT.columns.l2_customer).toBe('C');
+    const out = await renderDeliveryNoteWorkbook(
+      TEMPLATE,
+      [{ sheetName: 'S', rows: [rowWithPath(0)] }],
+      PART_FOOTER,
+    );
+    const s = (await readBack(out)).sheets[0]!;
+    const start = DELIVERY_NOTE_TEMPLATE_CONTRACT.dataStartRow;
+    expect(s.rows[start]![2]).toBe('终端BG / 手机部 / 影像组');
+    expect(String(s.rows[start + 1]![2] ?? '')).toBe('');
+  });
+
   it('数据区整块清空覆盖到最后一列 J（往 J4 塞客户残留 ⇒ 渲染后必须为空）', async () => {
     // 「清空按 dataColumns 走、写入按 columns 走」是本层的核心前提：把 `dataColumns` 写窄成
     // A..I，未填满的行 J 列就会漏出模板原值。本条把该列钉死（渲染层另有一条守卫会在越界时
@@ -355,19 +380,24 @@ describe('renderDeliveryNoteWorkbook', () => {
 describe('renderDeliveryNoteWorkbook（检具版）', () => {
   const G = GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT;
 
-  it('6 列按 PrintSheetRow 落位、C/G/H 三列留空、I2 拿到送货日期', async () => {
+  it('7 列按 PrintSheetRow 落位、C 列拿到客户路径、G/H 两列留白、I2 拿到送货日期', async () => {
     const out = await renderDeliveryNoteWorkbook(
       GAUGE_TEMPLATE,
-      [{ sheetName: '百路达', rows: [row(0), row(1)] }],
+      [{ sheetName: '百路达', rows: [rowWithPath(0), rowWithPath(1)] }],
       GAUGE_FOOTER,
       G,
     );
     const s = (await readBack(out)).sheets[0]!;
-    // row 5（0-based 4）：A 序号 / B 订单号 / D 图号 / E 名称 / F 数量 / I 交货日期
-    expect(s.rows[4]).toEqual([1, 'SO-0', '', 'C-1000', '铝电解电容', 1, '', '', '11月1日']);
+    // row 5（0-based 4）：A 序号 / B 订单号 / C 客户路径 / D 图号 / E 名称 / F 数量 /
+    // G·H 手写列（留白）/ I 交货日期
+    expect(s.rows[4]).toEqual([
+      1, 'SO-0', '终端BG / 手机部 / 影像组', 'C-1000', '铝电解电容', 1, '', '', '11月1日',
+    ]);
     // row 6 同形，序号续排（清空后逐格覆写，不会漏出模板里 row5 才有的占位符）
-    expect(s.rows[5]).toEqual([2, 'SO-1', '', 'C-1001', '铝电解电容', 2, '', '', '11月1日']);
-    // 第 7..29 行未填 ⇒ 整行清空（含 A 列序号占位符）
+    expect(s.rows[5]).toEqual([
+      2, 'SO-1', '终端BG / 手机部 / 影像组', 'C-1001', '铝电解电容', 2, '', '', '11月1日',
+    ]);
+    // 第 7..29 行未填 ⇒ 整行清空（含 A 列序号占位符、C 列的客户路径占位符）
     expect(s.rows[6]!.every((v) => String(v ?? '') === '')).toBe(true);
     // 送货日期在 I2（表头右侧），不是页脚区
     expect(s.rows[1]![8]).toBe('2026-10-16');
@@ -387,27 +417,33 @@ describe('renderDeliveryNoteWorkbook（检具版）', () => {
     expect(String(s.rows[4]![8] ?? '')).toBe('');
   });
 
-  it('模板样例残留值不会被打出去（C / G / H 三列按客户约定清空、边框留着手写）', async () => {
-    // 造一份「客户样例残留」的模板：数据区 C / G / H 三列塞上样例值。
+  it('模板样例残留值不会被打出去（G / H 两列按客户约定清空、边框留着手写）', async () => {
+    // 造一份「客户样例残留」的模板：数据区 G / H 两列塞上样例值，C 列也塞一条（验证 C 列
+    // **被实参覆盖**而不是靠清空躲过去 —— 清空在前、写入在后，顺序反了就会漏出样例）。
     const { openXlsx, saveXlsx } = await import('hucre');
     const wb = await openXlsx(GAUGE_TEMPLATE);
     const sh = wb.sheets[0]!;
-    sh.rows[4]![2] = '采购部/张三';
+    sh.rows[4]![2] = '样例：采购部/张三';
     sh.rows[4]![6] = '新制';
     sh.rows[7]![7] = 'OK';
-    sh.rows[8]![2] = '质量部';
+    sh.rows[8]![6] = '返修';
     sh.rows[8]![7] = 'NG';
     const dirty = await saveXlsx(wb);
 
     const out = await renderDeliveryNoteWorkbook(
       dirty,
-      [{ sheetName: 'S', rows: [row(0)] }],
+      [{ sheetName: 'S', rows: [rowWithPath(0)] }],
       GAUGE_FOOTER,
       G,
     );
     const s = (await readBack(out)).sheets[0]!;
-    // 三列整列扫一遍：25 行数据区里 C / G / H 全部空
-    for (const colIdx of [2, 6, 7]) {
+    // C 列：填了实参的那一行是路径，其余 24 行是空（样例残留不得漏出）
+    expect(s.rows[G.dataStartRow]![2]).toBe('终端BG / 手机部 / 影像组');
+    for (let k = 1; k < G.dataRowCount; k += 1) {
+      expect(String(s.rows[G.dataStartRow + k]![2] ?? ''), `第 ${k + 1} 行 C 列`).toBe('');
+    }
+    // G / H 两列整列扫一遍：25 行数据区里全部空
+    for (const colIdx of [6, 7]) {
       for (let k = 0; k < G.dataRowCount; k += 1) {
         expect(String(s.rows[G.dataStartRow + k]![colIdx] ?? ''), `第 ${k + 1} 行第 ${colIdx} 列`).toBe(
           '',
@@ -447,11 +483,11 @@ describe('renderDeliveryNoteWorkbook（检具版）', () => {
     expect(wb.sheets[0]!.rows[28]![0]).toBe(25);
     // 第 26 条落在第二张的第 1 个数据行，序号从头排
     expect(wb.sheets[1]!.rows[4]).toEqual([
-      1, 'SO-25', '', 'C-10025', '铝电解电容', 26, '', '', '11月1日',
+      1, 'SO-25', '法拉', 'C-10025', '铝电解电容', 26, '', '', '11月1日',
     ]);
   });
 
-  it('零残留占位符（每个 sheet 都扫：7 类 placeholder 共 31 处全被替换或清空）', async () => {
+  it('零残留占位符（每个 sheet 都扫：8 类 placeholder 共 32 处全被替换或清空）', async () => {
     const out = await renderDeliveryNoteWorkbook(
       GAUGE_TEMPLATE,
       [
@@ -464,6 +500,38 @@ describe('renderDeliveryNoteWorkbook（检具版）', () => {
     for (const s of (await readBack(out)).sheets) {
       expect(s.rows.flat().filter((v) => typeof v === 'string' && v.includes('{{'))).toEqual([]);
     }
+  });
+
+  // C 列在两套版式下**键名不同、落点相同、值相同**：零件版走 `l2_customer`、检具版走
+  // `customer_path`，两者都映射到 `PrintSheetRow.l2Customer`。这条把三件事一次钉住 ——
+  // 契约的列位声明、COLUMN_FIELD 的映射、以及渲染产物里那一格的实际文本。
+  it('同一组行数据：零件版与检具版的 C 列都拿到同一个客户路径值（键名不同）', async () => {
+    // 列位声明本身：两个键都在 C 列
+    expect(DELIVERY_NOTE_TEMPLATE_CONTRACT.columns.l2_customer).toBe('C');
+    expect(G.columns.customer_path).toBe('C');
+
+    const rows = [rowWithPath(0)];
+    const partOut = await renderDeliveryNoteWorkbook(
+      TEMPLATE,
+      [{ sheetName: 'S', rows }],
+      PART_FOOTER,
+    );
+    const gaugeOut = await renderDeliveryNoteWorkbook(
+      GAUGE_TEMPLATE,
+      [{ sheetName: 'S', rows }],
+      GAUGE_FOOTER,
+      G,
+    );
+    const partSheet = (await readBack(partOut)).sheets[0]!;
+    const gaugeSheet = (await readBack(gaugeOut)).sheets[0]!;
+    // 数据首行位置不同（row 3 vs row 5），列位置相同（都是 col 2 = C）
+    expect(partSheet.rows[DELIVERY_NOTE_TEMPLATE_CONTRACT.dataStartRow]![2]).toBe(
+      '终端BG / 手机部 / 影像组',
+    );
+    expect(gaugeSheet.rows[G.dataStartRow]![2]).toBe('终端BG / 手机部 / 影像组');
+    // 未填满的数据行：两套版式的 C 列都必须是空（零件版第二行 C / 检具版第二行 C）
+    expect(String(partSheet.rows[DELIVERY_NOTE_TEMPLATE_CONTRACT.dataStartRow + 1]![2] ?? '')).toBe('');
+    expect(String(gaugeSheet.rows[G.dataStartRow + 1]![2] ?? '')).toBe('');
   });
 
   // 下面两条分别守两件事：**清单**（哪几格合并）与 **round-trip 不丢**（渲染前后不变）。

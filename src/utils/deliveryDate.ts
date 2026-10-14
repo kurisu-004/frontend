@@ -13,8 +13,8 @@
  * 影响面：`shiftIsoDate` 供 `bufferedDeliveryDate` 内部用（缓冲天数为 0 时是恒等
  * 变换，但保留入口以便将来恢复缓冲），其上挂 `formatDeliveryDate`（MM/DD 展示）、
  * `deliveryDaysLeftText`（倒计文案）、`deliveryUrgencyClass` / `deliveryUrgencyTag`
- * （紧迫样式）。绝对输出的回归锁见 `src/utils/__tests__/deliveryDate.spec.ts`
- * （按 TZ 两档分别锁定）。
+ * （紧迫样式）、`formatDeliveryMonthDay`（打印交期 `M月D日`）。绝对输出的回归锁见
+ * `src/utils/__tests__/deliveryDate.spec.ts`（按 TZ 两档分别锁定）。
  */
 export const DELIVERY_DATE_BUFFER_DAYS = 0;
 
@@ -76,6 +76,19 @@ export function formatDeliveryMonthDay(s: DeliveryDate): string {
   const d = parseLocalIso(s);
   if (!d) return '';
   return `${d.getMonth() + 1}月${d.getDate()}日`;
+}
+
+/**
+ * 送货单打印「送货日期」格（检具版 I2）的文案：`Date` → `YYYY年M月D日`（月、日不补零）。
+ *
+ * ⚠️ 入参是 **`Date` 而非 ISO 串**：这个格装的是**导出当天**（不是某个 ISO 日期串），
+ * 「今天」由调用方在本地零点构造，函数只取日历分量、不做任何日期算术 ⇒ 不存在
+ * `parseLocalIso` 那条 UTC / 本地零点漂移问题（成因见文件头）。
+ * 与 `formatDeliveryMonthDay` 是**并列的两条口径**（后者带年份但吃 ISO 串、前者不带年份但吃
+ * Date），刻意互不复用：复用一个就得给它加分支或造中转形态，两种调用点都跟着变绕。
+ */
+export function formatChineseDeliveryDate(d: Date): string {
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
 }
 
 /** 本地零点「今天」+ 目标日与它的日历日差（两端同基准，见 parseLocalIso）。 */

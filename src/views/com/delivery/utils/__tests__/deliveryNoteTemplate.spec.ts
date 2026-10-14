@@ -9,10 +9,13 @@
 // 缺 sheet。
 //
 // 2026-10-16 两批追加：
-//   · `fetchTemplateBytes` 的三种 `TemplateSource` 变体（重点是 `api` 变体必须走后端 axios
+//   · `fetchTemplateBytes` 的两种 `TemplateSource` 变体（重点是 `api` 变体必须走后端 axios
 //     端点而不是裸 `fetch` —— 后者带不上 Authorization 头，必然 401）；
 //   · 检具版一批：两份内置检具模板逐格通过 + 三类坏模板各出一差异（改坏 row5 占位符 /
 //     删掉 I2 的 {{delivery_date}} / A 列中间一格不是 {{no}}）。
+//
+// 2026-10-18 追加：`detectTemplateContract` 的四条（零件版 / 两份检具版 / 四锚点全坏判不出 /
+// 缺 sheet）。它与逐格校验是**两条独立判据**，都绿不代表探测器对，所以各有各的用例。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -28,10 +31,9 @@ vi.mock('@/api/printTemplates', () => ({
   fetchPrintTemplateContent: (id: string) => fetchPrintTemplateContentMock(id),
 }));
 
-const { assertTemplateMatches, colIndexOf, fetchTemplateBytes } = await import(
-  '../deliveryNoteTemplate'
-);
-const { GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT } = await import(
+const { assertTemplateMatches, colIndexOf, detectTemplateContract, fetchTemplateBytes } =
+  await import('../deliveryNoteTemplate');
+const { DELIVERY_NOTE_TEMPLATE_CONTRACT, GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT } = await import(
   '../deliveryNoteTemplateContract'
 );
 
@@ -158,13 +160,6 @@ describe('fetchTemplateBytes', () => {
     expect(Array.from(bytes)).toEqual([7, 7, 2]);
   });
 
-  it('local 变体：直接给回字节，零请求', async () => {
-    const raw = new Uint8Array([1, 2, 3]);
-    const bytes = await fetchTemplateBytes({ kind: 'local', bytes: raw, filename: 'a.xlsx' });
-    expect(bytes).toBe(raw);
-    expect(fetchPrintTemplateContentMock).not.toHaveBeenCalled();
-  });
-
   it('url 变体：仍然走裸 fetch（预留形态，本次不动它的语义）', async () => {
     const calls: string[] = [];
     const originalFetch = globalThis.fetch;
@@ -228,5 +223,58 @@ describe('assertTemplateMatches（检具版）', () => {
     (wb as unknown as { sheets: unknown[] }).sheets = [];
     const diffs = await assertTemplateMatches(wb, GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT);
     expect(diffs).toEqual(['缺少第 1 个工作表（模板必须是单 sheet 结构）']);
+  });
+});
+
+// ============================================================
+// 版式探测（2026-10-18 新增）
+// ============================================================
+//
+// 守卫的**边界**：这个函数刻意**不**做「两套契约各跑一遍逐格校验」那条路（理由见函数注释），
+// 所以「锚点表被改坏 / 判别顺序被换掉」在这里是零信号的 —— 用例只能守住「内置三份模板各自
+// 判得对」与「四个锚点全坏时明说判不出」，判不出的**原因**分类不在它能力范围内。
+describe('detectTemplateContract', () => {
+  it('内置零件模板 → 零件版契约（B3 锚点）', async () => {
+    const { openXlsx } = await import('hucre');
+    const wb = await openXlsx(new Uint8Array(PART_BUILTIN));
+    expect(detectTemplateContract(wb)).toBe(DELIVERY_NOTE_TEMPLATE_CONTRACT);
+  });
+
+  it.each(GAUGE_BUILTINS)('内置检具模板 → 检具版契约（B5 锚点）：%s', async (file) => {
+    const { openXlsx } = await import('hucre');
+    const wb = await openXlsx(new Uint8Array(readFileSync(file)));
+    expect(detectTemplateContract(wb)).toBe(GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT);
+  });
+
+  // 兜底锚点各守一条：B3 / B5 坏掉时靠页脚那一对判版式。B3 坏 / F15 在 = 零件版；
+  // B5 坏 / I2 在 = 检具版。两条都坏就落到下一条。
+  it('数据首行锚点坏掉时，页脚锚点各自兜住对应版式', async () => {
+    const partBroken = await openWithEdits((s) => {
+      s.rows[2]![1] = '订单编号';
+    });
+    expect(detectTemplateContract(partBroken)).toBe(DELIVERY_NOTE_TEMPLATE_CONTRACT);
+    const gaugeBroken = await openGaugeWithEdits((s) => {
+      s.rows[4]![1] = '订单编号';
+    });
+    expect(detectTemplateContract(gaugeBroken)).toBe(GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT);
+  });
+
+  // 四个锚点（B3 / B5 / F15 / I2）全改坏 ⇒ 判不出。不许「猜一个默认版式」：猜错就是把零件版
+  // 的列位写到检具模板上（或反之），导出的单子在客户那边整列错位。
+  it('四个锚点全改坏 → null（不猜默认版式）', async () => {
+    const wb = await openWithEdits((s) => {
+      s.rows[2]![1] = '订单编号';
+      s.rows[4]![1] = '订单编号';
+      s.rows[14]![5] = '送货人：';
+      s.rows[1]![8] = '送货日期';
+    });
+    expect(detectTemplateContract(wb)).toBeNull();
+  });
+
+  it('缺工作表 → null，不抛', async () => {
+    const { openXlsx } = await import('hucre');
+    const wb = await openXlsx(new Uint8Array(PART_BUILTIN));
+    (wb as unknown as { sheets: unknown[] }).sheets = [];
+    expect(detectTemplateContract(wb)).toBeNull();
   });
 });

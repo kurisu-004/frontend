@@ -23,6 +23,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   deliveryDaysLeftText,
   deliveryUrgencyClass,
+  formatChineseDeliveryDate,
   formatDeliveryMonthDay,
 } from '../deliveryDate';
 
@@ -150,6 +151,31 @@ describe('formatDeliveryMonthDay（M月D日，两档 TZ 期望逐字相同）', 
         expect(formatDeliveryMonthDay(undefined)).toBe('');
         expect(formatDeliveryMonthDay('')).toBe('');
         expect(formatDeliveryMonthDay('not-a-date')).toBe('');
+      });
+    }
+  });
+});
+
+// 打印「送货日期」格（检具版 I2，2026-10-18 新增）。入参是 Date（导出当天）而不是 ISO 串，
+// 输出带年份、月日不补零。取本地日历分量 ⇒ 两档 TZ 期望逐字相同（与上面那组同规格）。
+describe('formatChineseDeliveryDate（YYYY年M月D日，两档 TZ 期望逐字相同）', () => {
+  it('带年份、月 / 日不补零', () => {
+    for (const tz of ['Asia/Shanghai', 'UTC']) {
+      withTz(tz, () => {
+        expect(formatChineseDeliveryDate(new Date(2026, 9, 16))).toBe('2026年10月16日');
+        expect(formatChineseDeliveryDate(new Date(2026, 0, 5))).toBe('2026年1月5日');
+        expect(formatChineseDeliveryDate(new Date(2026, 11, 1))).toBe('2026年12月1日');
+        expect(formatChineseDeliveryDate(new Date(2027, 2, 31))).toBe('2027年3月31日');
+      });
+    }
+  });
+
+  // 时刻不影响输出：函数只取日历分量，调用方用哪个时刻构造「今天」都一样。
+  it('带时刻也只取日历分量', () => {
+    for (const tz of ['Asia/Shanghai', 'UTC']) {
+      withTz(tz, () => {
+        expect(formatChineseDeliveryDate(new Date(2026, 9, 16, 23, 59, 59))).toBe('2026年10月16日');
+        expect(formatChineseDeliveryDate(new Date(2026, 9, 16, 0, 0, 0))).toBe('2026年10月16日');
       });
     }
   });
