@@ -360,7 +360,9 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
    *
    * 叶子口径走 `api/customer.tree.ts::leafCustomersUnder`：**「所选根的子树内的叶子」
    * 这个需求有第二个消费方**（送货单扫码台的分组编辑器成员候选，零件只会挂在 L3/L4
-   * 叶子而分组原先只能选 L2 ⇒ 扫码 GROUP 路由永远不命中），两处各写一遍「parent_id →
+   * 叶子而分组原先只能选 L2；且送货分组只服务打印分页 —— 按成员 `customer_id` 建映射、
+   * 打印行项用自己的叶子 `customer_id` 去查，中间层成员匹配不到任何行项），两处各写一遍
+   * 「parent_id →
    * children 索引 + 显式栈」的话，重复 id 去重 / `parent_id` 成环这两条脏数据口径迟早
    * 分叉。`path` 是 `customer_path`（第 2 层到叶子的 ` / ` 拼接、不含 L1 —— L1 已由页面
    * 顶部的下拉承载），空串兜底退回单段名。

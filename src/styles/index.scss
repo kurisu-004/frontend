@@ -109,7 +109,7 @@ a {
 
    渲染函数在 `src/utils/elTableCell.ts::renderCustomerCell`，被多个列定义跨 5 个域共用，
    产出的 VNode 是**纯字符串 class、不带 scoped 标记** ⇒ 样式必须走全局，不能塞进某个
-   消费方组件的 scoped CSS（那样其余 6 处会拿到无样式的裸 class）。
+   消费方组件的 scoped CSS（那样其它调用点会拿到无样式的裸 class）。
 
    三条形态（与渲染函数逐条对应）：
    - `.customer-cell` 两行容器：`flex column` 是**必需**的，不是审美选择 ——

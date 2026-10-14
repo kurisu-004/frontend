@@ -7,8 +7,9 @@
 // 而送货车台原先把编辑器候选写成「所选 L1 的**直接子**」。三层树上直接子是中间层 ⇒
 //   1. 面板按后端回的 `ungrouped_customers`（= 该 L1 的**全部后代**）渲染「未分组」tag，
 //      里面会出现 L3 叶子，但进编辑器后 `el-option` 里根本没有它 ⇒ 看得到、加不进；
-//   2. 扫码入单的 GROUP 路由判「零件所属客户 ∈ 分组成员」⇒ 分组里只有 L2、零件在 L3
-//      ⇒ 路由永不命中，静默落进默认草稿。
+//   2. 送货分组唯一的消费方是**打印分页**：分组映射按成员的 `customer_id` 建表，而打印
+//      行项用自己的**叶子 `customer_id`** 去查 ⇒ 中间层（分组里只有 L2、零件在 L3）成员
+//      匹配不到任何行项，选进分组也只是白占一个成员位。
 // 两层树（当前生产数据）下这两条都无感，所以只能靠测试钉住。
 //
 // 用 EP 模板桩而不是真 el-select（理由同 `DeliveryScanTreeDialog.spec.ts`：vitest 配置
@@ -117,8 +118,9 @@ describe('送货分组编辑器：候选 = 所选 L1 子树内的叶子', () => 
     const w = await mountEditor(candidates);
     const options = renderedOptions(w);
 
-    // 零件只可能挂在叶子上（后端入单叶子闸门 20104）⇒ 中间层进了分组只会让 GROUP 路由
-    // 永不命中；根本身更不可能（分组键就是它，后端显式剔除）。
+    // 零件只可能挂在叶子上（后端入单叶子闸门 20104），且打印分组按**行项自己的叶子
+    // customer_id** 匹配 ⇒ 中间层进了分组匹配不到任何行项；根本身更不可能（分组键就是
+    // 它，后端显式剔除）。
     expect(options.map((o) => o.id).sort()).toEqual(['l3b', 'l4a', 'l4b']);
     for (const mid of ['l1', 'l2a', 'l3a', 'l2b', 'x1', 'x2', 'x3']) {
       expect(options.some((o) => o.id === mid)).toBe(false);
@@ -151,7 +153,7 @@ describe('送货分组编辑器：候选 = 所选 L1 子树内的叶子', () => 
     for (const stale of ['L2 成员', 'L2 客户', '工件的 L2']) {
       expect(text, `分组编辑器还留着带层级数的文案「${stale}」`).not.toContain(stale);
     }
-    expect(text).toContain('扫码时如果工件的末级部门命中这里任一成员');
+    expect(text).toContain('打印送货单时，这里每个成员的行会单独打一张打印页');
     w.unmount();
   });
 });
@@ -168,7 +170,8 @@ describe('接线：候选一路透传，页面不得再按「直接子」过滤'
     expect(
       SCAN_SRC,
       '页面里的候选又退回就地过滤 `parent_id === l1`：三层树上编辑器只列得到中间层，' +
-        '「面板看得见的成员加不进分组」+「扫码 GROUP 路由永不命中」两条死锁一起回来',
+        '「面板看得见的成员加不进分组」+「中间层成员在打印分组里匹配不到任何行项」' +
+        '两条死锁一起回来',
     ).toMatch(/leafCustomersUnder\(allCustomers\.value, scanState\.l1CustomerId\.value\)/);
     expect(SCAN_SRC).not.toMatch(/parent_id === scanState\.l1CustomerId\.value/);
   });

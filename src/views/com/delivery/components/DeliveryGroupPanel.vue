@@ -23,8 +23,10 @@
 
   2026-10-17（客户无限层级改造）：成员候选由「L1 的直接子（L2）」改成「L1 子树内的
   叶子」—— 后端 `ungrouped_customers` 给的是 L1 的**全部后代**，零件只挂在叶子上
-  （入单叶子闸门 20104），只列直接子会让「面板上看得见的成员在编辑器里选不到」、扫码
-  GROUP 路由永远不命中。口径由 `DeliveryNoteScan.vue` 的 `leafCustomerOptions` 算好
+  （入单叶子闸门 20104），只列直接子会让「面板上看得见的成员在编辑器里选不到」。另一半理由
+  是分组只服务打印分页（`utils/deliveryNotePrintRows.ts::buildL2GroupMap` 按成员
+  `customer_id` 建表、打印行项用自己的叶子 `customer_id` 去查 ⇒ 中间层匹配不到任何行项）。
+  口径由 `DeliveryNoteScan.vue` 的 `leafCustomerOptions` 算好
   下传，本组件**不再自行过滤**。
 -->
 <script setup lang="ts">

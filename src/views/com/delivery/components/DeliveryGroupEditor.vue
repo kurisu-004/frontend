@@ -13,8 +13,11 @@
 //   - cancel(): 用户点取消 / 点 × / 点遮罩时触发
 //
 // 父组件负责调 createDeliveryGroup / updateDeliveryGroup 并处理 ApiError。
-// ⚠️ 成员候选**只可能是叶子**：零件只挂在叶子客户上（后端入单叶子闸门 20104），
-// 中间层进了分组只会让扫码 GROUP 路由永不命中。
+// ⚠️ 成员候选**只可能是叶子**，两条理由都指向同一个结论：
+//   1. 零件只挂在叶子客户上（后端入单叶子闸门 20104）；
+//   2. 送货分组唯一的消费方是**打印分页**（`utils/deliveryNotePrintRows.ts::buildL2GroupMap`）
+//      —— 映射按成员的 `customer_id` 建表，打印行项用**自己的叶子 `customer_id`** 去查，
+//      中间层成员匹配不到任何行项（进了分组也只是白占一个成员位）。
 
 import { computed, ref, watch } from 'vue';
 import { ElMessage, ElForm, type FormInstance } from 'element-plus';
@@ -128,7 +131,7 @@ function onClosed(): void {
           <el-option v-for="c in leafCustomerOptions" :key="c.id" :label="c.name" :value="c.id" />
         </el-select>
         <p class="form-hint">
-          扫码时如果工件的末级部门命中这里任一成员，将按 GROUP 路由到本分组对应草稿。
+          打印送货单时，这里每个成员的行会单独打一张打印页，便于按收货单位分批打单。
         </p>
       </el-form-item>
     </el-form>

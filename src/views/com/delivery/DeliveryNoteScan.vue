@@ -84,9 +84,10 @@ const rootCustomers = computed<Customer[]>(() =>
  *      叶子客户上。
  * 前端停在「直接子」就是一个功能死结：面板按后端回的 `ungrouped_customers` 渲染
  * 「未分组」tag，里面会出现 L3/L4 叶子，但点「编辑」进 `DeliveryGroupEditor` 时
- * `el-option` 只列得到 L2（中间层）⇒ **看得到的成员加不进分组**；同时 GROUP 路由按
- * 「零件所属客户 ∈ 分组成员」判，零件在 L3、分组里只有 L2 ⇒ 永远不命中，静默落进默认
- * 草稿。两层树（当前生产数据）无感，一旦按本功能建出 L3 就是死路。
+ * `el-option` 只列得到 L2（中间层）⇒ **看得到的成员加不进分组**。另一半理由是送货
+ * 分组只服务**打印分页**：`utils/deliveryNotePrintRows.ts::buildL2GroupMap` 按成员
+ * `customer_id` 建映射、打印行项用自己的**叶子 `customer_id`** 去查，中间层成员匹配不到
+ * 任何行项。两层树（当前生产数据）无感，一旦按本功能建出 L3 就是死路。
  *
  * 口径与零件 PDF 批量上传的行内客户列（`usePartBatchPdf.ts::leafCustomerOptions`）
  * 共用 `api/customer.tree.ts::leafCustomersUnder`（同一份「所选根子树内的叶子」实现、
