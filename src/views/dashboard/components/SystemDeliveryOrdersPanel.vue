@@ -99,25 +99,25 @@
           </span>
         </el-tooltip>
         <span v-if="!isPartialVariant" class="row-qty">{{ item.quantity }}</span>
-        <el-tooltip
-          v-else
-          :content="deliveredTooltip(item)"
-          placement="top"
-          :show-after="200"
-        >
+        <el-tooltip v-else :content="deliveredTooltip(item)" placement="top" :show-after="200">
           <span class="row-qty row-qty--partial">
             <span class="row-qty-done">{{ item.delivered_quantity }}</span>
             <span class="row-qty-sep">/</span>
             <span>{{ item.quantity }}</span>
           </span>
         </el-tooltip>
+        <!-- 2026-10-17 客户无限层级：改前只读 `item.customer_name`（单段名），现在读后端下发的
+         `customer_path`（第 2 层到叶子的 ` / ` 拼接、不含 L1）。
+         **刻意不加 L1 次行**：这是大屏面板、一行的高度与「一屏看多少件」是这个面板的第一
+         信息诉求（每桶 30 行），多一行等于大屏信息密度下降；而根名在别的列表页能看全。
+         空串（客户软删 / 父链成环）退回 `customer_name`，两者皆空落 '—'。 -->
         <el-tooltip
-          :content="item.customer_name ?? ''"
+          :content="customerLabel(item)"
           placement="top"
           :show-after="200"
-          :disabled="!item.customer_name"
+          :disabled="!customerLabel(item)"
         >
-          <span class="row-customer">{{ item.customer_name ?? '—' }}</span>
+          <span class="row-customer">{{ customerLabel(item) || '—' }}</span>
         </el-tooltip>
         <el-tag :type="ORDER_STATUS_TAG_TYPE[item.status]" size="small" effect="plain">
           {{ ORDER_STATUS_LABEL[item.status] }}
@@ -222,6 +222,13 @@ function deliveredTooltip(item: SystemDeliveryOrderData): string {
 /** 该行是不是装配件（行源含装配件父行，子件已被 `assembly_id IS NULL` 排除）。 */
 function isAssemblyRow(item: SystemDeliveryOrderData): boolean {
   return item.row_type === 'ASSEMBLY';
+}
+
+/** 客户列文案（2026-10-17 客户无限层级）：主行读后端下发的 `customer_path`，
+ *  空串（客户软删 / 父链成环时后端必填字段落空串）退回单段名。口径与
+ *  `utils/elTableCell.ts::customerCellText` 的规则 1 + 兜底一致。 */
+function customerLabel(item: SystemDeliveryOrderData): string {
+  return item.customer_path?.trim() || item.customer_name?.trim() || '';
 }
 </script>
 

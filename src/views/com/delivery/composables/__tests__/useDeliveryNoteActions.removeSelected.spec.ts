@@ -43,7 +43,9 @@ const { useDeliveryNoteActions } = await import('../useDeliveryNoteActions');
 
 const app = createApp({ render: () => null });
 app.use(createPinia());
-app.use(VueQueryPlugin, { queryClient: new QueryClient({ defaultOptions: { queries: { retry: false } } }) });
+app.use(VueQueryPlugin, {
+  queryClient: new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+});
 setActivePinia(app.config.globalProperties.$pinia);
 
 function partRow(id: string, batchIds: string[]): PartTreeRow {
@@ -57,6 +59,7 @@ function partRow(id: string, batchIds: string[]): PartTreeRow {
     applicant_name: '',
     customer_name: '',
     customer_path: '',
+    parent_customer_name: '',
     note: '',
     quantity: batchIds.length,
     unit: '件',

@@ -52,6 +52,8 @@ function makeBaseSystemOrder(overrides: Record<string, unknown> = {}): Record<st
     status: 'IN_PROCESS',
     system_delivery_date: '2026-10-08',
     customer_name: '南海路厂区',
+    // 2026-10-17 客户无限层级：新增 customer_path（第 2 层到叶子、不含 L1）。
+    customer_path: '华南集团 / 南海路厂区',
     is_urgent: true,
     delivered_quantity: 3,
     row_type: 'PART',
@@ -71,6 +73,8 @@ function makeBaseDetail(overrides: Record<string, unknown> = {}): Record<string,
     name: '零件甲',
     l1_customer_name: '南海集团',
     customer_name: '南海路厂区',
+    // 2026-10-17 客户无限层级：新增 customer_path（第 2 层到叶子、不含 L1）。
+    customer_path: '华南集团 / 南海路厂区',
     status: 'PENDING',
     planned_delivery_date: '2026-10-09',
     system_delivery_date: '2026-10-10',
@@ -167,8 +171,8 @@ describe('workerHeldBatchSchema（工人在手加工批次 7 字段）', () => {
   });
 });
 
-describe('systemDeliveryOrderSchema（交期面板行 10 字段）', () => {
-  it('D1：完整 10 字段 parse 通过', () => {
+describe('systemDeliveryOrderSchema（交期面板行 11 字段）', () => {
+  it('D1：完整 11 字段 parse 通过', () => {
     const parsed = systemDeliveryOrderSchema.parse(makeBaseSystemOrder());
     expect(parsed.id).toBe('180000000000002');
     expect(parsed.status).toBe('IN_PROCESS');
@@ -176,7 +180,7 @@ describe('systemDeliveryOrderSchema（交期面板行 10 字段）', () => {
     expect(parsed.row_type).toBe('PART');
   });
 
-  it('D4：10 字段全在 parsed output 里（strip-mode regression guard）', () => {
+  it('D4：11 字段全在 parsed output 里（strip-mode regression guard）', () => {
     const parsed = systemDeliveryOrderSchema.parse(makeBaseSystemOrder());
     expect(Object.keys(parsed).sort()).toEqual(
       [
@@ -187,6 +191,7 @@ describe('systemDeliveryOrderSchema（交期面板行 10 字段）', () => {
         'status',
         'system_delivery_date',
         'customer_name',
+        'customer_path',
         'is_urgent',
         'delivered_quantity',
         'row_type',
@@ -196,7 +201,12 @@ describe('systemDeliveryOrderSchema（交期面板行 10 字段）', () => {
 
   it('D3：可空字段置 null 仍可 parse', () => {
     const parsed = systemDeliveryOrderSchema.parse(
-      makeBaseSystemOrder({ serial_no: null, system_delivery_date: null, customer_name: null }),
+      makeBaseSystemOrder({
+        serial_no: null,
+        system_delivery_date: null,
+        customer_name: null,
+        customer_path: null,
+      }),
     );
     expect(parsed.serial_no).toBeNull();
     expect(parsed.system_delivery_date).toBeNull();
@@ -232,8 +242,9 @@ describe('systemDeliveryOrderSchema（交期面板行 10 字段）', () => {
   });
 
   it('status 锁 OrderStatus 枚举（非法字面量 → 抛 ZodError）', () => {
-    expect(() => systemDeliveryOrderSchema.parse(makeBaseSystemOrder({ status: 'NOPE' })))
-      .toThrow();
+    expect(() =>
+      systemDeliveryOrderSchema.parse(makeBaseSystemOrder({ status: 'NOPE' })),
+    ).toThrow();
   });
 
   it('必填：缺 id / name / quantity / status / is_urgent 任一 → 抛 ZodError', () => {
@@ -377,9 +388,7 @@ describe('upcomingDeliveryBucketSchema（分桶单桶 3 字段）', () => {
   });
 
   it('D3：by_status 是空对象 {} → parse 通过（合法零桶日）', () => {
-    const parsed = upcomingDeliveryBucketSchema.parse(
-      makeBaseBucket({ count: 0, by_status: {} }),
-    );
+    const parsed = upcomingDeliveryBucketSchema.parse(makeBaseBucket({ count: 0, by_status: {} }));
     expect(parsed.by_status).toEqual({});
   });
 
@@ -387,10 +396,18 @@ describe('upcomingDeliveryBucketSchema（分桶单桶 3 字段）', () => {
     expect(() => upcomingDeliveryBucketSchema.parse({ count: 0, by_status: {} })).toThrow();
     expect(() => upcomingDeliveryBucketSchema.parse({ date: '2026-10-07', count: 0 })).toThrow();
     expect(() =>
-      upcomingDeliveryBucketSchema.parse({ date: '2026-10-07', count: 1, by_status: { PENDING: '3' } }),
+      upcomingDeliveryBucketSchema.parse({
+        date: '2026-10-07',
+        count: 1,
+        by_status: { PENDING: '3' },
+      }),
     ).toThrow();
     expect(() =>
-      upcomingDeliveryBucketSchema.parse({ date: '2026-10-07', count: 1, by_status: { PENDING: -1 } }),
+      upcomingDeliveryBucketSchema.parse({
+        date: '2026-10-07',
+        count: 1,
+        by_status: { PENDING: -1 },
+      }),
     ).toThrow();
   });
 });
@@ -442,15 +459,15 @@ describe('upcomingBucketsSchema（分桶响应 3 顶层字段）', () => {
   });
 });
 
-describe('deliveryOrderDetailSchema（下钻行 9 字段）', () => {
-  it('D1：完整 9 字段 parse 通过', () => {
+describe('deliveryOrderDetailSchema（下钻行 10 字段）', () => {
+  it('D1：完整 10 字段 parse 通过', () => {
     const parsed = deliveryOrderDetailSchema.parse(makeBaseDetail());
     expect(parsed.id).toBe('180000000000003');
     expect(parsed.drawing_no).toBe('DWG-001');
     expect(parsed.l1_customer_name).toBe('南海集团');
   });
 
-  it('D4：9 字段全在 parsed output 里', () => {
+  it('D4：10 字段全在 parsed output 里', () => {
     const parsed = deliveryOrderDetailSchema.parse(makeBaseDetail());
     expect(Object.keys(parsed).sort()).toEqual(
       [
@@ -460,6 +477,7 @@ describe('deliveryOrderDetailSchema（下钻行 9 字段）', () => {
         'name',
         'l1_customer_name',
         'customer_name',
+        'customer_path',
         'status',
         'planned_delivery_date',
         'system_delivery_date',
@@ -473,6 +491,7 @@ describe('deliveryOrderDetailSchema（下钻行 9 字段）', () => {
         serial_no: null,
         l1_customer_name: null,
         customer_name: null,
+        customer_path: null,
         system_delivery_date: null,
       }),
     );

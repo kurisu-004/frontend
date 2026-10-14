@@ -68,7 +68,7 @@ import { useApplicantSearch } from '@/composables/useApplicantSearch';
 import { qk } from '@/composables/queries/keys';
 import type { PartListItem } from '@/types/parts';
 import type { Applicant } from '@/types/applicant';
-import type { CustomerCascaderNode } from '@/composables/useCustomerTree';
+import type { CustomerTreeNode } from '@/api/customer.tree';
 
 /** 2026-08-22：行内编辑缓冲区 shape。 */
 export interface EditBuffer {
@@ -99,7 +99,7 @@ export interface UsePartInlineEditDeps {
    *  本 composable 2026-10-02 起不再就地写行对象，写完一律走
    *  `qc.invalidateQueries({queryKey: qk.partsPrefix})` 让后端数据回流。 */
   items: ComputedRef<PartListItem[]>;
-  customerTree: Ref<CustomerCascaderNode[]>;
+  customerTree: Ref<CustomerTreeNode[]>;
   /** MANAGER / CLERK 行内编辑可见 */
   canEdit: boolean;
   /** 是否处于批量模式（双击行不进编辑） */
@@ -151,10 +151,12 @@ export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEdi
   } = useApplicantSearch({
     resolveRootCustomerId: (pickedId: string | null): string | null => {
       if (!pickedId) return null;
-      const walk = (nodes: CustomerCascaderNode[]): string | null => {
+      const walk = (nodes: CustomerTreeNode[]): string | null => {
         for (const n of nodes) {
           if (String(n.id) === pickedId) return String(n.id);
-          const found = walk(n.children ?? []);
+          // 2026-10-17：节点类型收紧成 CustomerTreeNode（children 恒为数组），
+          // 旧形态里的 `n.children ?? []` 兜底不再需要。
+          const found = walk(n.children);
           if (found) return found;
         }
         return null;
@@ -167,16 +169,16 @@ export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEdi
   function resolveRootCustomerForRow(row: PartListItem): string | null {
     const name = row.customer_name;
     if (!name) return null;
-    const walk = (nodes: CustomerCascaderNode[], rootId: string): string | null => {
+    const walk = (nodes: CustomerTreeNode[], rootId: string): string | null => {
       for (const n of nodes) {
         if (n.name === name) return rootId;
-        const found = walk(n.children ?? [], rootId);
+        const found = walk(n.children, rootId);
         if (found !== null) return found;
       }
       return null;
     };
     for (const root of deps.customerTree.value) {
-      const found = walk(root.children ?? [], String(root.id));
+      const found = walk(root.children, String(root.id));
       if (found !== null) return found;
     }
     return null;

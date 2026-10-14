@@ -26,6 +26,7 @@ import {
 } from 'element-plus';
 import ColumnFilterPopover from '@/components/ColumnFilterPopover.vue';
 import type { ColumnDef } from '@/composables/useColumnVisibility';
+import { renderCustomerCell } from '@/utils/elTableCell';
 import type {
   OutsourceDateRangeFilter,
   OutsourceNativeBoolFilter,
@@ -244,8 +245,15 @@ export function buildOutsourceSentPartColumnDefs(
               }),
           },
         ),
-      cellRender: ({ row }) =>
-        h('span', null, (row as OutsourceSentPartItemSchema).customer_path ?? '—'),
+      cellRender: ({ row }) => {
+        const r = row as OutsourceSentPartItemSchema;
+        // 2026-10-17 客户无限层级：主行读后端下发的 `customer_path`（第 2 层到叶子、
+        // 不含 L1）。⚠️ 本 VO **不带 L1 字段** ⇒ 不出次行。
+        // ⚠️ **表头 hint 刻意不改**（仍是「只判零件直属客户等值」）：筛选语义与展示形态
+        // 是两回事 —— 本页判的是零件的直属客户是否**恰好等于**选中节点，不是子树包含。
+        // 把 hint 跟着展示一起改成「子树」会直接把这页的筛选语义讲错。
+        return renderCustomerCell({ path: r.customer_path });
+      },
     },
 
     // 4. 外协工序（`process_name` + `process_id` 筛选）
@@ -495,9 +503,6 @@ function ElSelectLike(props: {
         else props.onPick(String(v));
       },
     },
-    () =>
-      props.options.map((o) =>
-        h(ElOption, { key: o.value, label: o.label, value: o.value }),
-      ),
+    () => props.options.map((o) => h(ElOption, { key: o.value, label: o.label, value: o.value })),
   );
 }

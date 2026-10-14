@@ -63,7 +63,9 @@
     <ul class="orphan-list">
       <li v-for="f in orphanFileRefs" :key="f.client_ref">
         <code>{{ f.original_filename }}</code>
-        <span class="orphan-meta">（{{ f.kind ?? 'unknown' }} · {{ ((f.file_size ?? 0) / 1024).toFixed(1) }} KB）</span>
+        <span class="orphan-meta"
+          >（{{ f.kind ?? 'unknown' }} · {{ ((f.file_size ?? 0) / 1024).toFixed(1) }} KB）</span
+        >
       </li>
     </ul>
     <p class="orphan-hint">
@@ -307,13 +309,16 @@ import type {
   CosUploadGrant,
 } from '@/components/CosUploader/useCosUploader';
 import type { Applicant } from '@/types/applicant';
+// 2026-10-17（客户无限层级改造）：cascader options 改吃 buildCustomerTree 的产物
+// （任意深度；每级带 customer_path），不再只透 id / name 两字段。
+import type { CustomerTreeNode } from '@/api/customer.tree';
 import PartEntryFormDialog from './PartEntryFormDialog.vue';
 
 const props = defineProps<{
   previewDescCol: number;
   addDlg: { width: string | number; top: string; fullscreen: false };
   previewDlg: { width: string | number; top: string; fullscreen: false };
-  customerTree: { id: string; name: string; children?: { id: string; name: string }[] }[];
+  customerTree: CustomerTreeNode[];
   applicantLoading: boolean;
   querySearch: (queryString: string, cb: (items: Applicant[]) => void) => void;
   staged: StagedEntry[];

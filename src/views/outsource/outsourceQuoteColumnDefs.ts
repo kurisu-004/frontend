@@ -22,6 +22,7 @@ import { h } from 'vue';
 import { ElInput, ElLink, ElOption, ElSelect, ElTag, ElTreeSelect } from 'element-plus';
 import ColumnFilterPopover from '@/components/ColumnFilterPopover.vue';
 import type { ColumnDef } from '@/composables/useColumnVisibility';
+import { renderCustomerCell } from '@/utils/elTableCell';
 import {
   OUTSOURCE_QUOTE_STATUS_LABEL,
   OUTSOURCE_QUOTE_STATUS_TAG,
@@ -109,8 +110,7 @@ export function buildOutsourceQuoteColumnDefs(
       sortable: 'custom',
       showOverflowTooltip: true,
       align: 'center',
-      cellRender: ({ row }) =>
-        h('span', null, (row as OutsourceQuoteSchema).part_serial_no || '—'),
+      cellRender: ({ row }) => h('span', null, (row as OutsourceQuoteSchema).part_serial_no || '—'),
     },
 
     // 2. 图号（表头筛选 + 点击预览图纸）
@@ -278,10 +278,8 @@ export function buildOutsourceQuoteColumnDefs(
         ]),
       cellRender: ({ row }) => {
         const r = row as OutsourceQuoteSchema;
-        return h(
-          ElTag,
-          { type: statusTagType(r.status), effect: 'plain', size: 'small' },
-          () => statusLabel(r.status),
+        return h(ElTag, { type: statusTagType(r.status), effect: 'plain', size: 'small' }, () =>
+          statusLabel(r.status),
         );
       },
     },
@@ -301,7 +299,7 @@ export function buildOutsourceQuoteColumnDefs(
             label: '客户',
             active: customerFilter.active.value,
             width: 280,
-            hint: '选一级客户自动级联其下二级客户（后端按客户子树展开）',
+            hint: '选中任一层级的客户，自动包含它与其下全部子客户（后端按客户子树展开）',
             visible: customerFilter.visible.value,
             'onUpdate:visible': (v: boolean) => {
               customerFilter.visible.value = v;
@@ -334,9 +332,10 @@ export function buildOutsourceQuoteColumnDefs(
         ),
       cellRender: ({ row }) => {
         const r = row as OutsourceQuoteSchema;
-        return r.customer_path
-          ? h('span', null, r.customer_path)
-          : h('span', { class: 'muted' }, '—');
+        // 2026-10-17 客户无限层级：主行读后端下发的 `customer_path`（第 2 层到叶子、
+        // 不含 L1）。⚠️ 本 VO **不带 L1 字段**，所以这里不传 `l1` ⇒ 不出次行。
+        // 想让这里也有 L1 次行，需要后端在报价一览的行 VO 上补一个根客户名字段。
+        return renderCustomerCell({ path: r.customer_path });
       },
     },
   ];

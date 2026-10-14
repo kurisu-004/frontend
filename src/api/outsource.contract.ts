@@ -100,7 +100,7 @@ export interface OutsourceQueueCompanyDto {
 }
 
 /** `OutsourceQueueProcessDetailDto.items[]` 元素（rust OutsourceQueueCandidate）。
- *  26 字段。行粒度 = 「可发送候选批次 × 该外协工序」，发送侧需要的锚都在这里：`version`
+ *  27 字段。行粒度 = 「可发送候选批次 × 该外协工序」，发送侧需要的锚都在这里：`version`
  *  （OCC）、`send_mode`、`outsource_company_id` / `quote_id`（APPROVAL 路径）、
  *  `company_options`（DIRECT 路径的公司下拉源）。
  *
@@ -129,9 +129,18 @@ export interface OutsourceQueueCandidateDto {
    *  左侧 4px 竖条只看它（语义见 `src/types/batchCard.ts`）。右列在途行
    *  （`OutsourceQueueHeldBatchDto`）**没有**对应字段：外协收发阶段不判链。 */
   has_process_chain: boolean;
-  /** `customer_name` = L2 客户名（叶子），`parent_customer_name` = L1 客户名（集团）。 */
+  /** 客户三字段（2026-10-17 客户无限层级后）：`customer_name` = 本节点单段名、
+   *  `parent_customer_name` = **根 L1** 名（改前是「直接父名」，语义已破坏性变更）、
+   *  `customer_path` = 第 2 层到叶子的 ` / ` 拼接（不含 L1）。 */
   customer_name: string | null;
   parent_customer_name: string | null;
+  /** 2026-10-17 新增（客户无限层级改造）：第 2 层到叶子的名称 ` / ` 拼接、**不含 L1**。
+   *  **必填键、值非 null**（后端是 `String`，客户行解析不出时落空串）—— 与守门 schema
+   *  `outsourceQueueCandidateSchema` 的同名声明逐字一致，两处都要改。⚠️ 部署顺序：后端
+   *  必须先上，否则 `useOutsourceQueueProcessQuery` 的 queryFn parse 抛 ZodError ⇒ 整个
+   *  单工序看板（含公司列）全空；反过来（漏声明）parse 全绿、客户行静默退回单段名。
+   *  卡片 tooltip 的空串兜底在适配层 `outsourceItemToCard.ts`（`|| customer_name`）。 */
+  customer_path: string;
   /** `t_shelf.code`；批次未上架时 null。 */
   shelf_code: string | null;
   /** `t_part_batch.current_holder_id`（批次所在货架 id）—— 判「该行能否发送」的数据源；
@@ -156,7 +165,7 @@ export interface OutsourceQueueCandidateDto {
 }
 
 /** `OutsourceQueueCompanyDto.held_batches[]` 元素（rust OutsourceQueueHeldBatch）。
- *  22 字段。
+ *  23 字段。
  *
  *  `location` 锁成字面量：在途批次必然在外协公司手上（恒 `"OUTSOURCE_COMPANY"`）。 */
 export interface OutsourceQueueHeldBatchDto {
@@ -173,8 +182,11 @@ export interface OutsourceQueueHeldBatchDto {
   system_delivery_date: string | null;
   planned_delivery_date: string | null;
   is_urgent: boolean;
+  /** 客户三字段，语义同 `OutsourceQueueCandidateDto` 的同名三条（2026-10-17 起
+   *  `parent_customer_name` = 根 L1 名、`customer_path` 必填非 null）。 */
   customer_name: string | null;
   parent_customer_name: string | null;
+  customer_path: string;
   applicant_name: string | null;
   location: 'OUTSOURCE_COMPANY';
   note: string | null;

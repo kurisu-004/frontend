@@ -12,6 +12,7 @@
 import { h } from 'vue';
 import { ElTag } from 'element-plus';
 import type { ColumnDef } from '@/composables/useColumnVisibility';
+import { renderCustomerCell } from '@/utils/elTableCell';
 import type { DeliveryNoteStatus } from '@/types/deliveryNote';
 import { DELIVERY_NOTE_STATUS_LABEL, DELIVERY_NOTE_STATUS_TAG } from '@/types/deliveryNote';
 import type { DeliveryNoteItemData } from './composables/deliveryNoteSchema';
@@ -35,9 +36,11 @@ export type DeliveryNoteRow = DeliveryNoteItemData;
 //      deliveryNotePrintColumnDefs::printColumnOrderListKey）。老版本那条单序列
 //      `print_preview_dialog_columnOrder` 就此作废、**不可迁移** —— 一个序列表达不了
 //      N 张表的列顺序。
-//   2. 「分厂」列的 key 是老快照里的 `customer_name`（行数据字段叫 `l2_customer`，
-//      渲染 / prop 取后者）。曾一度改成 `l2_customer`，等于让所有老用户这列的显隐设置
-//      作废，已回滚；key ≠ prop 是这里的刻意形态。
+//   2. 送货单打印预览那张表的客户列 key 是老快照里的 `customer_name`（行数据字段叫
+//      `l2_customer`，渲染 / prop 取后者）。曾一度改成 `l2_customer`，等于让所有老用户
+//      这列的显隐设置作废，已回滚；key ≠ prop 是这里的刻意形态。
+//      （2026-10-17：该列的 **label** 已从「分厂」改成「客户」—— 客户树放开任意深度后
+//      「分厂」不再是固定的那一层。label 不进任何快照，改它零风险；key 一律不动。）
 // （2026-10-08：用 `//` 块而非 JSDoc —— 这段登记是模块级约定，不宿主于任何单个导出物；
 //  写成 `/** */` 会在 IDE 里成为悬空的孤立注释。）
 // ============================================================================
@@ -70,7 +73,13 @@ export function buildDeliveryNoteColumnDefs(): ColumnDef[] {
       align: 'center',
       cellRender: (ctx) => {
         const r = row(ctx);
-        return h('span', null, r.customer_path ?? r.customer_name ?? '—');
+        // 2026-10-17 客户无限层级：主行读后端下发的 `customer_path`（第 2 层到叶子、
+        // 不含 L1）。送货单的 `customer_name` 是**单据归属的 L1 客户名**（`customer_id`
+        // 那一列的注释写明「单据归属的 L1 客户 id」），所以它是这里的 L1 次行。
+        // ⚠️ 刻意不把 `customer_name` 也当「单段名兜底」传进去：送货单本体没有「本节点
+        // 单段名」这个概念，`customer_path` 为空时让 L1 顶上主行（渲染器规则 3）比退化成
+        // 一个孤零零的 L1 名更符合「这一格至少要有个客户名」的预期。
+        return renderCustomerCell({ path: r.customer_path, l1: r.customer_name });
       },
     },
     {

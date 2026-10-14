@@ -16,7 +16,7 @@
 //     装配件表（独立的 describe 见下方「跨集合作用域」）。
 // @vitest-environment happy-dom
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, ref } from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 import { readFileSync } from 'node:fs';
@@ -145,6 +145,9 @@ function plusDays(iso: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+// 2026-10-17（客户无限层级改造）：Customer 新增必填 customer_path（口径：第 2 层到
+// 叶子用 ` / ` 拼接、**不含 L1**；根节点等于自己的 name）。本 fixture 只有两层，
+// 于是根与二级节点的 customer_path 都等于各自 name —— 不动 parent_name / 其它逻辑。
 function customer(id: string, name: string, parentId: string | null): Customer {
   return {
     id,
@@ -152,6 +155,7 @@ function customer(id: string, name: string, parentId: string | null): Customer {
     parent_id: parentId,
     parent_name: null,
     serial_prefix: null,
+    customer_path: name,
     version: 1,
     created_at: '',
     updated_at: '',
@@ -959,6 +963,207 @@ describe('usePartBatchPdf：装配件整套价的回填口径（只认顶层图�
     expect(asm.children.map((c) => c.drawing_no)).toEqual([
       EXCEL_ROW_ASM.drawingNo,
       EXCEL_ROW_ASM.drawingNo,
+    ]);
+
+    w.unmount();
+  });
+});
+
+// ============================================================================
+// 2026-10-17（客户无限层级改造）：按部门名反查客户 id + 行内列选的叶子候选。
+//
+// 改前口径（两层假设）：「Excel 的申请人所在一级部门名称」只在所选 L1 的**直接子**里
+// 精确匹配，命中多条时 `Array.find` **取第一个**。任意深度下这两条都是错的：
+//   - 部门名可能落在第 3 / 4 层（Excel 写的「一车间」不是分厂），直接子里根本找不到；
+//   - 同名部门跨分支时「取第一个」会把零件挂到**另一个部门**（错数据比空值危险）。
+// 改后口径：整棵子树里按 name 匹配、**只认叶子**（单据只能挂叶子）、命中数 ≠ 1 一律
+// 返回 null 让该行留空待手选。
+// ============================================================================
+
+/** 深度 ≥ 4 的客户树（customer_path 按后端口径：第 2 层到叶子 ` / ` 拼接、不含 L1）。 */
+function deepCustomer(
+  id: string,
+  name: string,
+  parentId: string | null,
+  customerPath: string,
+): Customer {
+  return {
+    id,
+    name,
+    parent_id: parentId,
+    parent_name: null,
+    serial_prefix: null,
+    customer_path: customerPath,
+    version: 1,
+    created_at: '',
+    updated_at: '',
+  };
+}
+
+/**
+ * 测试集团
+ *   ├ 甲分厂
+ *   │   ├ 一车间
+ *   │   │   ├ 六厂          ← 深度 4 叶子（ASM_PDF 的 Excel 部门名）
+ *   │   │   └ 冲压班组      ← 深度 4 叶子
+ *   │   └ 二车间            ← 深度 3 叶子
+ *   └ 乙分厂
+ *       └ 镀膜厂            ← 深度 3 叶子（PART_PDF 的 Excel 部门名）
+ *
+ * 甲分厂 / 一车间 / 乙分厂都是**中间层**（有子节点）⇒ 业务单据不能挂它们。
+ */
+function deepTree(): Customer[] {
+  return [
+    deepCustomer('c-root', '测试集团', null, '测试集团'),
+    deepCustomer('c-f1', '甲分厂', 'c-root', '甲分厂'),
+    deepCustomer('c-f1-w1', '一车间', 'c-f1', '甲分厂 / 一车间'),
+    deepCustomer('c-f1-w1-b1', '六厂', 'c-f1-w1', '甲分厂 / 一车间 / 六厂'),
+    deepCustomer('c-f1-w1-b2', '冲压班组', 'c-f1-w1', '甲分厂 / 一车间 / 冲压班组'),
+    deepCustomer('c-f1-w2', '二车间', 'c-f1', '甲分厂 / 二车间'),
+    deepCustomer('c-f2', '乙分厂', 'c-root', '乙分厂'),
+    deepCustomer('c-f2-w1', '镀膜厂', 'c-f2', '乙分厂 / 镀膜厂'),
+  ];
+}
+
+/** deepTree + 另一个分支下的同名叶子「镀膜厂」⇒ Excel 部门名出现歧义。 */
+function deepTreeWithDuplicateDumu(): Customer[] {
+  return [
+    ...deepTree(),
+    deepCustomer('c-f3', '丙分厂', 'c-root', '丙分厂'),
+    deepCustomer('c-f3-w1', '镀膜厂', 'c-f3', '丙分厂 / 镀膜厂'),
+  ];
+}
+
+/** deepTree，但「镀膜厂」自己还有子节点（中间层）⇒ 单据不能挂它。 */
+function deepTreeWithDumuAsBranch(): Customer[] {
+  return [
+    ...deepTree(),
+    deepCustomer('c-f2-w1-b1', '装配班组', 'c-f2-w1', '乙分厂 / 镀膜厂 / 装配班组'),
+  ];
+}
+
+/** 挂一棵新树（原树会在 afterAll 还原，不影响本文件其它 describe）。 */
+function useCustomerTree(tree: Customer[]): void {
+  customers.value = tree;
+}
+
+describe('usePartBatchPdf：客户任意深度（反查部门名 + 叶子候选）', () => {
+  afterAll(() => {
+    useCustomerTree([
+      customer('c-root', '测试集团', null),
+      customer('c-duqi', '镀膜厂', 'c-root'),
+      customer('c-liuchang', '六厂', 'c-root'),
+      customer('c-bachang', '八厂', 'c-root'),
+    ]);
+  });
+
+  it('行内列选候选 = 所选根子树里的**叶子**（任意深度，中间层不出现在候选里）', () => {
+    useCustomerTree(deepTree());
+    const w = harnessMount();
+    const api = need();
+    api.pdfForm.customerL1Id = 'c-root';
+
+    // 遍历顺序不是契约（显式栈的出栈序），按 id 排序后比集合
+    expect([...api.leafCustomerOptions.value].sort((a, b) => a.id.localeCompare(b.id))).toEqual([
+      { id: 'c-f1-w1-b1', name: '六厂', path: '甲分厂 / 一车间 / 六厂' },
+      { id: 'c-f1-w1-b2', name: '冲压班组', path: '甲分厂 / 一车间 / 冲压班组' },
+      { id: 'c-f1-w2', name: '二车间', path: '甲分厂 / 二车间' },
+      { id: 'c-f2-w1', name: '镀膜厂', path: '乙分厂 / 镀膜厂' },
+    ]);
+    // 中间层（甲分厂 / 一车间 / 乙分厂）一个都不在候选里
+    for (const mid of ['c-f1', 'c-f1-w1', 'c-f2']) {
+      expect(api.leafCustomerOptions.value.some((c) => c.id === mid)).toBe(false);
+    }
+
+    w.unmount();
+  });
+
+  it('没选 L1 时候选为空（不泄漏上一次所选根的子树）', () => {
+    useCustomerTree(deepTree());
+    const w = harnessMount();
+    const api = need();
+    expect(api.leafCustomerOptions.value).toEqual([]);
+    api.pdfForm.customerL1Id = 'c-root';
+    expect(api.leafCustomerOptions.value).toHaveLength(4);
+    w.unmount();
+  });
+
+  it('Excel 部门名命中深度 4 的叶子 ⇒ 回填该叶子（旧的「只看直接子」会失配）', async () => {
+    useCustomerTree(deepTree());
+    mocks.pageCount = 2;
+    const w = harnessMount();
+    await flushPromises();
+    const api = need();
+
+    await setup(api, { pdfName: ASM_PDF, withExcel: true });
+    selectPages(api, 'pdf-1001', 2);
+    await api.mergeSelectedAsAssembly();
+
+    const asm = api.assemblies.value[0];
+    if (!asm) throw new Error('未生成装配件');
+    expect(asm.customer_id).toBe('c-f1-w1-b1');
+    expect(asm.customer_name).toBe(EXCEL_ROW_ASM.deptName);
+
+    w.unmount();
+  });
+
+  it('Excel 部门名命中深度 3 的叶子（独立零件行）⇒ 回填该叶子', async () => {
+    useCustomerTree(deepTree());
+    const w = harnessMount();
+    await flushPromises();
+    const api = need();
+
+    await setup(api, { pdfName: PART_PDF, withExcel: true });
+    const row = api.standaloneParts.value[0];
+    if (!row) throw new Error('未生成独立零件行');
+    expect(row.customer_id).toBe('c-f2-w1');
+    expect(row.customer_name).toBe(EXCEL_ROW_PART.deptName);
+
+    w.unmount();
+  });
+
+  it('同名部门多命中 ⇒ 留空待手选，绝不取第一个（错数据比空值危险）', async () => {
+    useCustomerTree(deepTreeWithDuplicateDumu());
+    const w = harnessMount();
+    await flushPromises();
+    const api = need();
+
+    await setup(api, { pdfName: PART_PDF, withExcel: true });
+    const row = api.standaloneParts.value[0];
+    if (!row) throw new Error('未生成独立零件行');
+    // 「镀膜厂」在乙分厂 / 丙分厂下各有一个 —— 两个都合法，任选其一都是把零件挂到
+    // 别的部门，必须整格留空让用户手选。
+    expect(row.customer_id).toBe('');
+    expect(row.customer_name).toBe('');
+
+    w.unmount();
+  });
+
+  it('Excel 部门名命中的是**中间层** ⇒ 留空（单据只能挂叶子，后端会拒 20104）', async () => {
+    useCustomerTree(deepTreeWithDumuAsBranch());
+    const w = harnessMount();
+    await flushPromises();
+    const api = need();
+
+    await setup(api, { pdfName: PART_PDF, withExcel: true });
+    const row = api.standaloneParts.value[0];
+    if (!row) throw new Error('未生成独立零件行');
+    expect(row.customer_id).toBe('');
+
+    w.unmount();
+  });
+
+  it('同名歧义下：候选列表仍列出两条同名叶子（由用户自己挑那条）', () => {
+    useCustomerTree(deepTreeWithDuplicateDumu());
+    const w = harnessMount();
+    const api = need();
+    api.pdfForm.customerL1Id = 'c-root';
+
+    const paths = api.leafCustomerOptions.value.map((c) => c.path).sort();
+    // 按 code unit 排序后的顺序：丙(U+4E19) < 乙(U+4E59)
+    expect(paths.filter((p) => p.endsWith('镀膜厂'))).toEqual([
+      '丙分厂 / 镀膜厂',
+      '乙分厂 / 镀膜厂',
     ]);
 
     w.unmount();

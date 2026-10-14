@@ -46,6 +46,7 @@ const candidate = {
   has_process_chain: true,
   customer_name: '某某零件厂',
   parent_customer_name: '某某集团',
+  customer_path: '某某分厂 / 某某零件厂',
   shelf_code: 'A-01',
   shelf_id: '5000000000001',
   outsource_company_id: '9000000000001',
@@ -74,6 +75,7 @@ const heldBatch = {
   is_urgent: true,
   customer_name: '某某零件厂',
   parent_customer_name: null,
+  customer_path: '某某分厂 / 某某零件厂',
   applicant_name: null,
   location: 'OUTSOURCE_COMPANY',
   note: null,
@@ -105,8 +107,8 @@ function makeDetail(processId: string) {
   };
 }
 
-const realFetchProcess = vi.fn<(processId: string) => Promise<unknown>>(
-  async (processId) => makeDetail(processId),
+const realFetchProcess = vi.fn<(processId: string) => Promise<unknown>>(async (processId) =>
+  makeDetail(processId),
 );
 
 vi.mock('@/api/outsource', () => ({

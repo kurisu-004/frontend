@@ -118,8 +118,10 @@ const ROW_A: InspectionQueueItem = {
   system_delivery_date: '2026-10-20',
   is_urgent: true,
   customer_id: '9000000000001',
-  customer_name: '二级客户',
+  customer_name: '手机部',
   l1_customer_name: '一级客户',
+  // 2026-10-17 客户无限层级：新增必填 customer_path（第 2 层到叶子、不含 L1）。
+  customer_path: '终端BG / 手机部',
 };
 
 const LIST_RESULT = {
@@ -702,6 +704,7 @@ describe('useInspectionListStore', () => {
           is_urgent: false,
           system_delivery_date: null,
           customer_name: '二级客户',
+          customer_path: '终端BG / 手机部',
           version: 3,
           children: [
             {

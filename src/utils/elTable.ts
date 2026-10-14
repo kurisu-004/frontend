@@ -5,6 +5,11 @@
 // 可拖」）。新增 findElTableHeaderRow 返回 <tr>。
 //
 // 集中 selector 在这里：避免 spread 到各 composable 内部；改 EP 版本时只动一处。
+//
+// 2026-10-17：**单元格渲染层不在这里**，另起 `src/utils/elTableCell.ts`（客户单元格的
+// 两行渲染 `renderCustomerCell`）。本文件只做 DOM 解析、它只产 VNode，混在一起会让上面
+// 那句职责描述变成假描述。指针注释，不做 re-export（沿 CLAUDE.md「域 schema 迁出」的
+// 同款取舍：再导一层没有消费方）。
 
 /** el-table 实际渲染出的 tbody selector（EP 内部结构约定）。 */
 const EL_TABLE_TBODY_SELECTOR = '.el-table__body-wrapper .el-table__body > tbody';

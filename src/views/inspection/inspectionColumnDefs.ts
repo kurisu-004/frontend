@@ -30,6 +30,7 @@ import { ElButton, ElDatePicker, ElInput, ElTreeSelect } from 'element-plus';
 import { RouterLink } from 'vue-router';
 import ColumnFilterPopover from '@/components/ColumnFilterPopover.vue';
 import type { ColumnDef } from '@/composables/useColumnVisibility';
+import { renderCustomerCell } from '@/utils/elTableCell';
 import type { InspectionQueueItem } from '@/api/inspection';
 import type { useInspectionColumnFilters } from './composables/useInspectionColumnFilters';
 
@@ -276,7 +277,7 @@ export function buildInspectionColumnDefs(deps: BuildInspectionColumnDefsDeps): 
       },
     },
 
-    // 7. 客户（表头筛选 + 「L1 / L2」派生展示）
+    // 7. 客户（表头筛选 + 主行 customer_path / 次行 L1）
     //    prop 刻意是 `customer`（不是数据字段 customer_name）—— 排序请求发的仍是
     //    `sort_by=CUSTOMER_NAME`（后端按 c.name 排），映射见 INSPECTION_SORT_PROP_MAP。
     {
@@ -295,7 +296,7 @@ export function buildInspectionColumnDefs(deps: BuildInspectionColumnDefsDeps): 
             label: '客户',
             active: filters.customerFilter.active.value,
             width: 280,
-            hint: '选一级客户自动级联其下二级客户',
+            hint: '选中任一层级的客户，自动包含它与其下全部子客户（后端按客户子树展开）',
             visible: filters.customerFilter.visible.value,
             'onUpdate:visible': (v: boolean) => {
               filters.customerFilter.visible.value = v;
@@ -330,12 +331,16 @@ export function buildInspectionColumnDefs(deps: BuildInspectionColumnDefsDeps): 
         ),
       cellRender: ({ row }) => {
         const r = row as InspectionQueueItem;
-        const l1 = r.l1_customer_name;
-        const name = r.customer_name;
-        if (l1 && name) return h('span', `${l1} / ${name}`);
-        if (name) return h('span', name);
-        if (l1) return h('span', l1);
-        return h('span', { class: 'muted' }, '—');
+        // 2026-10-17 客户无限层级：主行 = 后端下发的 `customer_path`（第 2 层到叶子、
+        // 不含 L1），L1 退成次行小字；空串 / 缺字段退回 `customer_name`。
+        // 改前这里是本域独有的四分支（l1+name / name / l1 / —），现在三条兜底规则
+        // 与其余 7 个列定义共用一份实现（`utils/elTableCell.ts`），其中「只有 L1 时把
+        // L1 顶成主行」正是从这里收敛过去的。
+        return renderCustomerCell({
+          path: r.customer_path,
+          name: r.customer_name,
+          l1: r.l1_customer_name,
+        });
       },
     },
 

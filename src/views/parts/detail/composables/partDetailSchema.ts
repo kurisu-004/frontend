@@ -9,7 +9,7 @@
 // 字段集一律以 backend-rust 的 VO 为准（`src/modules/part/vo/part.rs`、
 // `src/modules/prod/process_chain/vo/process_chain.rs`），不是以「前端以前声明了什么」
 // 为准 —— 前端那份 `PartItem` 曾经是三个不同后端 VO 的联合类型，声明了十几个后端
-// 一个都不返的字段（customer_path / current_holder_display / location / batch_no …），
+// 一个都不返的字段（current_holder_display / location / batch_no …），
 // 消费侧据此渲染出的界面恒为空或恒为兜底文案。这类「字段是假的」只能靠
 // 「以 VO 为准的 schema」当场炸出来，靠人工读类型看不出来。
 //
@@ -28,7 +28,7 @@ import { z } from 'zod';
 import { ORDER_STATUSES } from '@/types/parts';
 
 // ============================================================
-// 1. 零件详情（`GET /api/v2/parts/{part_id}` 的 `PartDetailOut`，28 字段）。
+// 1. 零件详情（`GET /api/v2/parts/{part_id}` 的 `PartDetailOut`，29 字段）。
 //
 // VO 形态是 `#[serde(flatten)] part: TPart` + 3 个注入字段：
 //   - TPart 25 列（id / serial_no / name / drawing_no / applicant_name / quantity /
@@ -36,10 +36,11 @@ import { ORDER_STATUSES } from '@/types/parts';
 //     is_urgent / next_process_id / order_no / system_delivery_date / note /
 //     unit_price / total_price / version / created_at / created_by / updated_at /
 //     updated_by / deleted_at / process_chain_id）；
-//   - service 注入 customer_name / l1_customer_name（客户两级名）与 current_batch_id
+//   - service 注入 customer_name / l1_customer_name / customer_path（客户展示名，
+//     2026-10-17 起由「两级」改成「第 2 层到叶子的路径」）与 current_batch_id
 //     （当前 INSPECTION 批次 id，null = 不在品检中）。
 //
-// key 集合**恰为 28 个**且用 `.strict()`：多一个键即抛 `unrecognized_keys`。这条守卫的
+// key 集合**恰为 29 个**且用 `.strict()`：多一个键即抛 `unrecognized_keys`。这条守卫的
 // 价值在于「后端加字段 / 前端字段名写错」当场炸，而不是 Zod strip 把多出来的键静默
 // 丢掉、页面照常渲染、只是某一列永远是空的。
 //
@@ -105,12 +106,24 @@ export const partDetailSchema = z
     /** 工艺链 id（`t_part.process_chain_id`，逻辑 FK → `t_part_process_chain.id`）；
      *  null = 该工单未制定工序链。 */
     process_chain_id: z.string().nullable(),
-    /** 二级（直接）客户名，service 注入。 */
+    /** 本节点单段客户名，service 注入。 */
     customer_name: z.string().nullable(),
-    /** 一级客户名，service 注入；客户自身就是 L1 时与 `customer_name` 相等。
-     *  ⚠️ 前端详情卡的「客户」行读的是本字段（`PartInfoCard`），**不是**
-     *  `customer_path` —— 后端从来没返过 `customer_path`。 */
+    /** 根（L1）客户名，service 注入；客户自身就是 L1 时与 `customer_name` 相等。
+     *  ⚠️ 2026-10-17 客户无限层级后语义从「直接父名」改成「**根名**」（破坏性变更），
+     *  详情卡不再用它拼路径，改读下面的 `customer_path`。 */
     l1_customer_name: z.string().nullable(),
+    /** 2026-10-17 新增（客户无限层级改造）：第 2 层到叶子的名称用 ` / ` 拼接、**不含 L1**；
+     *  工单所属客户自身即 L1 时等于它自己的名字。
+     *
+     *  ⚠️ **部署顺序：后端必须先上。** 本 schema 是 `.strict()` 且键集合恰为 29 个 ——
+     *  把这个键声明成必填（值可空）之后，后端旧版本不返它 ⇒ parse 抛「缺 key」⇒ **本页
+     *  详情 query 整条进 error**（主卡空白 + 一条 ElMessage.error），与「后端加字段触发
+     *  `unrecognized_keys`」是同一个失败模式、同一条注意事项（见文件头「部署顺序」段）。
+     *  同步点仍是本 schema 一行。
+     *
+     *  空串是**合法值**（客户软删 / 父链成环时后端必填字段落空串），消费侧
+     *  （`PartInfoCard.vue::customerDisplay`）负责兜底退回 `customer_name`。 */
+    customer_path: z.string().nullable(),
     /** 当前 INSPECTION 批次 id；null = 不在品检中。 */
     current_batch_id: z.string().nullable(),
   })

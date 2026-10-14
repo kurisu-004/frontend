@@ -20,9 +20,10 @@ import { z } from 'zod';
 // `GET /prod/batches/repair` 与 `GET /prod/batches/repairing` 继续用那套 28 字段 VO，
 // 两端点的行对象**不可互相 cast** —— 少了 status / location / holder_name 等键。
 //
-// key 集合**恰为 13 个**，且用 `.strict()`：多一个键即抛 `unrecognized_keys`。
+// key 集合**恰为 14 个**，且用 `.strict()`：多一个键即抛 `unrecognized_keys`。
 //   1. 列表页的 7 个数据列：batch_no / serial_no / drawing_no / name / quantity /
-//      system_delivery_date / customer_name（+ l1_customer_name 供客户列派生「父 / 子」）；
+//      system_delivery_date / customer_name（+ l1_customer_name 客户列次行 +
+//      customer_path 主行，后两个都是 2026-10-17 客户无限层级后加的）；
 //   2. 写端点与跳转锚：batch_id（`POST /prod/batches/{batch_id}/…` 路径参数 +
 //      扫码选行标识）、part_id（`/parts/{part_id}` 详情跳转）、version
 //      （`t_part_batch.version`，OCC 锚）、customer_id（客户表头筛选）、is_urgent
@@ -52,7 +53,14 @@ export const inspectionQueueListItemSchema = z
     is_urgent: z.boolean(),
     customer_id: z.string(),
     customer_name: z.string().nullable(),
+    /** 根（L1）客户名，客户列**次行**。⚠️ 2026-10-17 客户无限层级后语义从「直接父名」
+     *  改成「根名」。 */
     l1_customer_name: z.string().nullable(),
+    /** 第 2 层到叶子的客户名，` / ` 拼接（**不含 L1**），客户列**主行**。
+     *  2026-10-17 新增（客户无限层级改造）。⚠️ 部署顺序：后端必须先上 —— 本 schema 是
+     *  `.strict()` 且键集合写死 14 个，声明成必填键之后旧后端不返它 ⇒ parse 抛 ⇒ 本页
+     *  整表空白。空串是合法值（客户软删 / 父链成环）⇒ 展示层兜底退回 `customer_name`。 */
+    customer_path: z.string().nullable(),
   })
   .strict();
 
@@ -86,7 +94,10 @@ export type InspectionQueueListResultData = z.infer<typeof inspectionQueueListRe
 //   - 后端这些 VO 字段都没挂 `skip_serializing_if` ⇒ 键恒在，可空的一律
 //     `.nullable()` 而非 `.optional()`（写成 `.optional()` 会让「后端漏发某个键」静默
 //     通过，UI 的那一列整列失效）；
-//   - `system_delivery_date` 是 `YYYY-MM-DD` 字符串，DB NULL → JSON null，不锁字面量。
+//   - `system_delivery_date` 是 `YYYY-MM-DD` 字符串，DB NULL → JSON null，不锁字面量；
+//   - `customer_path`（2026-10-17 客户无限层级）：零件 / 装配件两个节点都补了这一列，
+//     且**三个节点里只有它是非可空的必填 String**（客户行解析不出时落空串，不是 null）
+//     —— 与待品检队列行那条 `.nullable()` 声明方向相反，别照抄。
 //
 // ⚠️ 两处版本号是**互不相关的两个计数器**，混用必 409：
 //   - `ScanPartOut.version` = `t_part.version`，本页只作展示；
@@ -128,6 +139,14 @@ export const inspectionScanPartSchema = z.object({
   is_urgent: z.boolean(),
   system_delivery_date: z.string().nullable(),
   customer_name: z.string().nullable(),
+  /** 第 2 层到叶子的名称 ` / ` 拼接、**不含 L1**（2026-10-17 客户无限层级，后端
+   *  `ScanPartOut.customer_path: String`）。**必填键、值非 null** —— 客户行解析不出时
+   *  后端落**空串**（合法值，扫码树弹窗的「客户」列由 `utils/elTableCell.ts::
+   *  renderCustomerCell` 兜底退回单段名）。
+   *  ⚠️ **部署顺序：后端必须先上** —— 旧版本不返该键 ⇒ `scanInspection` 的 parse 抛
+   *  ZodError ⇒ 扫码树弹窗整个打不开（扫码是用户触发的单次拉取，没有降级路径）。
+   *  漏声明的后果相反：parse 全绿、客户列静默退回单段名。 */
+  customer_path: z.string(),
   /** `t_part.version`（仅展示；写端点的 OCC 锚是 `children[].version`）。 */
   version: z.number(),
   children: z.array(inspectionScanBatchSchema),
@@ -146,6 +165,8 @@ export const inspectionScanAssemblySchema = z.object({
   is_urgent: z.boolean(),
   system_delivery_date: z.string().nullable(),
   customer_name: z.string().nullable(),
+  /** 同 `inspectionScanPartSchema.customer_path`（口径 / 必填性 / 部署顺序逐字一致）。 */
+  customer_path: z.string(),
 });
 
 export type InspectionScanAssemblyData = z.infer<typeof inspectionScanAssemblySchema>;

@@ -50,6 +50,7 @@ import type { Customer } from '@/api/customer';
 // usePartBatchManual / usePartBatchPdf 的 Ref<Customer[]> 入参在 Vue 3 类型层兼容
 // （ComputedRef 继承 Ref）。
 import { useCustomersQuery } from '@/composables/queries/useCustomersQuery';
+import { rootCustomerIdOf } from '@/api/customer.tree';
 import { useApplicantSearch } from '@/composables/useApplicantSearch';
 import PartBatchManualTab from './components/PartBatchManualTab.vue';
 import PartBatchPdfTab from './components/PartBatchPdfTab.vue';
@@ -72,14 +73,14 @@ watch(
 );
 
 // ============ 申请人搜索（两 Tab 共用 cache） ============
+// 2026-10-17 客户无限层级：根客户解析复用 `api/customer.tree.ts::rootCustomerIdOf`
+// （跨任意深度上溯到 L1）。本文件原先内联了一份「只上溯一层」的副本
+// （`picked.parent_id === null ? picked.id : picked.parent_id`）—— 那是**两层树**下的
+// 等价写法，客户放开任意深度后它把 L4 班组解析成它的 L3 车间，申请人下拉按错的根
+// 过滤（多半直接空）。`usePartBatchShared.ts::resolveRootCustomerId` 走的是同一个
+// 工具函数，两处口径从此只有一条。
 const applicantSearch = useApplicantSearch({
-  resolveRootCustomerId: (pickedId) => {
-    if (!pickedId) return null;
-    const picked = customers.value.find((c) => c.id === pickedId);
-    if (!picked) return null;
-    if (picked.parent_id === null) return picked.id;
-    return picked.parent_id;
-  },
+  resolveRootCustomerId: (pickedId) => rootCustomerIdOf(customers.value, pickedId),
 });
 
 // ============ 当前激活 tab ============

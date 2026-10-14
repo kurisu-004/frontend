@@ -4,9 +4,9 @@
 // src/views/com/delivery/deliveryNoteColumnDefs.ts）。
 //
 // 列可见性快照 key = `print_preview_dialog`（既有值，**不许改** —— 改名义务登记见
-// deliveryNoteColumnDefs.ts 顶部的 `//` 块）。「分厂」列的 key 是 `customer_name`
+// deliveryNoteColumnDefs.ts 顶部的 `//` 块）。客户列的 key 是 `customer_name`
 // （**不是** 行数据字段 `l2_customer`）：该 key 是老版本对话框写进快照的老名字，
-// 改名等于让所有老用户「分厂」列的显隐设置作废。渲染不依赖 key —— cellRender 从
+// 改名等于让所有老用户该列的显隐设置作废。渲染不依赖 key —— cellRender 从
 // `PrintRow.l2_customer` 取值，`prop` 也给的是 `l2_customer`（EP 排序按它）。
 //
 // 列**顺序**快照按分组分片：`print_preview_dialog__<groupKey>`（每张分组表一条序列，
@@ -21,10 +21,17 @@
 // 表头内容 = 列名 + 拖动手柄(16px) + 排序箭头(24px) + `.cell` 左右 padding(24px)，而 EP 的
 // `.cell` 是 `white-space: normal` + `overflow-wrap: break-word` ⇒ 装不下就折行（用户报的
 // 「申请人 / 预估交期 表头换行」）。按上式逐列核对：序号(28+16+24=68 / 实际 72)、
-// 订单号(42+16+24+24=106 / 120)、分厂(28+16+24+24=92 / 140)、申请人(42+16+24+24=106 → **由
-// 100 加宽到 120**)、编码(92 / 130)、名称(92 / 180)、预估交期(56+16+24+24=120 → **由 110
-// 加宽到 130**)、备注(28+16+24=68 / 140)。拖动手柄当前字号 12px（见
+// 订单号(42+16+24+24=106 / 120)、客户(28+16+24+24=92 / 140)、申请人(42+16+24+24=106 → **由
+//   100 加宽到 120**)、编码(92 / 130)、名称(92 / 180)、预估交期(56+16+24+24=120 → **由 110
+//   加宽到 130**)、备注(28+16+24=68 / 140)。拖动手柄当前字号 12px（见
 // components/ColumnDragHandle.vue）；打印表的 nowrap 兜底见 components/PrintGroupTable.vue。
+//
+// —— 2026-10-17 客户无限层级：客户列的**值**从「叶子客户单段名」改成「第 2 层到叶子的
+// ` / ` 路径」（`PrintRow.l2_customer`，见该字段的注释：字段名不许改，是模板占位符
+// `{{l2_customer}}` 钉死的），**label** 同时从「分厂」改成深度无关的「客户」。
+// 本表**刻意保持单行**，不与列表页的客户单元格统一成「主行 + L1 次行」两段 ——
+// 它是「打印成品长什么样」的预览，与导出到 xlsx 的单格文本必须逐字一致；
+// 两段化会让预览与实际打出来的纸对不上。
 
 import { h, type VNode } from 'vue';
 import { ElTag } from 'element-plus';
@@ -76,7 +83,7 @@ export function buildDeliveryNotePrintColumnDefs(): ColumnDef[] {
   }
 
   // 字段顺序 = 初始渲染顺序。**key 与顺序都是快照契约**（见文件头）：
-  // 「分厂」列的 key 是老快照里的 `customer_name`，渲染值取 `l2_customer`。
+  // 客户列的 key 是老快照里的 `customer_name`，渲染值取 `l2_customer`。
   return [
     { key: 'index', label: '序号', width: 72, align: 'center', cellRender: renderIndex },
     {
@@ -91,7 +98,12 @@ export function buildDeliveryNotePrintColumnDefs(): ColumnDef[] {
     },
     {
       key: 'customer_name',
-      label: '分厂',
+      // 2026-10-17 客户无限层级：label 从「分厂」改成深度无关的「客户」——
+      // 任意深度下「分厂」不再是固定的那一层（可以是第 2 层、第 4 层，也可以是孤立的
+      // 一层根）。**改的只有 label**：`key` 仍是老快照里的 `customer_name`，渲染值仍取
+      // `PrintRow.l2_customer`（那个字段名是二进制模板的占位符 `{{l2_customer}}` 钉死的，
+      // 见 deliveryNotePrintRows.ts）。列可见性 / 列顺序快照都按 `key` 存取，label 改名零风险。
+      label: '客户',
       prop: 'l2_customer',
       minWidth: 140,
       sortable: true,
@@ -120,7 +132,14 @@ export function buildDeliveryNotePrintColumnDefs(): ColumnDef[] {
       align: 'center',
       cellRender: ({ row: r }) => h('span', null, row(r).drawing_no || '—'),
     },
-    { key: 'name', label: '名称', minWidth: 180, sortable: true, align: 'center', cellRender: renderName },
+    {
+      key: 'name',
+      label: '名称',
+      minWidth: 180,
+      sortable: true,
+      align: 'center',
+      cellRender: renderName,
+    },
     {
       key: 'system_delivery_date',
       label: '预估交期',
@@ -132,7 +151,8 @@ export function buildDeliveryNotePrintColumnDefs(): ColumnDef[] {
       align: 'center',
       // 展示走 `M月D日`（与导出的送货单一致），排序仍读 `prop` 的 ISO 原值 ——
       // 排序若也按格式化后的串走会跨月错序（`12月1日` 排在 `2月1日` 前）。
-      cellRender: ({ row: r }) => h('span', null, formatDeliveryMonthDay(row(r).system_delivery_date) || '—'),
+      cellRender: ({ row: r }) =>
+        h('span', null, formatDeliveryMonthDay(row(r).system_delivery_date) || '—'),
     },
     {
       key: 'note',

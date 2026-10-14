@@ -32,7 +32,8 @@ import type { AssemblyCreatePayload } from '@/types/assembly';
 const ASM_ID = '1900000000009001';
 const CHILD_IDS = ['1900000000009002', '1900000000009003'];
 
-/** 后端 `AssemblyOut`（19 字段，字段集必须与 assemblyOutSchema 对齐）。 */
+/** 后端 `AssemblyOut`（20 字段，字段集必须与 assemblyOutSchema 对齐）。
+ *  第 20 键 `customer_path` 是 2026-10-17 客户无限层级改造补上的必填串。 */
 function assemblyOut(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: ASM_ID,
@@ -54,6 +55,7 @@ function assemblyOut(over: Record<string, unknown> = {}): Record<string, unknown
     note: null,
     created_at: '2026-10-05T01:00:00Z',
     updated_at: '2026-10-05T01:00:00Z',
+    customer_path: '终端BG / 手机部',
     ...over,
   };
 }

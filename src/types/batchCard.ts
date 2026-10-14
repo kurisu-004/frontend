@@ -81,9 +81,23 @@ export interface BatchCardModel {
   has_process_chain: boolean;
   /** 该批次对应 part 是否已上传 CNC 程序（G 代码，后端 EXISTS 派生）—— body「已编程」tag */
   has_cnc_program: boolean;
-  /** L1 客户名（一级集团，t_customer L1.name） */
+  /** 根客户名（一级集团，t_customer L1.name），tooltip 的一行。 */
   customer_l1: string | null;
-  /** L2 客户名（叶子，t_customer L2.name） */
+  /**
+   * 2026-10-17 客户无限层级改造：本字段的**语义变了**（字段名保持不变，见下）。
+   *
+   * 旧语义 = 「叶子客户的单段名」。新语义 = **第 2 层到叶子的名称用 ` / ` 拼接**
+   * （不含 L1；客户自身即 L1 时等于它自己的名字），与后端 `customer_path` 逐字同口径。
+   *
+   * ⚠️ **字段名 `customer_l2` 是刻意保留的老名字，不改**：它被三个适配层
+   * （`views/production/queue/utils/queueItemToCard.ts` /
+   * `views/outsource/composables/outsourceItemToCard.ts`）与 `BatchCard.vue` 的 tooltip
+   * 消费，改名对用户零收益、对 diff 是纯噪声。无限层级下「L2」这个叫法不再准确 ——
+   * tooltip 那一行的 label 因此从「客户(L2)」改成了「客户」（理由见 `BatchCard.vue`）。
+   *
+   * ⚠️ 只进 tooltip，**不进 body**：卡片 200×96 是硬预算，body 恒 4 行（见 `BatchCard.vue`
+   * 文件头的尺寸预算），新信息一律进 tooltip。
+   */
   customer_l2: string | null;
   /** t_applicant.name 申请人 */
   applicant_name: string | null;

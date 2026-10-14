@@ -8,9 +8,14 @@
 //     `vo/sendable.rs::OutsourceCompanyOption`），故由本文件 import 域内文件。
 //
 // 契约来源：后端 outsource 域「看板三件套」（`/outsource-queue/*`）。**已删除的字段不要
-// 在这里声明**：新契约删掉的 `status_label` / `source_status` / `batch_quantity` /
-// `customer_path` 曾在前端 schema 里存在，跟着一起删掉 —— 留着会让「后端已删」看起来像
-// 「前端漏声明」，两边的漂移方向刚好相反，排查时要来回猜。
+// 在这里声明**：新契约删掉的 `status_label` / `source_status` / `batch_quantity`
+// 曾在前端 schema 里存在，跟着一起删掉 —— 留着会让「后端已删」看起来像「前端漏声明」，
+// 两边的漂移方向刚好相反，排查时要来回猜。
+//
+// ⚠️ **`customer_path` 不在这份清单里，它是 2026-10-17 恢复的必填键**：客户树放开
+// 任意深度后前端拼不出第 3 层及以下（「它只能拿到最后两段名」），由后端按全仓统一口径
+// 下发（第 2 层到叶子、` / ` 拼接、不含 L1；客户行解析不出时落**空串**）。守卫：
+// `__tests__/outsourceQueueSchema.spec.ts` 的 OQ-C7 / OQ-H6（缺键必抛 + parse 后拿得到）。
 //
 // 端点（baseURL `/api/v2`，前缀 `/outsource-queue/*`，**无 alias**）与本文件的覆盖：
 //   GET  /outsource-queue/snapshot          → outsourceQueueSnapshotSchema
@@ -50,7 +55,7 @@
 import { z } from 'zod';
 import { outsourceCompanyOptionSchema } from './outsourceListSchema';
 
-/** 看板左列的一个候选批次卡片（后端 `OutsourceQueueCandidate`）—— 26 字段。
+/** 看板左列的一个候选批次卡片（后端 `OutsourceQueueCandidate`）—— 27 字段。
  *
  *  行粒度 = 「可发送候选批次 × 该外协工序」。发送侧需要的锚都在这里：
  *  `version`（OCC）、`send_mode`（APPROVAL / DIRECT）、`outsource_company_id` /
@@ -87,6 +92,13 @@ export const outsourceQueueCandidateSchema = z.object({
   has_process_chain: z.boolean(),
   customer_name: z.string().nullable(),
   parent_customer_name: z.string().nullable(),
+  /** 第 2 层到叶子的名称 ` / ` 拼接、**不含 L1**（2026-10-17 客户无限层级，后端
+   *  `OutsourceQueueCandidate.customer_path: String`）。**必填键、值非 null** ——
+   *  客户行解析不出（软删 / 父链成环）时后端落**空串**；卡片 tooltip 的兜底由适配层
+   *  `outsourceItemToCard.ts` 的 `|| customer_name` 承担。
+   *  ⚠️ **部署顺序：后端必须先上线** —— 旧版本不返该键 ⇒ 单工序看板（候选池 + 公司列）
+   *  整份 parse 失败全空。漏声明的后果相反：parse 全绿、客户行静默退回单段名。 */
+  customer_path: z.string(),
   shelf_code: z.string().nullable(),
   /** `t_part_batch.current_holder_id`，**非 nullable**：`PENDING` 未上架批次是**空串**
    *  （不是 null）—— 声明成 `.nullable()` 会让「后端返 null」这类漂移静默通过守门，UI
@@ -112,7 +124,7 @@ export const outsourceQueueCandidateSchema = z.object({
 export type OutsourceQueueCandidateData = z.infer<typeof outsourceQueueCandidateSchema>;
 
 /** 看板右列（某公司在某工序在外协）的一个批次卡片（后端 `OutsourceQueueHeldBatch`）
- *  —— 22 字段。随 `outsourceQueueCompanySchema.held_batches` 内联下发。
+ *  —— 23 字段。随 `outsourceQueueCompanySchema.held_batches` 内联下发。
  *
  *  `location` 锁成字面量：在途批次必然在外协公司手上（恒 `"OUTSOURCE_COMPANY"`）。
  *  值恒定就锁死，后端哪天改了值立刻炸而不是静默进 UI。
@@ -138,6 +150,9 @@ export const outsourceQueueHeldBatchSchema = z.object({
   is_urgent: z.boolean(),
   customer_name: z.string().nullable(),
   parent_customer_name: z.string().nullable(),
+  /** 同 `outsourceQueueCandidateSchema.customer_path`（口径 / 必填性 / 部署顺序逐字
+   *  一致）—— 两个 VO 由同一段投影产出，不存在「一边有一边没有」的形态。 */
+  customer_path: z.string(),
   applicant_name: z.string().nullable(),
   location: z.literal('OUTSOURCE_COMPANY'),
   note: z.string().nullable(),

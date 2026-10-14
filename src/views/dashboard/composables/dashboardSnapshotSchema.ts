@@ -63,6 +63,10 @@ export const systemDeliveryOrderSchema = z.object({
   status: z.enum(ORDER_STATUSES),
   system_delivery_date: z.string().nullable(),
   customer_name: z.string().nullable(),
+  /** 2026-10-17 新增（客户无限层级改造）：第 2 层到叶子的名称用 ` / ` 拼接、**不含 L1**。
+   *  ⚠️ 必填键 + 值可空，且**部署顺序：后端必须先上**（理由同 `deliveryOrderDetailSchema`
+   *  的 `customer_path`）。空串是合法值（客户软删 / 父链成环）⇒ 面板要退回 `customer_name`。 */
+  customer_path: z.string().nullable(),
   is_urgent: z.boolean(),
   delivered_quantity: z.number(),
   /** 工单级行类型：PART = t_part 行（件级），ASSEMBLY = t_assembly 行（套级）。 */
@@ -156,8 +160,9 @@ export type UpcomingBucketsData = z.infer<typeof upcomingBucketsSchema>;
 
 /** 2026-10-07：柱状图下钻的行（DeliveryOrderDetail VO，9 字段）。
  *  两列交期恒同时返回（planned_delivery_date 是 NOT NULL 列），倒计列由前端按当前
- *  口径自己选列渲染。客户名两级：l1_customer_name 取上级客户名，叶子无 parent 时
- *  退化为叶子名，保证该列非空。 */
+ *  口径自己选列渲染。
+ *  ⚠️ 2026-10-17 客户无限层级：`l1_customer_name` 语义从「上级客户名」改成「**根 L1 名**」，
+ *  配套新增 `customer_path`（第 2 层到叶子的 ` / ` 拼接、不含 L1）—— 抽屉那列主行读它。 */
 export const deliveryOrderDetailSchema = z.object({
   id: z.string(),
   serial_no: z.string().nullable(),
@@ -165,6 +170,13 @@ export const deliveryOrderDetailSchema = z.object({
   name: z.string(),
   l1_customer_name: z.string().nullable(),
   customer_name: z.string().nullable(),
+  /** 2026-10-17 新增（客户无限层级改造）：第 2 层到叶子的名称用 ` / ` 拼接、**不含 L1**；
+   *  工单所属客户自身即 L1 时等于它自己的名字。
+   *  ⚠️ 声明成**必填键 + 值可空**（不是 `.optional()`）：本 schema 是 strip 模式，写成可选
+   *  会让「后端哪天不发这一列」静默通过、抽屉客户列无声退化成单段名。
+   *  ⚠️ **部署顺序：后端必须先上**（缺键 ⇒ parse 抛 ⇒ 下钻抽屉白屏）。
+   *  空串（客户软删 / 父链成环）是**合法值**，展示层要兜底退回 `customer_name`。 */
+  customer_path: z.string().nullable(),
   status: z.enum(ORDER_STATUSES),
   planned_delivery_date: z.string(),
   system_delivery_date: z.string().nullable(),

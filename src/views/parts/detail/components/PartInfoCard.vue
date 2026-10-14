@@ -196,25 +196,23 @@ watch(
 const descCol = 3;
 
 /**
- * 「客户」行的展示文案：`一级 / 二级` 两级名（2026-10-10 新增）。
+ * 「客户」行的展示文案（2026-10-17 客户无限层级改造后重写）。
  *
- * 2026-10-10 订正：本行原先读 `part.customer_path`，而后端 `PartDetailOut` **从不返**
- * `customer_path`（那是前端早期臆想的字段）⇒ `customer_path` 恒 undefined ⇒
- * 「一级客户名」从来没在详情页显示过。现在改读后端真的注入的两个字段
- * `l1_customer_name` / `customer_name`。
+ * 三个版本，依次说清为什么前两个都不对：
+ *  1. 最初读 `part.customer_path` —— 后端 `PartDetailOut` 从不返它（前端早期臆想的字段），
+ *     恒 undefined，「一级客户名」从来没显示过；
+ *  2. 2026-10-10 改读 `l1_customer_name` + `customer_name` 自己拼 `一级 / 二级` ——
+ *     客户改成任意深度后拼法必然缺层（第 3 层往下的中间节点整片消失）；
+ *  3. 现在读后端新补的 `customer_path`（第 2 层到叶子的 ` / ` 拼接、**不含 L1**）。
  *
- * 三种形态：
- *   - 两级都有且不等 → `一级 / 二级`（客户自身是 L1 时后端返相等的两个值，落到第 2 支）；
- *   - 只有一级（间接挂在别人下面的挂靠工单）→ 只显示一级；
- *   - 都没有 → null，模板落「—」。
+ * 这里**不渲染 L1 次行**（详情卡每行只有「标签 : 值」一格，塞不进两段）：L1 仍在
+ * `l1_customer_name` 里、零件一览的客户列会把它作为次行显示出来。空串 / null 退回
+ * `customer_name`，两者皆空返回空串（模板落「—」）。
  */
 const customerDisplay = computed<string>(() => {
   const p = props.part;
   if (!p) return '';
-  const l1 = p.l1_customer_name?.trim() ?? '';
-  const l2 = p.customer_name?.trim() ?? '';
-  if (l1 && l2) return l1 === l2 ? l1 : `${l1} / ${l2}`;
-  return l1 || l2;
+  return p.customer_path?.trim() || p.customer_name?.trim() || '';
 });
 </script>
 

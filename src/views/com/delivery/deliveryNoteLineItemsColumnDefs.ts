@@ -27,6 +27,7 @@ import { h, type VNode } from 'vue';
 import { ElTag } from 'element-plus';
 import { RouterLink } from 'vue-router';
 import type { ColumnDef } from '@/composables/useColumnVisibility';
+import { renderCustomerCell } from '@/utils/elTableCell';
 import type { OrderStatus } from '@/types/parts';
 import { ORDER_STATUS_LABEL, ORDER_STATUS_TAG_TYPE } from '@/types/parts';
 import type { PartTreeRow } from './utils/deliveryNotePartRows';
@@ -69,8 +70,10 @@ export function buildDeliveryNoteLineItemsColumnDefs(): ColumnDef[] {
     const r = row(ctx);
     if (r.is_asm_row) return h('span', null, '—');
     const st = r.status as OrderStatus;
-    return h(ElTag, { type: ORDER_STATUS_TAG_TYPE[st] ?? 'info', effect: 'plain', size: 'small' }, () =>
-      ORDER_STATUS_LABEL[st] ?? String(r.status),
+    return h(
+      ElTag,
+      { type: ORDER_STATUS_TAG_TYPE[st] ?? 'info', effect: 'plain', size: 'small' },
+      () => ORDER_STATUS_LABEL[st] ?? String(r.status),
     );
   }
 
@@ -105,10 +108,22 @@ export function buildDeliveryNoteLineItemsColumnDefs(): ColumnDef[] {
       align: 'center',
       cellRender: (ctx) => h('span', null, row(ctx).order_no || '—'),
     },
-    { key: 'name', label: '名称', minWidth: 200, showOverflowTooltip: true, sortable: true, align: 'center', cellRender: renderName },
+    {
+      key: 'name',
+      label: '名称',
+      minWidth: 200,
+      showOverflowTooltip: true,
+      sortable: true,
+      align: 'center',
+      cellRender: renderName,
+    },
     {
       key: 'customer',
-      label: '客户（二级）',
+      // 2026-10-17 客户无限层级：label 从「客户（二级）」改成深度无关的「客户」。
+      // 「二级」在任意深度树上直接说谎（客户可能是第 4 层班组，也可能是孤立的
+      // 一层根）。**改的只有 label**：`key` 仍是老快照里的 `customer`（列可见性 /
+      // 列顺序快照契约，见文件头的改名义务登记），改 key 会让老用户的列设置作废。
+      label: '客户',
       prop: 'customer_name',
       minWidth: 160,
       showOverflowTooltip: true,
@@ -116,7 +131,13 @@ export function buildDeliveryNoteLineItemsColumnDefs(): ColumnDef[] {
       align: 'center',
       cellRender: (ctx) => {
         const r = row(ctx);
-        return h('span', null, r.customer_path ?? r.customer_name ?? '—');
+        // 主行 `customer_path`（第 2 层到叶子、不含 L1），次行 `parent_customer_name`
+        // （无限层级后语义 = **根 L1 名**）。
+        return renderCustomerCell({
+          path: r.customer_path,
+          name: r.customer_name,
+          l1: r.parent_customer_name,
+        });
       },
     },
     {
@@ -128,7 +149,14 @@ export function buildDeliveryNoteLineItemsColumnDefs(): ColumnDef[] {
       align: 'center',
       cellRender: (ctx) => h('span', null, row(ctx).applicant_name || '—'),
     },
-    { key: 'quantity', label: '数量', minWidth: 110, sortable: true, align: 'center', cellRender: renderQuantity },
+    {
+      key: 'quantity',
+      label: '数量',
+      minWidth: 110,
+      sortable: true,
+      align: 'center',
+      cellRender: renderQuantity,
+    },
     {
       key: 'request_date',
       label: '请购日期',

@@ -22,16 +22,26 @@
 //   - IC9：has_process_chain（卡片左边框）—— 候选卡透传后端派生列；在途卡恒 false
 //     （在途 DTO 无该字段，且外协收发阶段不判链）。
 //
+// ⚠️ **两个 fixture 一律先过一遍守门 schema**（2026-10-17）：两个 DTO 在生产链路上都由
+// queryFn 层的 `*Schema.parse` 产出，手搓对象等于把最关键的一段（Zod 默认 strip）从测试
+// 里摘掉 —— 漏声明 `customer_path` 时 parse 全绿、值被静默丢掉，适配层于是永远走
+// `customer_path || customer_name` 的右半边，而这个 spec 仍然全绿。过 parse 之后，
+// 「谁把 schema 的声明删了」立刻让本文件变红。
+//
 // 测试策略：纯函数，无 Vue / Query / api 依赖，直接 import 被测模块。
 
 import { describe, expect, it } from 'vitest';
 import { heldBatchToCard, poolCandidateToCard } from '../outsourceItemToCard';
+import {
+  outsourceQueueCandidateSchema,
+  outsourceQueueHeldBatchSchema,
+} from '../outsourceQueueSchema';
 import type {
   OutsourceQueueCandidateDto,
   OutsourceQueueHeldBatchDto,
 } from '@/api/outsource.contract';
 
-const candidateFixture: OutsourceQueueCandidateDto = {
+const candidateFixture: OutsourceQueueCandidateDto = outsourceQueueCandidateSchema.parse({
   version: 3,
   send_mode: 'APPROVAL',
   part_id: '4000000000001',
@@ -46,6 +56,7 @@ const candidateFixture: OutsourceQueueCandidateDto = {
   has_process_chain: true,
   customer_name: '某某零件厂',
   parent_customer_name: '某某集团',
+  customer_path: '某某分厂 / 某某零件厂',
   shelf_code: 'A-01',
   shelf_id: '5000000000001',
   outsource_company_id: '9000000000001',
@@ -58,9 +69,9 @@ const candidateFixture: OutsourceQueueCandidateDto = {
   note: null,
   system_delivery_date: '2026-10-18',
   can_send: true,
-};
+});
 
-const heldBatchFixture: OutsourceQueueHeldBatchDto = {
+const heldBatchFixture: OutsourceQueueHeldBatchDto = outsourceQueueHeldBatchSchema.parse({
   batch_id: '3000000000002',
   part_id: '4000000000002',
   batch_no: 1025,
@@ -73,6 +84,7 @@ const heldBatchFixture: OutsourceQueueHeldBatchDto = {
   is_urgent: true,
   customer_name: '某某零件厂',
   parent_customer_name: null,
+  customer_path: '某某分厂 / 某某零件厂',
   applicant_name: null,
   location: 'OUTSOURCE_COMPANY',
   note: null,
@@ -83,7 +95,7 @@ const heldBatchFixture: OutsourceQueueHeldBatchDto = {
   receive_next_process_name: '外协热处理',
   chain_resolvable: true,
   has_cnc_program: false,
-};
+});
 
 describe('poolCandidateToCard — 左列候选卡 → BatchCardModel', () => {
   it('IC1：逐字段映射正确（batch_no 补 B 前缀，零件字段取 part_* 前缀名）', () => {
@@ -101,9 +113,9 @@ describe('poolCandidateToCard — 左列候选卡 → BatchCardModel', () => {
     expect(card.is_urgent).toBe(false);
     expect(card.has_cnc_program).toBe(true);
     expect(card.has_process_chain).toBe(true);
-    // 客户两级：L1 = parent，L2 = leaf
+    // 客户两级：L1 = 根名，L2 = 第 2 层到叶子的路径
     expect(card.customer_l1).toBe('某某集团');
-    expect(card.customer_l2).toBe('某某零件厂');
+    expect(card.customer_l2).toBe('某某分厂 / 某某零件厂');
     expect(card.applicant_name).toBe('张三');
     expect(card.note).toBeNull();
   });
@@ -173,7 +185,7 @@ describe('heldBatchToCard — 右列在途卡 → BatchCardModel', () => {
     // 在途卡绿边框恒不亮：在途 DTO 无该字段，且适配层刻意不推导（见 IC9b）
     expect(card.has_process_chain).toBe(false);
     expect(card.customer_l1).toBeNull();
-    expect(card.customer_l2).toBe('某某零件厂');
+    expect(card.customer_l2).toBe('某某分厂 / 某某零件厂');
     expect(card.version).toBe(5);
   });
 
@@ -214,5 +226,41 @@ describe('heldBatchToCard — 右列在途卡 → BatchCardModel', () => {
     // 候选行的 location 是货架 code，shelf_id 是批次真实所在货架
     expect(pool.location).toBe('A-01');
     expect(pool.shelf_id).toBe('5000000000001');
+  });
+});
+
+// ============================================================================
+// 客户两字段（2026-10-17 客户无限层级改造）
+// ============================================================================
+
+describe('客户：customer_l1 = 根名，customer_l2 = 第 2 层到叶子的路径', () => {
+  it('O1：两个适配层都优先取 customer_path（不再只写叶子单段名）', () => {
+    const withPath = { customer_path: '终端BG / 手机部 / 影像组' };
+    expect(poolCandidateToCard({ ...candidateFixture, ...withPath }, null).customer_l2).toBe(
+      '终端BG / 手机部 / 影像组',
+    );
+    expect(heldBatchToCard({ ...heldBatchFixture, ...withPath }, null).customer_l2).toBe(
+      '终端BG / 手机部 / 影像组',
+    );
+  });
+
+  // 守的是**漏声明**这一类失败：后端 2026-10-17 把 `customer_path` 恢复成必填 `String`，
+  // 两个 VO 的 schema 一旦漏声明，zod 默认 strip 会在 parse 阶段静默丢掉它 —— 旧版断言
+  // 钉的是「键不存在」这个**错误前提**，于是 strip 发生与否本文件都绿。现在 fixture 过
+  // parse，声明一删：本条与 O1 立刻变红。
+  it('O2：守门 schema 不 strip customer_path（两个 VO 过 parse 后都拿得到值）', () => {
+    expect(candidateFixture.customer_path).toBe('某某分厂 / 某某零件厂');
+    expect(heldBatchFixture.customer_path).toBe('某某分厂 / 某某零件厂');
+    expect('customer_path' in candidateFixture).toBe(true);
+    expect('customer_path' in heldBatchFixture).toBe(true);
+    // 且适配层真的读到了它（不是又退回单段名）
+    expect(poolCandidateToCard(candidateFixture, null).customer_l2).toBe('某某分厂 / 某某零件厂');
+    expect(heldBatchToCard(heldBatchFixture, null).customer_l2).toBe('某某分厂 / 某某零件厂');
+  });
+
+  it('O3：customer_path 为空串（客户软删 / 父链成环）也退回单段名', () => {
+    expect(poolCandidateToCard({ ...candidateFixture, customer_path: '' }, null).customer_l2).toBe(
+      '某某零件厂',
+    );
   });
 });

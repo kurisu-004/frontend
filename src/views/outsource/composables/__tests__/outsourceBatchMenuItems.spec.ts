@@ -76,6 +76,7 @@ function approvalCandidate(
     is_urgent: false,
     has_process_chain: false,
     customer_name: null,
+    customer_path: '某某分厂 / 某某零件厂',
     parent_customer_name: null,
     shelf_code: 'SH-A01',
     shelf_id: '5000000000001',

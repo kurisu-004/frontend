@@ -26,7 +26,7 @@ export interface DeliveryGroupCreateRequest {
   /** L1 root id（雪花字符串）。 */
   customer_id: string;
   name: string;
-  /** L2 成员 id 列表（service 端会校验全部属于该 L1）。 */
+  /** 成员客户 id 列表（service 端校验每个都是该 L1 的后代、且不是 L1 自身）。 */
   member_customer_ids: string[];
 }
 
@@ -43,7 +43,7 @@ export interface DeliveryGroupVersionRequest {
   version: number;
 }
 
-/** 拉某个 L1 客户下的全部分组 + 未分组 L2 列表。
+/** 拉某个 L1 客户下的全部分组 + 未分组客户列表（未分组集 = 该 L1 的全部后代里没进任何分组的）。
  *
  * ⚠️ `customer_id` 必须是单值 string：axios 的 params 会把它序列化成
  * `?customer_id=...`；传数组会被展成 `?customer_id=&customer_id=&...`。 */
@@ -54,7 +54,7 @@ export async function listDeliveryGroups(l1Id: string): Promise<DeliveryGroupLis
   return resp.data;
 }
 
-/** 新建分组（service 端校验 name 不重复、member 全部属于 L1）。 */
+/** 新建分组（service 端校验 name 不重复、member 全部是该 L1 的后代）。 */
 export async function createDeliveryGroup(
   payload: DeliveryGroupCreateRequest,
 ): Promise<DeliveryGroupData> {

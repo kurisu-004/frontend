@@ -9,7 +9,11 @@
 
 import { z } from 'zod';
 
-/** 分组成员：L2 客户引用（雪花 id + 名称）。 */
+/** 分组成员：客户引用（雪花 id + 名称）。
+ *
+ *  成员可以是该 L1 的**任意后代**（后端 `validate_group_members` 走 `subtree_ids`，
+ *  而 `subtree_ids` 含自身故显式剔除 L1 —— 分组键就是它），不再限于「L1 的直接子」；
+ *  `customer_name` 是后端 `paths_of` 给的单段名（不含根）。 */
 export const deliveryGroupMemberSchema = z.object({
   customer_id: z.string(),
   customer_name: z.string(),
@@ -28,7 +32,7 @@ export const deliveryGroupSchema = z.object({
 
 export type DeliveryGroupData = z.infer<typeof deliveryGroupSchema>;
 
-/** 未被任何分组覆盖的 L2 客户。 */
+/** 未被任何分组覆盖的客户（= 该 L1 的全部后代里没进任何分组的那些）。 */
 export const ungroupedCustomerSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -36,7 +40,7 @@ export const ungroupedCustomerSchema = z.object({
 
 export type UngroupedCustomerData = z.infer<typeof ungroupedCustomerSchema>;
 
-/** `GET /com/delivery/group?customer_id=` 响应：`groups` + 未分组 L2 列表。 */
+/** `GET /com/delivery/group?customer_id=` 响应：`groups` + 未分组客户列表。 */
 export const deliveryGroupListResultSchema = z.object({
   groups: z.array(deliveryGroupSchema),
   ungrouped_customers: z.array(ungroupedCustomerSchema),

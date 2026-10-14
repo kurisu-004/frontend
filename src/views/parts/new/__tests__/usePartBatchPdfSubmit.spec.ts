@@ -178,6 +178,9 @@ const Harness = defineComponent({
           parent_id: null,
           parent_name: null,
           serial_prefix: null,
+          // 2026-10-17（客户无限层级改造）：新增必填 customer_path；一级客户按口径
+          // 等于自己的 name。
+          customer_path: '集团',
           version: 1,
           created_at: '',
           updated_at: '',

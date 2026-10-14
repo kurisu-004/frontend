@@ -23,6 +23,9 @@
 //   - Q-H3：held / 候选池行缺 has_process_chain → 抛错（卡片左边框唯一语义源）。
 //   - Q-H2：held 缺 version → 抛错（召回 / move 的 OCC 锚）。
 //   - Q-I1：queuePoolItemSchema 缺 shelf_id → 抛错（move `from.shelf_id` 唯一来源）。
+//   - Q-CP1：三个行 VO（held / 候选池 / 待下发）的 `customer_path` **parse 后拿得到**、
+//           缺键必抛（2026-10-17 客户无限层级；漏声明 ⇒ strip ⇒ 卡片 tooltip 静默退回
+//           单段名，是本仓「守门零信号」的典型样本）。
 //   - Q-PB1：queuePendingBatchSchema 的 planned_delivery_date 是**非 null 字符串**
 //           （后端对 NULL 兜底 `1970-01-01`）；给 null 必须抛错，否则前端会把
 //           「无计划交期」与兜底值混为一谈。
@@ -69,7 +72,7 @@ import {
   takenItemSchema,
 } from '../productionQueueSchema';
 
-/** QueueHeldBatch 真实形态（18 字段全给齐）。 */
+/** QueueHeldBatch 真实形态（19 字段全给齐）。 */
 function makeHeld(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     batch_id: '2100000000001',
@@ -86,6 +89,7 @@ function makeHeld(over: Record<string, unknown> = {}): Record<string, unknown> {
     has_cnc_program: true,
     customer_name: '法拉电子',
     parent_customer_name: null,
+    customer_path: '母排厂一组',
     applicant_name: '张三',
     location: 'WORKER',
     note: '加急',
@@ -108,7 +112,7 @@ function makeWorker(held: Record<string, unknown>[] = [makeHeld()]): Record<stri
   };
 }
 
-/** QueuePoolItem 真实形态（19 字段全给齐）。 */
+/** QueuePoolItem 真实形态（20 字段全给齐）。 */
 function makePoolItem(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     batch_id: '3000000000001',
@@ -121,6 +125,7 @@ function makePoolItem(over: Record<string, unknown> = {}): Record<string, unknow
     system_delivery_date: '2026-10-20',
     customer_name: '某某零件厂',
     parent_customer_name: '某某集团',
+    customer_path: '某某分厂 / 某某零件厂',
     applicant_name: '张三',
     shelf_id: '5000000000001',
     shelf_code: 'A-01',
@@ -134,7 +139,7 @@ function makePoolItem(over: Record<string, unknown> = {}): Record<string, unknow
   };
 }
 
-/** QueuePendingBatch 真实形态（15 字段，planned_delivery_date 非 null）。 */
+/** QueuePendingBatch 真实形态（18 字段，planned_delivery_date 非 null）。 */
 function makePendingBatch(): Record<string, unknown> {
   return {
     batch_id: '3000000000009',
@@ -148,6 +153,7 @@ function makePendingBatch(): Record<string, unknown> {
     system_delivery_date: null,
     customer_name: null,
     parent_customer_name: null,
+    customer_path: '',
     applicant_name: null,
     is_urgent: false,
     note: null,
@@ -270,8 +276,9 @@ describe('productionQueueSchema — 持有批次 / 候选池行', () => {
     const noPool: Record<string, unknown> = { ...makePoolItem() };
     delete noPool.has_process_chain;
     expect(() => queuePoolItemSchema.parse(noPool)).toThrow();
-    expect(queuePoolItemSchema.parse(makePoolItem({ has_process_chain: false })).has_process_chain)
-      .toBe(false);
+    expect(
+      queuePoolItemSchema.parse(makePoolItem({ has_process_chain: false })).has_process_chain,
+    ).toBe(false);
     // 非布尔形态（后端漏 serialize 成 0 / 1 或字符串）必须被拒
     expect(() =>
       queuePoolItemSchema.parse({ ...makePoolItem(), has_process_chain: 'true' }),
@@ -328,6 +335,47 @@ describe('productionQueueSchema — 待下发（GET /queue/pending）', () => {
     expect(() =>
       queuePendingBatchSchema.parse({ ...makePendingBatch(), current_process_step_id: null }),
     ).toThrow();
+  });
+});
+
+// ============================================================================
+// customer_path（2026-10-17 客户无限层级）—— 三个行 VO 各一条
+// ============================================================================
+
+describe('productionQueueSchema — customer_path（三个行 VO 逐条守）', () => {
+  // 这条断言守的是**漏声明**（不是错声明）：三个 VO 都是后端 `String` 必填键，前端 schema
+  // 一旦漏声明，zod 默认 strip 会把它静默丢掉、parse 照过 ⇒ `utils/queueItemToCard.ts` 的
+  // `customer_path || customer_name` 恒走右半边，卡片 tooltip 的「客户」行永远退回单段名，
+  // 且没有任何报错。守门与展示层之间的这种「静默降级」是本仓最难查的一类事故，
+  // 所以这里三条 VO 各钉两件事：parse 后**拿得到值** + 缺**键**必抛。
+  it('Q-CP1a：queueHeldBatchSchema —— parse 后拿得到值，缺键抛 ZodError', () => {
+    expect(queueHeldBatchSchema.parse(makeHeld()).customer_path).toBe('母排厂一组');
+    const noPath: Record<string, unknown> = { ...makeHeld() };
+    delete noPath.customer_path;
+    expect(() => queueHeldBatchSchema.parse(noPath)).toThrow();
+  });
+
+  it('Q-CP1b：queuePoolItemSchema —— parse 后拿得到值，缺键抛 ZodError', () => {
+    expect(queuePoolItemSchema.parse(makePoolItem()).customer_path).toBe('某某分厂 / 某某零件厂');
+    const noPath: Record<string, unknown> = { ...makePoolItem() };
+    delete noPath.customer_path;
+    expect(() => queuePoolItemSchema.parse(noPath)).toThrow();
+  });
+
+  it('Q-CP1c：queuePendingBatchSchema —— 空串是合法值（客户软删 / 父链成环），缺键抛', () => {
+    // 后端解析不出客户行时落空串而不是 null ⇒ 空串必须放行（展示层兜底退回单段名）。
+    expect(queuePendingBatchSchema.parse(makePendingBatch()).customer_path).toBe('');
+    expect(
+      queuePendingBatchSchema.parse({ ...makePendingBatch(), customer_path: '某某分厂' })
+        .customer_path,
+    ).toBe('某某分厂');
+    // 值非 null：给 null 抛错（后端是 `String`，不是 Option）
+    expect(() =>
+      queuePendingBatchSchema.parse({ ...makePendingBatch(), customer_path: null }),
+    ).toThrow();
+    const noPath: Record<string, unknown> = { ...makePendingBatch() };
+    delete noPath.customer_path;
+    expect(() => queuePendingBatchSchema.parse(noPath)).toThrow();
   });
 });
 

@@ -80,6 +80,8 @@ function makeDetail(overrides: Record<string, unknown> = {}): Record<string, unk
     name: '零件甲',
     l1_customer_name: 'L1 客户',
     customer_name: '客户甲',
+    // 2026-10-17 客户无限层级：新增 customer_path（第 2 层到叶子、不含 L1）。
+    customer_path: '分厂 / 客户甲',
     status: 'PENDING',
     planned_delivery_date: '2026-10-01',
     system_delivery_date: null,

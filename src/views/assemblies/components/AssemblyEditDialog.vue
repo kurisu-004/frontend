@@ -14,6 +14,8 @@
   2026-09-13 PR-2：父级 form = reactive<AssemblyEditForm>(...)。vue/no-mutating-props
   禁止 props.form.x = v。本地 reactive 副本 + watch 同步 + emit('update:form')；
   父级 @update:form 合并即可（提交时 props.form 已是最新编辑值）。
+
+  2026-10-17（客户无限层级改造）：客户 option 的 label 改用后端 `customer_path`。
 -->
 <template>
   <el-dialog
@@ -35,10 +37,16 @@
         <el-input v-model="localForm.name" placeholder="例如：精研挡料座" />
       </el-form-item>
       <el-form-item label="客户" prop="customer_id">
+        <!-- 2026-10-17（客户无限层级改造）：候选是**真叶子**（由
+             useAssemblyDetail.leafCustomers → api/customer.tree.ts::leafCustomersOf 按
+             「有没有子节点」判定，与后端 require_leaf_customer 同口径）；option 文案走
+             formatCustomerOptionLabel，即后端下发的 `customer_path`（第 2 层到叶子的
+             ` / ` 拼接、不含 L1）—— 深度 ≥ 3 时直接父名只给出最后一段祖先，跨分支同名
+             时仍分不清。 -->
         <el-select
           v-model="localForm.customer_id"
           filterable
-          placeholder="选择二级客户"
+          placeholder="选择末级客户"
           style="width: 100%"
         >
           <el-option

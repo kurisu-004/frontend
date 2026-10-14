@@ -14,14 +14,18 @@
 //   name / drawing_no / quantity (i32) / status (String，语义同 OrderStatus 但
 //   不锁字面量，与 partBatchSchema.status 同约定) / is_urgent /
 //   planned_delivery_date (string) / system_delivery_date (nullable) /
-//   customer_name (nullable，L2) / parent_customer_name (nullable，L1) /
+//   customer_name (nullable，本层级客户单段名) / parent_customer_name (nullable，**根 L1**
+//   客户名 —— 2026-10-17 客户无限层级后语义从「直接父名」改成「根名」，配套新增
+//   customer_path = 第 2 层到叶子的 ` / ` 拼接、不含 L1) /
 //   has_cnc_program (bool 必填 —— 本页 Tab 化的唯一依据) /
 //   batch_id (nullable) / batch_version (nullable) —— 批次锚点，后端补齐的那两列。
 //
 // ⚠️ 客户字段名与 part 域**不同名**：本 schema 是 parent_customer_name(L1) /
-// customer_name(L2)，而 PartListItem 是 l1_customer_name / customer_name。
+// customer_name(本层级单段名)，而 PartListItem 是 l1_customer_name / customer_name。
 // 两个端点的 rows 不能互相 cast（列渲染读的是 parent_customer_name，cast 过来
-// 命不中 ⇒ 渲染出「—」）。
+// 命不中 ⇒ 渲染出「—」）。2026-10-17 起两域还共用同一个渲染器
+// （`utils/elTableCell.ts::renderCustomerCell`）—— 共用渲染器**不**抹平字段名差异：
+// 它收的是裸字段，各列定义各自负责点名。
 //
 // ⚠️ 本 schema 是 strip 模式的 `z.object`（非 `.strict()`），所以**后端改字段名
 // 不会被 Zod 报错**、只会被静默丢弃。批次锚点两个字段的改名义务双向登记在
@@ -41,10 +45,23 @@ export const pendingProgrammingItemSchema = z.object({
   is_urgent: z.boolean(),
   planned_delivery_date: z.string(),
   system_delivery_date: z.string().nullable(),
-  /** L2 客户名（可空） */
+  /** 客户所在层级（叶子即 L2 及更深）的单段名，nullable。 */
   customer_name: z.string().nullable(),
-  /** L1 客户名（可空） */
+  /** 根（L1）客户名，nullable。⚠️ 2026-10-17 客户无限层级改造后，本字段语义从
+   *  「直接父名」改成「**根名**」（破坏性变更），配套新增 `customer_path`。 */
   parent_customer_name: z.string().nullable(),
+  /** 2026-10-17 新增（客户无限层级改造）：第 2 层到叶子的名称用 ` / ` 拼接、**不含 L1**；
+   *  客户自身即 L1 时等于它自己的名字。
+   *
+   *  ⚠️ **部署顺序：后端必须先上** —— 声明成**必填键**（值可空），后端旧版本不返该键
+   *  ⇒ 本 schema parse 抛 ⇒ 「待编程一览」整页空白。与「两条兼容分支会让『后端没上』
+   *  变成整页 customer_path 恒空、排查成本高得多」是同一条取舍（照 `Customer.customer_path`
+   *  / `Shelf.capacity` 的既有口径）。声明成可选的话，「后端哪天删掉这一列」会静默通过，
+   *  症状是客户列退化成单段名 + L1 次行、无任何报错。
+   *
+   *  ⚠️ 本文件是 strip 模式的 `z.object`（非 `.strict()`），所以**值**写错类型会被抛、
+   *  而后端加别的字段只是被静默丢掉。 */
+  customer_path: z.string().nullable(),
   /** 是否已上传 G_CODE（后端 t_part_file EXISTS 派生）—— 必填 boolean，守门到位 */
   has_cnc_program: z.boolean(),
   /** 批次 id（雪花 ID 字符串，nullable）。取该 part 的 `status='PROGRAMMING' AND

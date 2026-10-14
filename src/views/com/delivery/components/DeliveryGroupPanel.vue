@@ -14,12 +14,20 @@
     loading          — 加载态（v-loading）
     canCreate        — L1 已选（用以启用「新增分组」按钮）
     l1Id             — 当前 L1 id（编辑器需要，提交时透传）
-    allL2Customers   — 当前 L1 下的 L2 全集（编辑器成员多选用）
+    leafCustomerOptions — 当前 L1 子树内的**叶子**客户全集（编辑器成员多选用）
 
   emits:
     create(payload)   — 新建分组提交；payload = { name, member_customer_ids }
     update(payload)   — 编辑分组提交；payload = { group, name, member_customer_ids }
     delete(group)     — 删除分组
+
+  2026-10-17（客户无限层级改造）：成员候选由「L1 的直接子（L2）」改成「L1 子树内的
+  叶子」—— 后端 `ungrouped_customers` 给的是 L1 的**全部后代**，零件只挂在叶子上
+  （入单叶子闸门 20104），只列直接子会让「面板上看得见的成员在编辑器里选不到」。另一半理由
+  是分组只服务打印分页（`utils/deliveryNotePrintRows.ts::buildL2GroupMap` 按成员
+  `customer_id` 建表、打印行项用自己的叶子 `customer_id` 去查 ⇒ 中间层匹配不到任何行项）。
+  口径由 `DeliveryNoteScan.vue` 的 `leafCustomerOptions` 算好
+  下传，本组件**不再自行过滤**。
 -->
 <script setup lang="ts">
 import { ref, watch } from 'vue';
@@ -36,7 +44,7 @@ const props = defineProps<{
   loading: boolean;
   canCreate: boolean;
   l1Id: string;
-  allL2Customers: Customer[];
+  leafCustomerOptions: Customer[];
 }>();
 
 const emit = defineEmits<{
@@ -97,7 +105,7 @@ function onEditorCancel(): void {
 async function onDeleteGroup(g: DeliveryGroupData): Promise<void> {
   try {
     await ElMessageBox.confirm(
-      `确认删除分组「${g.name}」？该分组下的 DRAFT 草稿将不再路由。`,
+      `确认删除分组「${g.name}」？该分组下的客户会回到未分组，打印时各自独立成页。`,
       '删除分组',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
     );
@@ -122,7 +130,7 @@ async function onDeleteGroup(g: DeliveryGroupData): Promise<void> {
     <template v-if="canCreate">
       <el-empty
         v-if="groups.groups.length === 0 && groups.ungrouped_customers.length === 0"
-        description="该一级客户下还没有 L2 客户"
+        description="该一级客户下还没有末级部门"
         :image-size="80"
       />
       <template v-else>
@@ -155,7 +163,7 @@ async function onDeleteGroup(g: DeliveryGroupData): Promise<void> {
 
           <div v-if="groups.ungrouped_customers.length > 0" class="group-row ungrouped-row">
             <div class="group-row-main">
-              <span class="group-name muted">未分组 L2</span>
+              <span class="group-name muted">未分组</span>
               <div class="group-members">
                 <el-tag
                   v-for="u in groups.ungrouped_customers"
@@ -181,7 +189,7 @@ async function onDeleteGroup(g: DeliveryGroupData): Promise<void> {
       v-if="editorOpen"
       :l1-id="l1Id"
       :initial="editingGroup"
-      :all-l2-customers="allL2Customers"
+      :leaf-customer-options="leafCustomerOptions"
       @submit="onEditorSubmit"
       @cancel="onEditorCancel"
     />

@@ -5,15 +5,18 @@
 // 「Zod 校验守门失效」）。
 //
 // 覆盖：
-//   - S1：customerSchema.parse 接受 backend-rust CustomerOut 8 字段结构（id /
-//     name / parent_id / parent_name / serial_prefix / version / created_at /
-//     updated_at），不抛错。
+//   - S1：customerSchema.parse 接受 backend-rust CustomerOut 8 字段结构 + customer_path
+//     （id / name / parent_id / parent_name / serial_prefix / customer_path / version /
+//     created_at / updated_at），不抛错。
 //   - S2：customerSchema 对一级客户（parent_id = null, parent_name = null,
 //     serial_prefix = 'A'）也接受。
 //   - S3：customerSchema 对二级客户（parent_id / parent_name 非 null,
 //     serial_prefix = null）也接受。
 //   - S4：customerSchema 缺 version → 抛 ZodError（核心 regression guard：
 //     首轮漏列 version 字段会导致 backend-rust 真返回被 strip 掉，仍 parse 成功）。
+//   - S4d~S4g（2026-10-17 客户无限层级改造）：customer_path 必填键的四条 —— 深层节点的
+//     ` / ` 拼接串能过 / 缺键必抛（部署顺序守卫）/ null 必抛 / 空串合法（值不美不
+//     一致把整页打成空白，由展示层兜底）。
 //   - S5：customerListResultSchema 接受分页结构（items / total / limit / offset）。
 //   - S6：processSchema.parse 接受 backend-rust ProcessOut 12 字段结构。
 //   - S7：processSchema 对 INHOUSE / OUTSOURCE 两种 category 都接受。
@@ -77,7 +80,9 @@
 // 本文件此后只覆盖**跨域共用的基础数据层** schema。
 //
 // 数据来源：
-//   - backend-rust/docs/api/customers.md:142-153（CustomerOut 8 字段）
+//   - backend-rust/src/modules/com/customer/vo/customer.rs（CustomerOut 8 字段 ——
+//     com 域没有 `docs/api/` 整域文档，此前注释引的 `docs/api/customers.md:142-153`
+//     是失效路径，2026-10-17 改正）
 //   - backend-rust/docs/api/production/processes.md:159-173（ProcessOut 12 字段）
 //   - backend-rust/docs/api/parts.md（PartListOut / PartListItem 字段）
 //   - backend-rust/src/modules/assembly/vo/assembly.rs:17-119
@@ -101,13 +106,14 @@ import {
 
 describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () => {
   describe('customerSchema', () => {
-    it('S1：解析 backend-rust CustomerOut 完整 8 字段不抛错', () => {
+    it('S1：解析 backend-rust CustomerOut 完整 8 字段 + customer_path 不抛错', () => {
       const customer = customerSchema.parse({
         id: '190000000000001',
         name: '客户A',
         parent_id: null,
         parent_name: null,
         serial_prefix: 'A',
+        customer_path: '客户A',
         version: 3,
         created_at: '2026-09-26 10:00:00',
         updated_at: '2026-09-26 11:00:00',
@@ -123,6 +129,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
         parent_id: null,
         parent_name: null,
         serial_prefix: 'B',
+        customer_path: 'L1-客户',
         version: 1,
         created_at: '2026-01-01 00:00:00',
         updated_at: '2026-01-01 00:00:00',
@@ -138,6 +145,9 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
         parent_id: '190000000000001',
         parent_name: 'L1-客户',
         serial_prefix: null,
+        // 2026-10-17（客户无限层级改造）：第 2 层节点的 customer_path **不含 L1**，
+        // 就是它自己那一段名字。
+        customer_path: 'L2-叶子客户',
         version: 1,
         created_at: '2026-01-01 00:00:00',
         updated_at: '2026-01-01 00:00:00',
@@ -158,6 +168,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
           parent_id: null,
           parent_name: null,
           serial_prefix: 'A',
+          customer_path: 'X',
           // version: 故意缺
           created_at: '',
           updated_at: '',
@@ -173,6 +184,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
           parent_id: null,
           parent_name: null,
           serial_prefix: 'A',
+          customer_path: 'X',
           version: 1,
           // created_at: 故意缺
           updated_at: '',
@@ -188,6 +200,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
           parent_id: null,
           parent_name: null,
           serial_prefix: 'A',
+          customer_path: 'X',
           version: 1,
           created_at: '',
           // updated_at: 故意缺
@@ -205,12 +218,89 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
         parent_id: null,
         parent_name: null,
         serial_prefix: 'A',
+        customer_path: 'X',
         version: 1,
         created_at: '',
         updated_at: '',
         extra_field: 'should-be-stripped',
       });
       expect((parsed as unknown as Record<string, unknown>).extra_field).toBeUndefined();
+    });
+
+    // 2026-10-17（客户无限层级改造）：customer_path 必填键的三条守门用例。
+    it('S4d：customer_path = 第 2 层起的 ` / ` 拼接串 → 解析通过（深层节点口径）', () => {
+      // 树：华强(L1) / 终端BG(L2) / 手机部(L3) / 影像组(L4)；L4 的 path 不含 L1。
+      const customer = customerSchema.parse({
+        id: '190000000000004',
+        name: '影像组',
+        parent_id: '190000000000003',
+        parent_name: '手机部',
+        serial_prefix: null,
+        customer_path: '终端BG / 手机部 / 影像组',
+        version: 1,
+        created_at: '',
+        updated_at: '',
+      });
+      expect(customer.customer_path).toBe('终端BG / 手机部 / 影像组');
+      // 契约要点：name / parent_name 仍各是「单段名」，不被拼接串污染
+      expect(customer.name).toBe('影像组');
+      expect(customer.parent_name).toBe('手机部');
+    });
+
+    it('S4e：缺 customer_path → 抛 ZodError（必填键守门，M-1 同形态 guard）', () => {
+      // ⚠️ 这是部署顺序的守卫：后端没上 customer_path 时，前端 parse 必须当场抛，
+      // 而不是静默 strip 后让筛选器按空路径名筛（那是更难排查的静默错误）。
+      expect(() =>
+        customerSchema.parse({
+          id: '190000000000001',
+          name: '客户A',
+          parent_id: null,
+          parent_name: null,
+          serial_prefix: 'A',
+          // customer_path: 故意缺
+          version: 1,
+          created_at: '',
+          updated_at: '',
+        }),
+      ).toThrow();
+    });
+
+    it('S4f：customer_path = null → 抛 ZodError（刻意不给 .nullable()）', () => {
+      // 根节点也有值（= 自己的 name），任何节点的路径至少含自己那一段 ⇒ 后端恒发
+      // 非 null 字符串；null 说明后端拼装逻辑漂移，宁可当场抛也不当兜底放行。
+      expect(() =>
+        customerSchema.parse({
+          id: '190000000000001',
+          name: '客户A',
+          parent_id: null,
+          parent_name: null,
+          serial_prefix: 'A',
+          customer_path: null,
+          version: 1,
+          created_at: '',
+          updated_at: '',
+        }),
+      ).toThrow();
+    });
+
+    it('S4g：customer_path = 空串 → 解析通过（schema 只锁 string，不锁非空）', () => {
+      // 为什么不加 `.min(1)`：口径是「第 2 层到叶子的名称拼接」，空串只可能来自后端
+      // 拼装漂移（脏数据），而**这是共享基础数据层 schema**——一棵树里一条脏节点抛
+      // ZodError 会让整页客户数据恒空（连带全站筛选器空白）。展示层兜底成 `name`
+      // 即可，值不值得为此把整页打成空白由展示层决定，不由契约层一刀切。
+      // 换言之：这里锁的是「键必须存在且是字符串」，不是「字符串必须好看」。
+      const customer = customerSchema.parse({
+        id: '190000000000001',
+        name: '客户A',
+        parent_id: null,
+        parent_name: null,
+        serial_prefix: 'A',
+        customer_path: '',
+        version: 1,
+        created_at: '',
+        updated_at: '',
+      });
+      expect(customer.customer_path).toBe('');
     });
   });
 
@@ -224,6 +314,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
             parent_id: null,
             parent_name: null,
             serial_prefix: 'A',
+            customer_path: 'A',
             version: 1,
             created_at: '',
             updated_at: '',
@@ -443,6 +534,9 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
         note: '首件',
         customer_name: '客户乙',
         l1_customer_name: '客户甲',
+        // 2026-10-17 新增（客户无限层级）：后端 `PartListItem.customer_path` 必填、
+        // 值非 null（客户软删 / 父链成环时落空串）。
+        customer_path: '客户乙分部 / 装配车间',
         location: 'PRODUCTION_SHELF',
         holder_name: 'A-01',
         process_chain_id: '160000000000001',
@@ -461,13 +555,29 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       expect(parsed.customer_name).toBe('客户乙');
       // status enum 锁死
       expect(parsed.status).toBe('IN_PROCESS');
-      // zod 默认 strip 模式：未声明字段（customer_path / next_process_id /
-      // next_process_name）即使存在也会被丢弃
+      // 2026-10-17：`customer_path` 已声明且**不被 strip 掉** —— 漏声明时 Zod 默认
+      // strip 会把它静默丢弃，零件一览客户列主行恒 undefined（详见 S11c）。
+      expect(parsed.customer_path).toBe('客户乙分部 / 装配车间');
+      // zod 默认 strip 模式：仍未声明的字段（next_process_id / next_process_name）
+      // 即使存在也会被丢弃
       const asRecord = parsed as unknown as Record<string, unknown>;
-      expect(asRecord.customer_path).toBeUndefined();
       expect(asRecord.next_process_id).toBeUndefined();
       expect(asRecord.next_process_name).toBeUndefined();
       expect(asRecord.parent_customer_name).toBeUndefined();
+    });
+
+    it('S11c：缺 customer_path → 抛 ZodError（strip 陷阱的镜像守卫 + 部署顺序守卫）', () => {
+      // 两条理由合在一条用例里：
+      //  1. **声明不可删**：本键一旦从 schema 摘掉，Zod 默认 strip 会把后端下发的值
+      //     静默丢掉 —— parse 全绿、`partsListColumnDefs` 的客户列主行恒 undefined，
+      //     页面「看着正常」但永远停在单段名 + L1 次行（旧实现就是栽在这里）。
+      //  2. **部署顺序**：后端 2026-10-17 才补该列，旧版本不返 ⇒ `required` 抛错，
+      //     `GET /com/union-list` 的 queryFn 整条挂掉（零件一览空白）。
+      const { customer_path: _omit, ...rest } = makeBasePart();
+      void _omit;
+      expect(() => partSchema.parse(rest)).toThrow();
+      // 反向：空串是合法值（客户软删 / 父链成环），不能被当成缺字段
+      expect(partSchema.parse({ ...makeBasePart(), customer_path: '' }).customer_path).toBe('');
     });
 
     it('S11b：unit_price 接受 rust_decimal 序列化的任意 string 形态（含 "0" / "100.50"）', () => {
@@ -585,7 +695,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
     // 后端 `AssemblyDetail` wire 形态（19 AssemblyOut 字段平铺 + children + files）：
     function makeBaseAssemblyDetail(): Record<string, unknown> {
       return {
-        // —— AssemblyOut 19 字段（顺序对齐 backend-rust vo/assembly.rs:17-39）——
+        // —— AssemblyOut 20 字段（字段集对齐 backend-rust vo/assembly.rs 的 AssemblyOut）——
         id: '190000000000001',
         version: 1,
         serial_no: 'ASM-001',
@@ -605,22 +715,35 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
         note: null,
         created_at: '2026-09-29 10:00:00',
         updated_at: '2026-09-29 11:00:00',
+        // 第 20 键（2026-10-17 客户无限层级）：后端 `AssemblyOut.customer_path` 必填，
+        // 查不到客户行时落空串（不是 null）。
+        customer_path: '终端BG / 手机部',
         // —— 平铺之外的 children + files ——
         children: [],
         files: [],
       };
     }
 
-    it('S15：解析 backend-rust AssemblyDetail 平铺形态（19 + children + files）不抛错', () => {
+    it('S15：解析 backend-rust AssemblyDetail 平铺形态（20 + children + files）不抛错', () => {
       const parsed = assemblyDetailFlatSchema.parse(makeBaseAssemblyDetail());
-      // 19 字段平铺 + children + files 全部可见
+      // 20 字段平铺 + children + files 全部可见
       expect(parsed.id).toBe('190000000000001');
       expect(parsed.drawing_no).toBe('ASM-DWG-001');
+      expect(parsed.customer_path).toBe('终端BG / 手机部');
       expect(parsed.children).toEqual([]);
       expect(parsed.files).toEqual([]);
       // 关键：parsed 上没有 `assembly` 嵌套键（后端平铺，无嵌套）
       const asRecord = parsed as unknown as Record<string, unknown>;
       expect(asRecord.assembly).toBeUndefined();
+    });
+
+    it('S15b：缺 customer_path → 抛 ZodError（后端不上线 ⇒ 详情页白屏，部署顺序守卫）', () => {
+      // ⚠️ **部署顺序**：本键是后端 2026-10-17 才补上的（`AssemblyOut` 的第 20 个字段）。
+      // 旧后端不返 ⇒ 缺键 parse 当场抛 ZodError ⇒ 装配件详情页 / PartAssemblyLinkCard
+      // 整条链路空白。反序发布时这是唯一能提前看见的信号，所以锁死「缺它必抛」。
+      const { customer_path: _omit, ...rest } = makeBaseAssemblyDetail();
+      void _omit;
+      expect(() => assemblyDetailFlatSchema.parse(rest)).toThrow();
     });
 
     it('S16：缺 children → 抛 ZodError（M-1 同源 regression guard）', () => {
@@ -638,7 +761,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       // 守门到位。本用例锁死：嵌套 `assembly` 键出现必须抛错。
       const wrapped = {
         ...makeBaseAssemblyDetail(),
-        // 故意添加嵌套 assembly 键 —— 模拟后端 regression 把 19 字段塞进
+        // 故意添加嵌套 assembly 键 —— 模拟后端 regression 把 20 字段塞进
         // assembly 嵌套对象（这正是我们要消化的 quirk 反向）。
         assembly: {
           id: '190000000000001',
@@ -646,6 +769,15 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
         },
       };
       expect(() => assemblyDetailFlatSchema.parse(wrapped)).toThrow();
+    });
+
+    it('S17b：多出后端新加的键 → 抛 ZodError（strict 的对称代价，2026-10-17 实测）', () => {
+      // ⚠️ 这条是 P0 的**镜像守卫**：本 schema 是 `.strict()` 的，后端每给 `AssemblyOut`
+      // 加一个键（2026-10-17 加了 `customer_path`）而前端没同步补声明，整条装配件详情
+      // 链路当场白屏。S15b 守「少键必抛」，本条守「多键必抛」—— 两个方向合起来才是
+      // 「声明与后端 VO 逐字段对齐」这条不变量的完整守门。
+      const extra = { ...makeBaseAssemblyDetail(), some_future_field: 'x' };
+      expect(() => assemblyDetailFlatSchema.parse(extra)).toThrow();
     });
   });
 

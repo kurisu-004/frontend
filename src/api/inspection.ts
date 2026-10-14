@@ -41,8 +41,22 @@ export interface InspectionQueueItem {
   is_urgent: boolean;
   customer_id: string;
   customer_name: string | null;
-  /** L1（一级客户）名；客户列渲染「L1 / L2」两段文本。 */
+  /** 根（L1）客户名；客户列次行。⚠️ 2026-10-17 客户无限层级改造后语义从「直接父名」
+   *  改成「根名」，配套新增 `customer_path`（第 2 层到叶子的 ` / ` 拼接，不含 L1）。 */
   l1_customer_name: string | null;
+  /** 2026-10-17 新增（客户无限层级改造）：第 2 层到叶子的名称用 ` / ` 拼接，**不含 L1**；
+   *  零件所属客户自身即 L1 时等于它自己的名字。客户软删 / 父链成环时后端落**空串**
+   *  （不是 null），展示层必须兜底（`utils/elTableCell.ts::renderCustomerCell`）。
+   *  **键必填**（少键 parse 抛 —— 本行 schema 是 `.strict()` 的 14 键白名单）：后端
+   *  `InspectionQueueItemOut.customer_path` 是 `String`（**本批新增的键**，旧后端整个
+   *  不返它），解析不出客户行时落空串 ⇒ 值恒非 null。
+   *
+   *  ⚠️ 声明成 `| null` / `.nullable()` **不提供任何部署窗口保护**，别把它当成保护读：
+   *  `.nullable()` 只放宽「值可以是 null」，不宽容「键不存在」—— 挡住旧后端的是**键必填**
+   *  这一条（两种声明在缺键时都抛）。留着 nullable 纯粹是为了与同 VO 其它
+   *  `string | null` 字段的形状对齐，代价为零；真要收紧成 `z.string()` 也不会更安全。
+   *  行类型与 schema 是**双声明**，两处都要改（见下方分页信封注释）。 */
+  customer_path: string | null;
 }
 
 // 分页信封不另起一份手写声明：形状 = `InspectionQueueItem[]` + 三个 JSON string 计数，
@@ -130,6 +144,11 @@ export interface ScanAssemblyOut {
   /** `YYYY-MM-DD`；DB NULL → JSON null。 */
   system_delivery_date: string | null;
   customer_name: string | null;
+  /** 第 2 层到叶子的名称 ` / ` 拼接、**不含 L1**（2026-10-17 客户无限层级，后端
+   *  `ScanAssemblyOut.customer_path: String`）。**必填键、值非 null** —— 客户行解析不出
+   *  （软删 / 父链成环）时后端落空串；扫码树弹窗的「客户」列主行读它。
+   *  与 `inspectionScanAssemblySchema` 的同名声明逐字一致，两处都要改。 */
+  customer_path: string;
 }
 
 /** 树里的零件节点（`ScanPartOut`）：装配件的子件，或独立件本身。 */
@@ -144,6 +163,9 @@ export interface ScanPartOut {
   is_urgent: boolean;
   system_delivery_date: string | null;
   customer_name: string | null;
+  /** 同 `ScanAssemblyOut.customer_path`（口径 / 必填性逐字一致）—— 两个 VO 由同一次
+   *  `shared::customer::paths_of` 调用产出，不存在「一边有一边没有」的形态。 */
+  customer_path: string;
   /** `t_part.version` —— **不是**批次版本，只作展示；三个写端点的 OCC 锚是批次的 version。 */
   version: number;
   children: ScanBatchOut[];

@@ -23,6 +23,18 @@ export interface PrintRow {
   /** 行身份：装配件父行是 `ASM_<assembly_id>`，其余是代表批次 id（字符串）。 */
   id: string;
   order_no: string;
+  /**
+   * 客户列的单元格文案。
+   *
+   * ⚠️ **字段名不许改成 `customer_path`**，尽管 2026-10-17 客户无限层级改造后它装的是
+   * 路径：送货单模板是**用户上传的二进制 xlsx**，表头与占位符里写死了 `{{l2_customer}}`
+   * （由 `deliveryNoteTemplate.ts::assertTemplateMatches` 逐格校验），改名会让所有老模板
+   * 在导出时整列留空。**改的只是「单元格里写什么值」**：从「叶子客户单段名」改成
+   * 「第 2 层到叶子的 ` / ` 路径」（`toPrintRow` 里取 `li.customer_path`）。
+   *
+   * 为什么不带 L1：Excel 单元格是单行文本，塞不进主行 + 次行两段。L1 在列表页与
+   * 预览表的次行里看得到（打印预览表刻意保持单行，见 deliveryNotePrintColumnDefs.ts）。
+   */
   l2_customer: string;
   applicant_name: string;
   drawing_no: string;
@@ -51,7 +63,7 @@ export interface PrintRow {
 }
 
 // ============================================================
-// 分组：L2 客户 → sheet
+// 分组：叶子客户 → sheet
 // ============================================================
 
 /** 分组键 + 组名的解析结果。key 是**语义字符串**（不是数组下标），tab / sheet 都用它。 */
@@ -61,11 +73,14 @@ export interface PrintGroupRef {
 }
 
 /**
- * 分组查询结果 → `客户 → 分组引用` 映射（**主键 = L2 客户 id**，name 键只作兜底）。
+ * 分组查询结果 → `客户 → 分组引用` 映射（**主键 = 叶子客户 id**，name 键只作兜底）。
+ *
+ * ⚠️ 函数名里的 `L2` 是「客户固定两层」时代的叫法，语义是**行项所属的那个客户**
+ * （单据只能挂叶子 ⇒ 它是叶子客户；深度 ≥ 3 的树上它在 L3/L4，不再是 L2）。
  *
  *   · `groups[].members[].customer_id` → `{ groupKey: 'g_<gid>', groupName: 组名 }`
- *   · `ungrouped_customers[].id`      → `{ groupKey: 'c_<l2id>', groupName: L2 客户名 }`
- *     （**每个未分组 L2 各自一 sheet** —— 按 L2 拆单是收货习惯，合成一张会让收货人
+ *   · `ungrouped_customers[].id`      → `{ groupKey: 'c_<cid>', groupName: 客户名 }`
+ *     （**每个未分组客户各自一 sheet** —— 按收货单位拆单是收货习惯，合成一张会让收货人
  *     找不到自己那批）
  *
  * **为什么按 id 而不是按客户名**：`t_customer.name` 只有**非唯一** btree 索引（允许重名）
@@ -80,9 +95,7 @@ export interface PrintGroupRef {
  * ⚠️ 后端的 `ungrouped_customers` 是差集（理论上与 groups[].members 不重叠）；真重叠
  * 时未分组覆盖分组，语义是「保守不丢客户」。
  */
-export function buildL2GroupMap(
-  groupRes: DeliveryGroupListResultData,
-): Map<string, PrintGroupRef> {
+export function buildL2GroupMap(groupRes: DeliveryGroupListResultData): Map<string, PrintGroupRef> {
   const map = new Map<string, PrintGroupRef>();
   /** name → ref：只用来识别「同一个客户名被两个不同 id 抢到」。 */
   const nameOwner = new Map<string, PrintGroupRef>();
@@ -118,20 +131,29 @@ export function buildL2GroupMap(
   return map;
 }
 
-/** 行项的 L2 客户名兜底：`customer_name` 空时取 `customer_path` 的最后一段。 */
+/**
+ * 行项的**叶子客户短名**（打印分组的 sheet 名 / name 兜底键用）。
+ *
+ * ⚠️ 这里刻意**不**用 `customer_path`：sheet 名有 Excel 31 字符上限，且分组是「按收货单位
+ * 拆单」，收货人认的是自己那个单位名而不是 `终端BG / 手机部 / 影像组`。所以「主行显示
+ * 路径 / 分组仍按短名」是两条口径，不要合并。
+ *
+ * 判据用 `||` 而不是 `??`：后端对「客户被软删 / 无客户」返 `null`，但老数据里存在 `''`
+ * 形态，`??` 遇到空串不会继续往下走、会返回空名。
+ */
 function fallbackCustomerName(li: DeliveryNoteLineItemData): string {
-  return li.customer_name ?? li.customer_path?.split(' / ').pop() ?? '';
+  return li.customer_name || li.customer_path?.split(' / ').pop() || '';
 }
 
 /**
- * 行项所属的分组引用：**先按 L2 客户 id 查**（`customer_id`，打印分组的权威键），
+ * 行项所属的分组引用：**先按叶子客户 id 查**（`customer_id`，打印分组的权威键），
  * 再按客户名兜底（行项没有 id 时），最后兜底成「自身一个组」。
  *
- * ⚠️ 有 id 但查不到时**不再退回按名查**：查不到说明这个 L2 不在分组结果里（分组查询与
+ * ⚠️ 有 id 但查不到时**不再退回按名查**：查不到说明这个客户不在分组结果里（分组查询与
  * 行项是两次请求，改名 / 建组都可能造成这种不一致），此时按名查可能命中**另一个同名
  * 客户**的组 —— 那才是把货并错人，宁可单独成组（`c_cid_<id>`）。
  *
- * 合成组的 key 同样优先带 id：同名不同 id 的两个 L2 各出一张 sheet，sheet 名撞了由
+ * 合成组的 key 同样优先带 id：同名不同 id 的两个客户各出一张 sheet，sheet 名撞了由
  * `uniqueSheetName` 加序号后缀区分。
  *
  * 过渡期（后端尚未在 `DeliveryNoteLineItem` 上发 `customer_id`）：`li.customer_id`
@@ -200,7 +222,10 @@ function toPrintRow(li: DeliveryNoteLineItemData, quantity: number): PrintRow {
   return {
     id: String(li.id),
     order_no: li.order_no ?? '',
-    l2_customer: li.customer_name ?? '',
+    // 2026-10-17 客户无限层级：单元格文案从「叶子单段名」升级成「第 2 层到叶子的路径」。
+    // 判据用 `||`：`customer_path` 是必填键但**值可空且客户软删 / 成环时落空串**，
+    // 空串退回单段名才能保住一格可读文案（与 utils/elTableCell.ts 的规则 1 同一条）。
+    l2_customer: li.customer_path || li.customer_name || '',
     applicant_name: li.applicant_name ?? '',
     drawing_no: li.drawing_no,
     name: li.name,
@@ -351,7 +376,10 @@ export function groupRows(
   }
   const out: PrintRowsByGroup = new Map();
   for (const [key, bucket] of byGroup) {
-    out.set(key, { ref: bucket.ref, rows: collapseAssemblies(foldSamePart(bucket.rows), mergeMode) });
+    out.set(key, {
+      ref: bucket.ref,
+      rows: collapseAssemblies(foldSamePart(bucket.rows), mergeMode),
+    });
   }
   return out;
 }
@@ -437,8 +465,8 @@ export function safeSheetName(name: string, index = 0): string {
 
 /** 同一个 workbook 里 sheet 名必须唯一 —— 撞名时加序号后缀直到不撞（仍守住 31 字符）。
  *
- *  ⚠️ 判重的 key 是**最终 sheet 名**而不是分组键：两个不同的分组可能显示同名（同名
- *  L2 客户、不同 L1），按分组键去重会让它们在同一个 workbook 里撞名。 */
+ *  ⚠️ 判重的 key 是**最终 sheet 名**而不是分组键：两个不同的分组可能显示同名（不同 L1
+ *  下的同名收货单位），按分组键去重会让它们在同一个 workbook 里撞名。 */
 function uniqueSheetName(base: string, used: Set<string>): string {
   if (!used.has(base)) {
     used.add(base);

@@ -162,6 +162,7 @@ function makeDto(overrides: Partial<QueuePendingBatchDto> = {}): QueuePendingBat
     planned_delivery_date: '2026-10-25',
     system_delivery_date: '2026-10-20',
     customer_name: '某某零件厂',
+    customer_path: '某某分厂 / 某某零件厂',
     parent_customer_name: '某某集团',
     applicant_name: '张三',
     is_urgent: false,

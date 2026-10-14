@@ -181,9 +181,21 @@ export interface PartListItem {
   note: string | null;
   customer_name: string | null;
   /** 2026-09-27 前后端字段对齐：原 parent_customer_name rename 为 l1_customer_name
-   *  （与后端 Rust PartListOut 字段一致）。customer_path 派生路径 = l1 + name，
-   *  前端不消费该字段（cellRender 内自行拼接）。 */
+   *  （与后端 Rust PartListOut 字段一致）。
+   *  ⚠️ 2026-10-17 客户无限层级：**语义已从「直接父名」改成「根（L1）客户名」**（破坏性
+   *  变更），配套新增本字段 `customer_path`（第 2 层到叶子的 ` / ` 拼接，不含 L1）。
+   *  零件一览客户单元格主行读 `customer_path`、次行读 `l1_customer_name`。 */
   l1_customer_name: string | null;
+  /** 2026-10-17 新增（客户无限层级改造）：第 2 层到叶子的名称用 ` / ` 拼接，**不含 L1**；
+   *  零件自身即 L1 时等于它自己的名字。后端 `PartListItem.customer_path` 是**必填键、
+   *  值非 null**（客户软删 / 父链成环时落**空串**），`composables/queries/schemas.ts`
+   * 的 `partSchema` 已按必填声明。
+   *  ⚠️ 本类型仍写成**可选**（`?`）：它同时是若干**非 `GET /com/union-list`** 出参的
+   * 公共行形状（union-list 之外的复用 VO 在后端走 `From<TPart>` 投影，`customer_path`
+   * 恒空串），以及大批跨 spec 共享 fixture —— 收紧成必填会让这些 fixture 与本 VO 的
+   * 其它非 union-list 消费点一起变红。展示侧（`utils/elTableCell.ts::renderCustomerCell`）
+   * 本来就按「空串 / 缺字段退回 `customer_name`」兜底，两种形态都接得住。 */
+  customer_path?: string | null;
   /** 2026-09-16 起为后端派生（min-progress 活跃批次的 location：
    *  OFFICE/PRODUCTION_SHELF/WORKER/INSPECTION_SHELF/OUTSOURCE_COMPANY），无活跃批次为 null。
    *  t_part 瘦身（PR-2 2026-09-16）：原 delivery_note_id / shelf_code / worker_name /

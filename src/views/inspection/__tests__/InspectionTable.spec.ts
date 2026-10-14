@@ -99,8 +99,10 @@ const ROW: InspectionQueueItem = {
   system_delivery_date: '2026-10-20',
   is_urgent: true,
   customer_id: '9000000000001',
-  customer_name: '二级客户',
+  customer_name: '手机部',
   l1_customer_name: '一级客户',
+  // 2026-10-17 客户无限层级：主行 customer_path + 次行 L1 两行形态。
+  customer_path: '终端BG / 手机部',
 };
 
 const LIST_RESULT = { items: [ROW], total: '1', limit: '20', offset: '0' };
@@ -275,7 +277,7 @@ describe('InspectionTable', () => {
     wrapper.unmount();
   });
 
-  it('cellRender 渲染出名称链接 / 批次 / 系统交期 / 客户派生文本', async () => {
+  it('cellRender 渲染出名称链接 / 批次 / 系统交期 / 客户两行形态（主行路径 + 次行 L1）', async () => {
     const wrapper = await mountTable();
     const link = wrapper.find('a.name-link');
     expect(link.exists()).toBe(true);
@@ -283,7 +285,12 @@ describe('InspectionTable', () => {
     expect(link.attributes('href')).toBe(`/parts/${ROW.part_id}`);
     expect(wrapper.find('.batch-label').text()).toBe('3');
     expect(wrapper.text()).toContain('2026-10-20');
-    expect(wrapper.text()).toContain('一级客户 / 二级客户');
+    // 2026-10-17 客户无限层级：不再是「一级客户 / 二级客户」单行串，而是主行 customer_path
+    // + 次行 L1 两个节点（渲染器 utils/elTableCell.ts）。
+    const cell = wrapper.find('.customer-cell');
+    expect(cell.exists()).toBe(true);
+    expect(cell.find('.customer-cell__main').text()).toBe('终端BG / 手机部');
+    expect(cell.find('.customer-cell__sub').text()).toBe('一级客户');
     // 操作列三个动作。
     expect(wrapper.findAll('.mock-ep-button').map((b) => b.text())).toEqual([
       '品检通过',

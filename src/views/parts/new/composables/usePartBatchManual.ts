@@ -23,24 +23,12 @@
 //   ElMessage.error 反馈（保留原 UX），不写 retry（信任全局默认）。
 // - submitting 类型从 Ref<boolean> → ComputedRef<boolean>（mutation.isPending）。
 
-import {
-  computed,
-  onBeforeUnmount,
-  reactive,
-  ref,
-  watch,
-  type ComputedRef,
-  type Ref,
-} from 'vue';
+import { computed, onBeforeUnmount, reactive, ref, watch, type ComputedRef, type Ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useMutation } from '@tanstack/vue-query';
 import { createApplicant } from '@/api/applicant';
-import {
-  batchCreateParts,
-  type PartBatchCreatePayload,
-  type PartBatchResult,
-} from '@/api/parts';
+import { batchCreateParts, type PartBatchCreatePayload, type PartBatchResult } from '@/api/parts';
 import { grantStsTmpKeyFiles } from '@/api/files/sts';
 import {
   usePartsNewDraft,
@@ -53,6 +41,7 @@ import { parseFileExt } from '@/utils/fileExt';
 import type { Applicant } from '@/types/applicant';
 import type { FileBinding } from '@/types/part_file';
 import type { Customer } from '@/api/customer';
+import { buildCustomerTree, leafCustomersOf, type CustomerTreeNode } from '@/api/customer.tree';
 // 2026-09-28 子任务 #5：useUploadSession 已删除，requestDrawingUpload 改走
 // grantStsTmpKeyFiles 单批签名路径；CosUploader 契约 (File[]) => Promise<CosUploadGrant>
 // 完全保留，仅 caller 实现从「共享 STS session」变为「批量新签 STS + item 拼 grant」。
@@ -150,9 +139,13 @@ export interface UsePartBatchManualReturn {
   previewDescCol: number;
   addDlg: DialogSizeResult;
   previewDlg: DialogSizeResult;
-  customerTree: ComputedRef<
-    Array<{ id: string; name: string; children: Array<{ id: string; name: string }> }>
-  >;
+  /**
+   * 2026-10-17（客户无限层级改造）：el-cascader 的 options 直接用
+   * `api/customer.tree.ts::buildCustomerTree` 的产物（任意深度 + 每级带
+   * `customer_path`）。此前是本文件内联拼的**硬编码两层**树，第 3 层往下的客户根本
+   * 选不到。
+   */
+  customerTree: ComputedRef<CustomerTreeNode[]>;
   // 2026-09-30 hotfix 第 1 轮：applicantCandidates 从返回对象移除，避免
   // PartBatchManualTab.vue 触发「extraneous non-props attribute」告警（v-bind="manual"
   // 摊开所有键给子组件，但子组件 declareProps 未声明 applicantCandidates）。
@@ -179,7 +172,17 @@ export interface UsePartBatchManualReturn {
   // （usePartsNewDraft.ts 内联松散结构类型，仅保 client_ref / kind / status / tmp_key /
   // file_size / original_filename / uploaded_at）。UI 只读 client_ref / original_filename
   // 等基础字段，类型收紧留待子任务 #5 重写 grantStsTmpKeyFiles 后回收。
-  orphanFileRefs: ComputedRef<Array<{ client_ref: string; status?: string; kind?: string; tmp_key?: string; file_size?: number; original_filename?: string; uploaded_at?: string | null }>>;
+  orphanFileRefs: ComputedRef<
+    Array<{
+      client_ref: string;
+      status?: string;
+      kind?: string;
+      tmp_key?: string;
+      file_size?: number;
+      original_filename?: string;
+      uploaded_at?: string | null;
+    }>
+  >;
   openDrawingPreview: (row: StagedEntry) => void;
   onDrawingPreviewClosed: () => void;
   closeAddDialog: () => void;
@@ -219,16 +222,10 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
   const { dangerous: confirmDangerous } = useConfirm();
 
   // ============ 客户树（用于 cascader） ============
-  const customerTree = computed(() => {
-    const roots = customers.value.filter((c) => c.parent_id === null);
-    return roots.map((r) => ({
-      id: r.id,
-      name: r.name,
-      children: customers.value
-        .filter((c) => c.parent_id === r.id)
-        .map((c) => ({ id: c.id, name: c.name })),
-    }));
-  });
+  // 2026-10-17：换成 buildCustomerTree（任意深度；每个节点带 customer_path / depth /
+  // root_id，cascader 的 label 直接吃 customer_path）。拼树逻辑不在本文件另写一份 ——
+  // 脏数据口径（孤儿 / 环 / 重复 id）与全仓其它客户树消费方必须一致。
+  const customerTree = computed<CustomerTreeNode[]>(() => buildCustomerTree(customers.value));
 
   // ============ 待新增列表 ============
   const staged = ref<StagedEntry[]>([]);
@@ -260,23 +257,23 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
   const drawingShaMap = new Map<File, string>();
 
   // ============================================================
-// 2026-09-28 删 useUploadSession 模块级 Map 单例池：详见 plan §3.1。
-// ============================================================
-//
-// 原块内容（2026-09-18 接入）：与 PDF Tab 共享 `parts_new` scope session；
-// mount 时 mergeDraftWithSession 把 session.files 中 status='done' 的条目
-// hydrate 到 staged（drawingBinding）；commit / discard 时清空。
-//
-// 本次删除：useUploadSession.ts + @/types/upload_session 已整文件下线，
-// session 来源不再存在。draft 仍持有（持久化 staged 列表），但 hydrate 路径
-// 无数据来源。本任务保留 hydrateResult / hydrateRestoredCount / orphanFileRefs
-// 三件 API 暴露（给 UI 顶部 el-alert 与孤儿文件面板），值恒为「未恢复」/0/[]，
-// 由子任务 #5 重写实现 grantStsTmpKeyFiles 后重新挂上 session 来源。
-//
-// 同步下线 onMounted 中的 await session.init('parts_new') 预申请逻辑；
-// applyHydrate / deserializeStaged 整段删除（前者仅由 onMounted 调用，
-// 后者内部依赖 session.files.value）。
-// ============================================================
+  // 2026-09-28 删 useUploadSession 模块级 Map 单例池：详见 plan §3.1。
+  // ============================================================
+  //
+  // 原块内容（2026-09-18 接入）：与 PDF Tab 共享 `parts_new` scope session；
+  // mount 时 mergeDraftWithSession 把 session.files 中 status='done' 的条目
+  // hydrate 到 staged（drawingBinding）；commit / discard 时清空。
+  //
+  // 本次删除：useUploadSession.ts + @/types/upload_session 已整文件下线，
+  // session 来源不再存在。draft 仍持有（持久化 staged 列表），但 hydrate 路径
+  // 无数据来源。本任务保留 hydrateResult / hydrateRestoredCount / orphanFileRefs
+  // 三件 API 暴露（给 UI 顶部 el-alert 与孤儿文件面板），值恒为「未恢复」/0/[]，
+  // 由子任务 #5 重写实现 grantStsTmpKeyFiles 后重新挂上 session 来源。
+  //
+  // 同步下线 onMounted 中的 await session.init('parts_new') 预申请逻辑；
+  // applyHydrate / deserializeStaged 整段删除（前者仅由 onMounted 调用，
+  // 后者内部依赖 session.files.value）。
+  // ============================================================
   const draft = usePartsNewDraft();
 
   // 暴露 hydrateResult / hydrateRestoredCount / orphanFileRefs 给 UI 渲染
@@ -620,6 +617,23 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
       return;
     }
 
+    // 2.1) 2026-10-17（客户无限层级改造）：**必须是叶子**。业务单据（零件 / 装配件 /
+    // 送货单）只能挂末级部门，中间层只能用来筛选，挂上去会被后端拒（20104）。
+    // 为什么不放进 partEntrySchema：schema 是纯字段校验，那层拿不到客户树结构，
+    // 「有没有子节点」只能在持有 customers 的调用点判定（与「客户存在性」同款，
+    // schema 文件头的口径：依赖动态状态的检查不进 schema）。
+    // 判据走共享函数 `leafCustomersOf`（CLAUDE.md「客户无限层级」一节：「任何根客户 /
+    // 叶子客户判定都走它，不要就地写 `parent_id !== null`」）——就地反查「有没有节点
+    // 以我为父」与它逐字等价，但会漏掉它那份按 id 去重的脏数据口径。
+    const isLeaf = leafCustomersOf(customers.value).some((x) => x.id === matched.id);
+    if (!isLeaf) {
+      formErrors.value = {
+        ...formErrors.value,
+        customerId: `「${matched.customer_path || matched.name}」还有下级部门，单据只能挂在末级部门`,
+      };
+      return;
+    }
+
     dialogSubmitting.value = true;
     try {
       const entry: StagedEntry = {
@@ -872,9 +886,7 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
       // 2026-09-28 删 useUploadSession：session.consumeFiles 不复存在。子任务 #5
       // 重写 grantStsTmpKeyFiles 路径后会重新挂上 commit 完成通知（如果你不再需要，
       // 可删除本块整段）。当前 stub：暂保留 submittedClientRefs 收集 + skip。
-      void staged.value
-        .map((s) => s.drawingClientRef)
-        .filter((r): r is string => !!r);
+      void staged.value.map((s) => s.drawingClientRef).filter((r): r is string => !!r);
 
       // 释放所有 blob URL
       staged.value.forEach(revokeEntryUrls);

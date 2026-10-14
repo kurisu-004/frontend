@@ -135,7 +135,9 @@ function makeBatch(overrides: Partial<BatchCardModel> = {}): BatchCardModel {
     has_process_chain: false,
     has_cnc_program: false,
     customer_l1: '某某集团',
-    customer_l2: '某某零件厂',
+    // 2026-10-17 客户无限层级：customer_l2 的语义从「叶子单段名」升级成
+    // 「第 2 层到叶子的 ` / ` 拼接」（不含 L1），tooltip 的 label 也从「客户(L2)」改成「客户」。
+    customer_l2: '终端BG / 某某零件厂',
     applicant_name: '张三',
     note: null,
     location: 'SH-A01',
@@ -334,8 +336,8 @@ describe('BatchCard（2026-10-02 全看板唯一批次卡片）', () => {
       '图号',
       '序列号',
       '批次号',
-      '客户(L1)',
-      '客户(L2)',
+      '客户(集团)',
+      '客户',
       '申请人',
       '计划交期',
       '所在位置',
@@ -349,7 +351,7 @@ describe('BatchCard（2026-10-02 全看板唯一批次卡片）', () => {
   it('B12c：tooltip 容器恒渲染（有详情时）', () => {
     const wrapper = mountCard();
     expect(wrapper.find('.card-tooltip').exists()).toBe(true);
-    expect(wrapper.find('.card-tooltip').text()).toContain('客户(L1)');
+    expect(wrapper.find('.card-tooltip').text()).toContain('客户(集团)');
     wrapper.unmount();
   });
 

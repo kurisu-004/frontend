@@ -1,12 +1,15 @@
 // 2026-10-05 新增：usePartBatchShared 纯函数单测 —— toMoneyString。
+// 2026-10-17 追加：findCustomerLabel / resolveRootCustomerId（客户无限层级改造）。
 //
 // 锁的是「含税单价 / 总价 → 后端 Decimal 契约字符串」这条边界：
 // 建单入参是 rust rust_decimal + serde-with-str，只认字符串，且列标度固定 2 位。
 // 表格里的总价是裸浮点乘出来的（0.1 * 3 === 0.30000000000000004），直接 String()
 // 发出去会被 Decimal 如实解析成 13 位小数 —— 这条 helper 是唯一的收口点。
 import { describe, expect, it } from 'vitest';
+import { ref as vueRef } from 'vue';
 
-import { toMoneyString } from '../usePartBatchShared';
+import type { Customer } from '@/api/customer';
+import { findCustomerLabel, resolveRootCustomerId, toMoneyString } from '../usePartBatchShared';
 
 describe('toMoneyString', () => {
   it('缺价（null / undefined / NaN / ±Infinity）→ undefined，让调用方不发该键', () => {
@@ -50,5 +53,65 @@ describe('toMoneyString', () => {
 
   it('负值保留符号（表里有 min=0 兜底，但 helper 自身不吞符号）', () => {
     expect(toMoneyString(-1.5)).toBe('-1.50');
+  });
+});
+
+// ============================================================================
+// 客户展示与根客户解析（2026-10-17 客户无限层级改造）
+// ============================================================================
+
+describe('findCustomerLabel / resolveRootCustomerId', () => {
+  /** 任意深度客户树：某某集团 / 终端BG / 手机部 / 影像组（根节点 customer_path = 自己名字）。 */
+  const tree: Customer[] = [
+    { id: 'g', name: '某某集团', parent_id: null, parent_name: null, serial_prefix: 'A',
+      customer_path: '某某集团', version: 1, created_at: '', updated_at: '' },
+    { id: 'bg', name: '终端BG', parent_id: 'g', parent_name: '某某集团', serial_prefix: null,
+      customer_path: '终端BG', version: 1, created_at: '', updated_at: '' },
+    { id: 'd', name: '手机部', parent_id: 'bg', parent_name: '终端BG', serial_prefix: null,
+      customer_path: '终端BG / 手机部', version: 1, created_at: '', updated_at: '' },
+    { id: 'l', name: '影像组', parent_id: 'd', parent_name: '手机部', serial_prefix: null,
+      customer_path: '终端BG / 手机部 / 影像组', version: 1, created_at: '', updated_at: '' },
+    // 根节点自身：customer_path 恰等于自己的名字
+    { id: 'solo', name: '独立客户', parent_id: null, parent_name: null, serial_prefix: 'B',
+      customer_path: '独立客户', version: 1, created_at: '', updated_at: '' },
+    // 客户软删 / 父链成环 ⇒ 后端必填字段落空串
+    { id: 'gone', name: '已软删客户', parent_id: null, parent_name: null, serial_prefix: null,
+      customer_path: '', version: 1, created_at: '', updated_at: '' },
+  ];
+  const ref = vueRef<Customer[]>(tree);
+
+  it('R1：label 取 customer_path（第 2 层到叶子、不含 L1），不再前端拼 parent/name', () => {
+    expect(findCustomerLabel(ref, 'l')).toBe('终端BG / 手机部 / 影像组');
+    expect(findCustomerLabel(ref, 'g')).toBe('某某集团');
+    expect(findCustomerLabel(ref, 'solo')).toBe('独立客户');
+    // 旧实现会拼 `parent_name / name`：第 4 层叶子会得到「手机部 / 影像组」——
+    // 中间那层「终端BG」被整层跳过。显式断掉这个退化形态。
+    expect(findCustomerLabel(ref, 'l')).not.toBe('手机部 / 影像组');
+    expect(findCustomerLabel(ref, 'l')).toContain('终端BG');
+  });
+
+  it('R2：customer_path 为空串时退回单段名（软删 / 成环的兜底）', () => {
+    expect(findCustomerLabel(ref, 'gone')).toBe('已软删客户');
+  });
+
+  it('R3：id 为 null / 查无此客户 → 空串', () => {
+    expect(findCustomerLabel(ref, null)).toBe('');
+    expect(findCustomerLabel(ref, 'no-such')).toBe('');
+  });
+
+  it('R4：任意深度上溯都拿到**根**客户 id（序列号前缀只有一级客户有）', () => {
+    // 这条是本轮改动的核心：旧实现只上溯一层，对第 3 层及更深的叶子会返回**直接父**。
+    expect(resolveRootCustomerId(ref, 'g')).toBe('g');
+    expect(resolveRootCustomerId(ref, 'bg')).toBe('g');
+    expect(resolveRootCustomerId(ref, 'd')).toBe('g');
+    expect(resolveRootCustomerId(ref, 'l')).toBe('g');
+    // 显式断掉「只上溯一层」：第 4 层叶子的直接父是 'd'，不是 'g'
+    expect(resolveRootCustomerId(ref, 'l')).not.toBe('d');
+  });
+
+  it('R5：null / 空串 / 查无此客户 → null（不发一串垃圾进写端点）', () => {
+    expect(resolveRootCustomerId(ref, null)).toBeNull();
+    expect(resolveRootCustomerId(ref, '')).toBeNull();
+    expect(resolveRootCustomerId(ref, 'no-such')).toBeNull();
   });
 });

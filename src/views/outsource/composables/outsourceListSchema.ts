@@ -126,7 +126,15 @@ export const outsourceSentPartItemSchema = z.object({
   version: z.number(),
   part_drawing_no: z.string().nullable(),
   part_name: z.string().nullable(),
-  /** 客户路径：有 L1 拼 `L1 / L2`，否则仅 L2 名，缺客户为 null。 */
+  /** 第 2 层到叶子的名称 ` / ` 拼接、**不含** L1（2026-10-17 客户无限层级；本节点即
+   *  L1 时等于它自己的名字）。客户行解析不出（软删 / `parent_id` 链成环）时后端落
+   *  **空串**，空串是合法值 —— 展示层 `outsourceSentPartColumnDefs.ts` 的
+   *  `renderCustomerCell` 兜底成 `—`。
+   *
+   *  ⚠️ 键**必填**（少键即 parse 抛，对账页整页空白），但值声明成 `.nullable()`：未升级
+   *  的后端在这条 VO 上是 `Option<String>`（无 `skip_serializing_if`，键恒在、值可能为
+   *  `null`）。收窄成 `z.string()` 会让「老后端 + 客户行缺失」这一种组合整页炸掉，
+   *  而它在部署窗口内是真实存在的。展示层两条空值形态（`null` / `''`）都已兜。 */
   customer_path: z.string().nullable(),
   /** 历史 shipment 可能无批次（后端 left join 落空） */
   batch_no: z.number().nullable(),
@@ -192,6 +200,9 @@ export const outsourceQuoteSchema = z.object({
   outsource_company_name: z.string().nullable(),
   process_code: z.string().nullable(),
   process_name: z.string().nullable(),
+  /** 第 2 层到叶子的名称 ` / ` 拼接、**不含** L1（2026-10-17 客户无限层级）。
+   *  必填性 / 可空口径与 `outsourceSentPartItemSchema.customer_path` 逐字一致（同款
+   * 理由：键必填、值容忍 null，兜底在展示层 `renderCustomerCell`）。 */
   customer_path: z.string().nullable(),
   /** 所属零件的客户下单单价（CNY；与 price 对比谈判空间），Decimal 字符串 */
   part_unit_price: z.string().nullable(),

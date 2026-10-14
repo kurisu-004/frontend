@@ -35,10 +35,13 @@ export const deliveryNoteItemSchema = z.object({
   /** 乐观锁版本；所有写端点的 OCC 锚。 */
   version: z.number(),
   delivery_note_no: z.string(),
-  /** 单据归属的 L1 客户 id（行项的 `customer_id` 是 L2 叶子，两者不同层）。 */
+  /** 单据归属的 L1 客户 id（行项的 `customer_id` 是**叶子**客户 id，两者不同层）。 */
   customer_id: z.string(),
+  /** 单据归属的 L1（根）客户名，列表客户列的次行。 */
   customer_name: z.string().nullable(),
-  /** L1 / L2 路径，与零件一览同格式。 */
+  /** 第 2 层到叶子的客户名，用 ` / ` 拼接（**不含 L1**，根节点则等于自己的名字）。
+   *  2026-10-17 客户无限层级改造后**语义变了**：改前是「L1 / L2 两级路径」，改后与
+   *  `Customer.customer_path` / `PartListItem.customer_path` 逐字同口径。 */
   customer_path: z.string().nullable(),
   /** DRAFT / SUBMITTED / PICKED_UP / ARCHIVED（不锁字面量，见文件头）。 */
   status: z.string(),
@@ -74,9 +77,11 @@ export type DeliveryNoteItemData = z.infer<typeof deliveryNoteItemSchema>;
  *  - `batch_no` / `batch_label` 后端是非 Option（`i32` / `String`）⇒ 键恒在；
  *    `.nullable()` 是给「批次化改造前的历史行」留的宽容侧，不影响键存在性。
  *
- *  - `customer_id`：该行项所属的 **L2 叶子客户 id**（与 `t_customer.id` 对应，雪花 id ⇒
- *    JSON string）。2026-10-08 后端本轮给 `DeliveryNoteLineItem` 补该字段，供打印分组
- *    按 id 查表（客户**名**允许重名，按名分组会把两个收货单位并进同一张 sheet）。
+ *  - `customer_id`：该行项所属的**叶子**客户 id（与 `t_customer.id` 对应，雪花 id ⇒
+ *    JSON string）。单据只能挂叶子（后端入单叶子闸门 20104）⇒ 深度 ≥ 3 的树上它是
+ *    L3/L4 那一层，不再固定是 L2。2026-10-08 后端本轮给 `DeliveryNoteLineItem` 补该
+ *    字段，供打印分组按 id 查表（客户**名**允许重名，按名分组会把两个收货单位并进
+ *    同一张 sheet）。
  *    过渡期用 `.nullish()`：字段尚未上线的后端返回里没有它，此时打印分组退化为按
  *    `customer_name` 兜底（见 utils/deliveryNotePrintRows.ts::groupRefOf）。 */
 export const deliveryNoteLineItemSchema = z.object({
@@ -96,11 +101,15 @@ export const deliveryNoteLineItemSchema = z.object({
   system_delivery_date: z.string().nullable(),
   order_no: z.string().nullable(),
   note: z.string().nullable(),
-  /** L2 客户名（展示列）。**不是**分组键 —— 分组键是 `customer_id`，见文件内说明。 */
+  /** 行项所属客户的**单段名**（叶子名）。**不是**分组键 —— 分组键是 `customer_id`，
+   *  见文件内说明；同时是打印分组的 name 兜底键的取值来源（那张表要的是短名）。 */
   customer_name: z.string().nullable(),
-  /** L2 客户 id（分组键；过渡期可能缺失，见文件内说明）。 */
+  /** 叶子客户 id（分组键；过渡期可能缺失，见文件内说明）。 */
   customer_id: z.string().nullish(),
+  /** 根（L1）客户名。⚠️ 2026-10-17 客户无限层级后语义从「直接父名」改成「根名」。 */
   parent_customer_name: z.string().nullable(),
+  /** 第 2 层到叶子的客户名，` / ` 拼接（**不含 L1**）。2026-10-17 客户无限层级改造后
+   *  新口径：改前是「L1 / L2 两级路径」。详情页客户列主行读它、L1 读上面的字段。 */
   customer_path: z.string().nullable(),
   // —— 装配件父行字段（仅子件行填；散件行**整个键都可能被后端 skip**）——
   assembly_id: z.string().nullish(),
@@ -181,9 +190,7 @@ export const deliveryNoteBatchDetailResultSchema = z.object({
   items: z.array(deliveryNoteDetailSchema),
 });
 
-export type DeliveryNoteBatchDetailResultData = z.infer<
-  typeof deliveryNoteBatchDetailResultSchema
->;
+export type DeliveryNoteBatchDetailResultData = z.infer<typeof deliveryNoteBatchDetailResultSchema>;
 
 // ============================================================
 // 写端点的请求体

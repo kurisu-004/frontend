@@ -55,7 +55,8 @@ export const deliveryScanAssemblySchema = z.object({
   is_urgent: z.boolean(),
   system_delivery_date: z.string().nullable(),
   customer_name: z.string().nullable(),
-  /** 所属 L2 客户 id（入单闸门要用它核对单据 L1）。 */
+  /** 所属**叶子**客户 id（入单闸门要用它核对单据 L1；单据只能挂叶子，后端入单侧有
+   *  叶子闸门 20104，深度 ≥ 3 的树上它不再是 L2）。 */
   customer_id: z.string(),
   /** 本次可入单的最大套数（子件 READY_TO_SHIP 且未占用的批次按套折算）。 */
   entry_max_sets: z.number(),
