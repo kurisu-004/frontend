@@ -49,7 +49,7 @@ export interface MailDigestQueryGate {
   enabled: MaybeRefOrGetter<boolean>;
 }
 
-/** 读定时配置（`GET /mail-digest/config`）。 */
+/** 读定时配置（`GET /cron/mail-digest/config`）。 */
 export function useMailDigestConfigQuery(options: MailDigestQueryGate) {
   const query = useQuery({
     queryKey: computed(() => qk.mailDigestConfig()),
@@ -71,7 +71,7 @@ export function useMailDigestConfigQuery(options: MailDigestQueryGate) {
   return { query, data: query.data, isFetching: query.isFetching, error: query.error, fetchConfig };
 }
 
-/** 读本域元数据（`GET /mail-digest/meta`）。 */
+/** 读本域元数据（`GET /cron/mail-digest/meta`）。 */
 export function useMailDigestMetaQuery(options: MailDigestQueryGate) {
   const query = useQuery({
     queryKey: computed(() => qk.mailDigestMeta()),
@@ -91,7 +91,7 @@ export function useMailDigestMetaQuery(options: MailDigestQueryGate) {
   return { query, data: query.data, isFetching: query.isFetching, error: query.error, fetchMeta };
 }
 
-/** 发送日志分页（`GET /mail-digest/logs`）。 */
+/** 发送日志分页（`GET /cron/mail-digest/logs`）。 */
 export function useMailDigestLogsQuery(options: {
   params: MaybeRefOrGetter<ListMailDigestLogsParams | null>;
   enabled: MaybeRefOrGetter<boolean>;

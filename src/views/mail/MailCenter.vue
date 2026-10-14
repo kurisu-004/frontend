@@ -11,7 +11,7 @@
 
   ⚠️ **两个 pane 都必须挂 `lazy`**，理由与 `views/statistics/ProductionStats.vue` 同款：
   `el-tab-pane` 不带 `lazy` 时**首屏全部 pane 都挂载** ⇒ 进页面立刻并发打
-  `/mail/accounts` 与 `/mail-digest/config|meta|logs`（五六个请求），而用户第一眼看的
+  `/cron/mail/accounts` 与 `/cron/mail-digest/config|meta|logs`（五六个请求），而用户第一眼看的
   只有当前那一个 tab。`lazy` 之后每个 pane 首次被激活才挂载、取数时机随之对齐。
   ⚠️ 这个判断已对着本仓安装的 element-plus 2.14.6 源码核过：`tab-pane.vue` 里
   `shouldBeRender = !lazy || loaded || active`，**已渲染过的 pane 用 `v-show` 常驻、不

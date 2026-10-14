@@ -24,7 +24,7 @@
 //     `send_hour` / `overdue_count` / `html_bytes` / `total` 等。`version` 不是 ID。
 //
 // 2026-10-16：SMTP 从「部署级环境变量」改为「页面内可维护的邮箱账号实体」
-// （后端 `/api/v2/mail/*`，前端 `views/mail/accounts/`），本文件随之两处改动：
+// （后端 `/api/v2/cron/mail/*`，前端 `views/mail/accounts/`），本文件随之两处改动：
 //   - 配置字段新增 `sender_account_id`（选哪条邮箱发信，null = 未选），因为它与其它
 //     配置项同属一份 `mailDigestConfigFields`（同时进 `GET /config` 与 `meta.defaults`）；
 //   - `mailDigestMetaSchema` 删掉整段 `smtp` —— 它描述的是部署级 SMTP，与页面里配置的
@@ -106,7 +106,7 @@ const mailDigestConfigFields = {
   visible_columns: z.array(z.string()),
   /** 标题模板；null = 用后端默认标题。 */
   subject_template: z.string().nullable(),
-  /** 2026-10-16 新增：发信邮箱（`/api/v2/mail/accounts` 的一行）。
+  /** 2026-10-16 新增：发信邮箱（`/api/v2/cron/mail/accounts` 的一行）。
    *  **null = 未选**（不是「用默认邮箱」—— 后端 `mail_digest::service::resolve_sender`
    *  对 null **直接返 21701（503）**，全仓没有任何回落到默认邮箱的分支，所以选择器必须
    *  让用户显式选一条）。雪花 ID ⇒ JSON string。
@@ -116,7 +116,7 @@ const mailDigestConfigFields = {
 } as const;
 
 // ============================================================
-// GET /api/v2/mail-digest/config
+// GET /api/v2/cron/mail-digest/config
 // ============================================================
 
 /** 单条定时配置（后端 `MailDigestConfigOut`）。
@@ -147,7 +147,7 @@ export const mailDigestConfigSchema = z
 export type MailDigestConfigData = z.infer<typeof mailDigestConfigSchema>;
 
 // ============================================================
-// GET /api/v2/mail-digest/meta
+// GET /api/v2/cron/mail-digest/meta
 // ============================================================
 
 /** `defaults` 段：与上面共享字段逐字同构（少了 id / version / 时间戳 / smtp 标志）。 */
@@ -170,7 +170,7 @@ export const mailDigestMetaSchema = z
       .strict(),
     // 2026-10-16：`smtp` 段（configured / host / port / from_address / from_name）**已
     // 删除**。SMTP 配置不再是部署级的环境变量，而是**页面内可维护的邮箱账号实体**
-    // （`views/mail/accounts/`，后端 `/api/v2/mail/*`）：发信地址、授权码、选哪条发信
+    // （`views/mail/accounts/`，后端 `/api/v2/cron/mail/*`）：发信地址、授权码、选哪条发信
     // 全部改由那几张表承载，`meta` 里再留一段「部署级 SMTP」只会变成第二个真源，且两者
     // 迟早会打架（运维改了 env、页面里配的邮箱是另一个地址，报错时没头绪）。
     // 页面顶部的告警判据随之改为「邮箱列表为空 / 未选发信邮箱」。
@@ -180,7 +180,7 @@ export const mailDigestMetaSchema = z
 export type MailDigestMetaData = z.infer<typeof mailDigestMetaSchema>;
 
 // ============================================================
-// POST /api/v2/mail-digest/preview
+// POST /api/v2/cron/mail-digest/preview
 // ============================================================
 
 export const mailDigestPreviewSchema = z
@@ -199,7 +199,7 @@ export const mailDigestPreviewSchema = z
 export type MailDigestPreviewData = z.infer<typeof mailDigestPreviewSchema>;
 
 // ============================================================
-// POST /api/v2/mail-digest/send 与 GET /api/v2/mail-digest/logs
+// POST /api/v2/cron/mail-digest/send 与 GET /api/v2/cron/mail-digest/logs
 //
 // ⚠️ **两条端点共用同一个出参结构体**：后端 `LogListOut.items` 的元素类型**就是**
 // `SendResultOut`（`/send` 返它本身、`/logs` 返它构成的 `items`）⇒ wire 上两者没有任何
@@ -331,7 +331,7 @@ export interface MailDigestFormModel {
   upcoming_days: number | undefined;
   visible_columns: string[];
   subject_template: string;
-  /** 2026-10-16：发信邮箱 id（`/api/v2/mail/accounts` 的雪花 id，JSON string）。
+  /** 2026-10-16：发信邮箱 id（`/api/v2/cron/mail/accounts` 的雪花 id，JSON string）。
    *  null = 未选。表单校验**不拦**它 —— **空选是合法保存**（用户可能只想先改收件人清单，
    *  拦了就等于强迫他先建邮箱再干别的）。代价是「真要发信时」后端以 21701 失败，所以
    *  页面顶部给告警、「立即发送」按钮给禁用（见 `MailDigestSettings.vue` 的

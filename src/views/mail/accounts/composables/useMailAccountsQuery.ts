@@ -6,10 +6,10 @@
 // `fetchXxx` 是 refetch 的 async 包装）。
 //
 // 两条 hook 都是**常量键**（端点不接 Query extractor）：
-//   - `useMailAccountsQuery` —— GET /mail/accounts，列表页 + 交期汇总页那个邮箱选择器
+//   - `useMailAccountsQuery` —— GET /cron/mail/accounts，列表页 + 交期汇总页那个邮箱选择器
 //     **共用这一条**（同屏去重靠的就是它；切 tab 不重新打）。带 `enabled` 闸门，由 store
 //     的 `openGate()` 在 onMounted 末尾开闸，避免「页面 setup 期就发请求」。
-//   - `useMailMetaQuery` —— GET /mail/meta，SMTP 预设选项（label / host / port / tls_mode）。
+//   - `useMailMetaQuery` —— GET /cron/mail/meta，SMTP 预设选项（label / host / port / tls_mode）。
 //     **前端不存这份映射**，弹窗里那条只读的 `host:port:tls_mode` 描述行全从这里取。
 //
 // 两条都**不**设 `refetchInterval`：本域是配置数据，没有任何「自己会变」的读数，写完由
@@ -29,7 +29,7 @@ export interface MailAccountsQueryGate {
   enabled: MaybeRefOrGetter<boolean>;
 }
 
-/** 读邮箱账号列表（`GET /mail/accounts`）。
+/** 读邮箱账号列表（`GET /cron/mail/accounts`）。
  *
  *  ⚠️ 出参是**信封对象**（`{items: [...]}`），所以这里 parse 完**再取 `.items`**：
  *  直接把 parse 结果当数组用（`data.value.map(...)`）会在守门通过后拿到一个对象，
@@ -60,7 +60,7 @@ export function useMailAccountsQuery(options: MailAccountsQueryGate) {
   return { query, data: query.data, isFetching: query.isFetching, error: query.error, fetchList };
 }
 
-/** 读 SMTP 预设选项（`GET /mail/meta`）。 */
+/** 读 SMTP 预设选项（`GET /cron/mail/meta`）。 */
 export function useMailMetaQuery(options: MailAccountsQueryGate) {
   const query = useQuery({
     queryKey: computed(() => qk.mailMeta()),

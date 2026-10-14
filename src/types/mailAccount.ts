@@ -17,7 +17,7 @@ import type { MailAccountPresetData } from '@/views/mail/accounts/mailAccountSch
  *  联合类型 —— 改枚举时只改 schema 一处。 */
 export type MailAccountPreset = MailAccountPresetData;
 
-/** `POST /api/v2/mail/accounts` 的请求体（建档）。
+/** `POST /api/v2/cron/mail/accounts` 的请求体（建档）。
  *
  *  ⚠️ 本端点与改档端点都是 **POST 而不是 PUT** —— 本仓后端全站只允许 GET / POST 两种方法。 */
 export interface SaveMailAccountPayload {
@@ -32,7 +32,7 @@ export interface SaveMailAccountPayload {
   secret: string;
 }
 
-/** `POST /api/v2/mail/accounts/{id}` 的请求体（改档）。
+/** `POST /api/v2/cron/mail/accounts/{id}` 的请求体（改档）。
  *
  *  ⚠️ `version` **必填**（OCC 锚，取该行当前的 `version`；漏传是 axum 的 HTTP 422 纯文本，
  *  不是业务信封）。不要用「读-再-比」式隐式 OCC 代替。
@@ -45,7 +45,7 @@ export interface UpdateMailAccountPayload extends SaveMailAccountPayload {
   version: number;
 }
 
-/** `POST /api/v2/mail/accounts/{id}/set-default` 与 `/delete` 的请求体：**只有 `version`**
+/** `POST /api/v2/cron/mail/accounts/{id}/set-default` 与 `/delete` 的请求体：**只有 `version`**
  *  一个键，且**必填**。
  *
  *  ⚠️ 后端 `DeleteAccountRequest` / `SetDefaultAccountRequest` 的 `version` **没有**

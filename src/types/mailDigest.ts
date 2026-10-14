@@ -29,13 +29,13 @@ export type MailDigestTriggerSource = 'SCHEDULED' | 'MANUAL';
 /** 单次发送的结果状态。失败也会落一条日志行（`POST /send` 抛错，但服务端已记账）。 */
 export type MailDigestSendStatus = 'SUCCESS' | 'FAILED';
 
-/** GET /mail-digest/logs 的分页参数。 */
+/** GET /cron/mail-digest/logs 的分页参数。 */
 export interface ListMailDigestLogsParams {
   limit?: number;
   offset?: number;
 }
 
-/** POST /mail-digest/config 的请求体。
+/** POST /cron/mail-digest/config 的请求体。
  *
  * ⚠️ `version` **必填**（OCC 锚，取 `GET /config` 的 `version`；表里无行时后端返
  * `version: 0` + `id: "0"`，那个 0 正是「首次创建」的合法锚）。漏传是 axum 的 HTTP
@@ -66,14 +66,14 @@ export interface SaveMailDigestConfigPayload {
   visible_columns: string[];
   /** 标题模板；null = 用后端默认标题（页面留空即 null）。 */
   subject_template: string | null;
-  /** 2026-10-16 新增：发信邮箱 id（`/api/v2/mail/accounts` 一行的雪花 id，JSON string）。
+  /** 2026-10-16 新增：发信邮箱 id（`/api/v2/cron/mail/accounts` 一行的雪花 id，JSON string）。
    *  null = 未选。**保存合法**（用户可能只想先改收件人清单），但**发不出去**：后端
    *  `resolve_sender` 对 null 直接返 21701（503），没有回落默认邮箱的分支。所以页面顶部
    *  给告警、「立即发送」按钮给禁用，而**不拦保存**。 */
   sender_account_id: string | null;
 }
 
-/** POST /mail-digest/preview 与 POST /mail-digest/send 共用的请求体。
+/** POST /cron/mail-digest/preview 与 POST /cron/mail-digest/send 共用的请求体。
  *
  * = 配置部分（**不含 `version`** —— 这两条端点不写配置、只渲染 / 真发，允许「用当前
  * 已保存配置」也允许「按当前表单未保存的内容试跑」）。全部键可选：空体 `{}` = 完全用

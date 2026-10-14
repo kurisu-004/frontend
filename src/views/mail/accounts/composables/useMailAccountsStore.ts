@@ -43,7 +43,7 @@ import { mailAccountErrorText } from '../mailAccountErrorText';
 import { useMailAccountsQuery, useMailMetaQuery } from './useMailAccountsQuery';
 
 /** 弹窗表单初值。⚠️ **刻意不给 `preset` 一个业务默认**：预设枚举是后端
- *  `GET /mail/meta` 的事，前端硬编一个默认值就等于在「用户没选」与「用户选了 163」之间
+ *  `GET /cron/mail/meta` 的事，前端硬编一个默认值就等于在「用户没选」与「用户选了 163」之间
  *  做了不可见的决定；`''` 会让 zod 的枚举校验当场标红、逼用户显式选一次。 */
 function initialFormModel(): MailAccountFormModel {
   return {
@@ -88,7 +88,7 @@ export const useMailAccountsStore = defineStore('mail-accounts', () => {
    *  既不 gate 任何写操作、也不进任何请求体。 */
   const hasDefault = computed(() => accounts.value.some((a) => a.is_default));
   const loading = accountsQuery.isFetching;
-  /** SMTP 预设选项（`GET /mail/meta`），弹窗下拉的唯一来源。
+  /** SMTP 预设选项（`GET /cron/mail/meta`），弹窗下拉的唯一来源。
    *  **三态**：`[]` = meta 还在飞（弹窗里的描述行留空，别显示成「未选预设」）。 */
   const presetOptions = computed<readonly MailPresetOptionData[]>(
     () => metaQuery.data.value?.presets ?? [],

@@ -13,6 +13,17 @@
 //   - ⚠️ **id 用后端 seed 字面量**（`9000000000000008` / `9000000000000701`），同
 //     `scheduled_task` 那两个节点的既有做法：id 是唯一能把「2026-09-24 只是从 fixture 里
 //     删掉、后端从未软删」与「后端换了新行」区分开的标识。
+// 2026-10-17 同步 backend-rust seeds/menu.sql（企业微信推送子模块）：
+//   - `scheduled_task` 分组下**新增**二级子菜单 `wecom`「企业微信」，path `/wecom`
+//     （与 router 的 `path: 'wecom'` 逐字一致）、sort_order **20**（排在 mail(10) 之后）、
+//     icon `ChatDotRound`、id `9000000000000903`。
+//     **path 与 API 前缀无关**：前端书签 URL 是 `/wecom`，后端 API 是
+//     `/api/v2/cron/wecom/*`（2026-10-17 随定时任务域的 `/cron/` 归拢同批硬切），两层不
+//     要求一致 —— 与 `shelves` / `iam/roles` / `mail` 同款做法。将来改 API 前缀时不要连带
+//     改这里：它同时是浏览器书签 URL 与后端 `t_menu.path` 的值。
+//   - ⚠️ **数组物理位置紧跟 mail 之后**（渲染链路没有排序），且 `id` 用后端 seed 字面量
+//     （`9000000000000903`），理由同上面那两个节点：id 是唯一能把「后端从未有过这行」与
+//     「后端换了新行」区分开的标识。
 // 2026-10-16 同步 backend-rust seeds/menu.sql（定时任务域改名 + 邮件多账号）：
 //   - 一级分组 **改 code**：`mail_group` → `scheduled_task`，title 由「定时任务/邮件」
 //     收敛为「定时任务」，sort_order 仍 45、icon 仍 Clock、path 仍 NULL。
@@ -520,22 +531,24 @@ export const ADMIN_MENUS: MenuNode[] = [
     sort_order: 40,
     children: [],
   },
-  // 11. scheduled_task — 定时任务（分组，1 children）
-  // 定时任务域的一级分组：管**所有**后台定时作业，邮件是它的第一个（当前唯一）子域。
+  // 11. scheduled_task — 定时任务（分组，2 children）
+  // 定时任务域的一级分组：管**所有**后台定时作业，邮件与企业微信推送是它的两个子域。
   // 分组节点 path=null（渲染成 el-sub-menu，**不需要**前端路由，照 order_group /
   // auth_group 等既有分组节点的既有做法）；子菜单 mail 的 path 与 router 的
-  // `path: 'mail'` 逐字一致。
+  // `path: 'mail'` 逐字一致，wecom 的 path 与 router 的 `path: 'wecom'` 逐字一致。
   //
   // ⚠️ **sort_order=45 的插入位是硬约束**：数组物理顺序必须与 sort_order 升序一致
   // （MenuTreeItem / MainLayout 都是直接 v-for 数组、渲染链路上没有排序），所以本块
   // 插在 floor_group(40) 与 settings_root(50) 之间 —— `__tests__/adminMenus.spec.ts`
   // 的「menu tree is in ascending sort_order」用例会守住这个位置。
+  // children 内部同理：mail(10) 必须在 wecom(20) 之前（物理顺序 = 渲染顺序）。
   //
   // ⚠️ 图标必须在 `MenuTreeItem.vue` 的 ICON_MAP 内（查不到会**静默不显示**，不报错）：
-  // scheduled_task → Clock、mail → Message（两者 2026-10-13 已补命名导入，零改动）。
+  // scheduled_task → Clock、mail → Message（两者 2026-10-13 已补命名导入，零改动）、
+  // wecom → ChatDotRound（2026-10-17 新增，见 `layouts/components/menuIcons.ts`）。
   //
   // ⚠️ **id 写死字面量、不走 `id(n)` 生成器**：本仓 fixture 的 id 通常是假雪花，但
-  // 这两个节点**刻意**与 backend-rust `seeds/menu.sql` 的新 id 逐字一致 —— 后端已软删
+  // 这几个节点**刻意**与 backend-rust `seeds/menu.sql` 的 id 逐字一致 —— 后端已软删
   // 旧两行（`mail_group` / `mail_digest`），id 是唯一能把「软删」与「改名」区分开的标识，
   // 沿用旧 id 会让对账脚本看不出这其实是两行新记录。
   {
@@ -557,6 +570,20 @@ export const ADMIN_MENUS: MenuNode[] = [
         path: '/mail',
         icon: 'Message',
         sort_order: 10,
+        children: [],
+      },
+      {
+        // 2026-10-17 新增：企业微信推送（Webhook 配置 + 每日总结，页内两个 tab）。
+        // ⚠️ `sort_order: 20` 排在 mail(10) 之后，且**数组物理位置紧跟其后** —— 渲染链路
+        //   上没有排序（见上方「sort_order=45 的插入位是硬约束」）。
+        id: '9000000000000903',
+        version: 0,
+        parent_id: '9000000000000014',
+        code: 'wecom',
+        title: '企业微信',
+        path: '/wecom',
+        icon: 'ChatDotRound',
+        sort_order: 20,
         children: [],
       },
     ],

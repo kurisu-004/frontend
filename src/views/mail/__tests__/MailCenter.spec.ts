@@ -5,7 +5,7 @@
 // 守卫的那条不变量只有一处、却决定首屏的并发请求数：**两个 `<el-tab-pane>` 都必须带
 // `lazy`**。element-plus 2.14.6 的 `tab-pane.vue` 里 `shouldBeRender = !lazy || loaded ||
 // active`：不带 `lazy` 时**首屏全部 pane 都挂载** ⇒ 进页面立刻并发打
-// `/mail/accounts` + `/mail/accounts`(meta) + `/mail-digest/config|meta|logs`
+// `/cron/mail/accounts` + `/cron/mail/accounts`(meta) + `/cron/mail-digest/config|meta|logs`
 // 五六个请求，而用户第一眼只看得见当前那一个 tab。
 //
 // ⚠️ 为什么必须是**源码**守卫而不是挂载后数请求：`lazy` 被 element-plus 换版改成

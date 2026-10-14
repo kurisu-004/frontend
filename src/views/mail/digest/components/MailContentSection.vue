@@ -64,7 +64,7 @@
           </el-checkbox>
         </el-checkbox-group>
         <span v-if="columns.length === 0" class="field-hint">
-          暂无列候选（`GET /mail-digest/meta` 未返回或返回空列表）
+          暂无列候选（`GET /cron/mail-digest/meta` 未返回或返回空列表）
         </span>
         <span v-if="errors?.visible_columns" class="field-error">
           {{ errors.visible_columns }}

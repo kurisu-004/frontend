@@ -61,6 +61,9 @@ import type { ListMailDigestLogsParams } from '@/types/mailDigest';
 // 2026-10-16：送货单打印模板域列表入参形态在 api/printTemplates.ts 定义（api 层是 wire
 // 契约的唯一定义处，沿上面几个 List*Params 的既有做法），本文件只引用。
 import type { ListPrintTemplatesParams } from '@/api/printTemplates';
+// 2026-10-17：企业微信每日总结域的发送历史分页入参形态在 types/wecom.ts 定义（沿
+// ListMailDigestLogsParams / StatisticsQuery 等既有做法），本文件只引用。
+import type { ListWeComDailyLogsParams } from '@/types/wecom';
 
 /** 2026-09-26 新增：工序列表 / 下拉选项 query 入参形态（与 api/process.ts listProcesses 同步）。
  *  含 code_like / category / limit / offset 四字段；与 ListProcessesParams 同形，预留扩展分叉。 */
@@ -712,20 +715,28 @@ export const qk = {
   // ============================================================
   // 2026-10-13 新增：mail-digest 域（交期汇总邮件定时任务）queryKey 工厂。
   //
-  // 根命名空间取 `mail-digest`（与页面路由段 `/mail/digest`、后端 URL 段
-  // `/mail-digest/*` 逐段对齐，便于按 URL 反查键），**不**挂 `partsPrefix` 下 ——
-  // 理由沿本文件 `inspection` / `process-design` / `statistics` 几段的「根命名空间」
-  // 取舍：键的根只要求「同根前缀匹配」才有意义，挂了才有共享写点。本域的写端点
-  // （`POST /mail-digest/config`）写的是本域自己的配置表，**一个字都不写
-  // `t_part` / `t_part_batch`** ⇒ 与零件域、生产队列、统计报表零共享写点；挂 parts
-  // 下只会让全仓最热的 `qk.partsPrefix` 一把全刷把本域配置 + 日志缓存连带重拉。
+  // ⚠️ **2026-10-17：键的命名空间刻意不动**（仍是 `['mail-digest', …]`），尽管同批后端把
+  // API 前缀从 `/mail-digest/*` 硬切到了 `/cron/mail-digest/*`。**键 = 功能域标识，
+  // 不要求与 API 前缀一致** —— 让键去追 URL 没有任何功能收益、只会让已缓存的 query identity
+  // 全部失效。
+  //   **仓内先例**：`qk.deliveryNotesList` = `['delivery-notes','list']`，它对应的后端 URL
+  //   是 `/com/delivery/note`；`qk.customersList` = `['customers','list']` 对应
+  //   `/com/customers`。
+  //   ⚠️ 「按 URL 反查键」这个诉求的真实答案是**在 api 文件的 URL 上写 JSDoc 标明它对应的
+  //   qk 键**（`api/mailDigest.ts` 每个端点的 JSDoc 都这么写），不是让键去追 URL。
+  //
+  // **不**挂 `partsPrefix` 下 —— 理由沿本文件 `inspection` / `process-design` / `statistics`
+  // 几段的「根命名空间」取舍：键的根只要求「同根前缀匹配」才有意义，挂了才有共享写点。本域
+  // 的写端点（`POST /cron/mail-digest/config`）写的是本域自己的配置表，**一个字都不写
+  // `t_part` / `t_part_batch`** ⇒ 与零件域、生产队列、统计报表零共享写点；挂 parts 下只会
+  // 让全仓最热的 `qk.partsPrefix` 一把全刷把本域配置 + 日志缓存连带重拉。
   //
   // 三条读键：
-  //   - mailDigestConfig()          —— GET /mail-digest/config（**常量键**：端点不接
+  //   - mailDigestConfig()          —— GET /cron/mail-digest/config（**常量键**：端点不接
   //     Query extractor，全局单行配置，没有分页 / 筛选 / 维度可言）
-  //   - mailDigestMeta()            —— GET /mail-digest/meta（**常量键**：频率选项 /
-  //     列白名单 / 默认值 / 天数范围 / SMTP 状态，后端不接受任何入参）
-  //   - mailDigestLogs(params)      —— GET /mail-digest/logs（**参数键**：端点接
+  //   - mailDigestMeta()            —— GET /cron/mail-digest/meta（**常量键**：频率选项 /
+  //     列白名单候选 / 默认值 / 天数范围，后端不接受任何入参）
+  //   - mailDigestLogs(params)      —— GET /cron/mail-digest/logs（**参数键**：端点接
   //     limit / offset，翻页必须换缓存身份）
   //
   // 失效编排点（消费方 `views/mail/digest/composables/useMailDigestStore.ts`）：
@@ -739,18 +750,14 @@ export const qk = {
   // （本域三条 useQuery 一个 staleTime 都没设，见
   // `views/mail/digest/composables/useMailDigestQuery.ts` 头注）或用户自己点「刷新」
   // 看到。这是既定策略（CLAUDE.md「跨页面写操作不做穷举失效」），不是遗漏。
-  // ⚠️ 2026-10-14（review 第 2 轮 B-1）：上一句原写「30s 有限 staleTime」，与
-  // `useMailDigestQuery.ts` 头注「本域不设 staleTime、每次挂载重取」在同一分支内自相
-  // 矛盾（TanStack v5 默认 staleTime = 0，本域没覆盖它 ⇒ 不存在「等 30s 才生效」这回事）。
-  // 已订正为同口径。
   // ============================================================
-  /** 定时配置键（`GET /api/v2/mail-digest/config`）。**常量键**：端点不接 Query
+  /** 定时配置键（`GET /api/v2/cron/mail-digest/config`）。**常量键**：端点不接 Query
    *  extractor、返回全局单行（无行时返回全默认 + version 0），键里没有任何可变量。 */
   mailDigestConfig: () => ['mail-digest', 'config'] as const,
-  /** 本域元数据键（`GET /api/v2/mail-digest/meta`）。**常量键**：频率选项 / 列白名单 /
-   *  默认配置 / 天数范围 / SMTP 状态，后端不接受任何入参。 */
+  /** 本域元数据键（`GET /api/v2/cron/mail-digest/meta`）。**常量键**：频率选项 / 列白名单 /
+   *  默认配置 / 天数范围，后端不接受任何入参。 */
   mailDigestMeta: () => ['mail-digest', 'meta'] as const,
-  /** 发送日志分页键（`GET /api/v2/mail-digest/logs`）。**参数键**：端点接 limit /
+  /** 发送日志分页键（`GET /api/v2/cron/mail-digest/logs`）。**参数键**：端点接 limit /
    *  offset，键必须随 params 变化才能拿到不同 cache identity（与 partsList /
    *  statisticsWorkers 同形）。 */
   mailDigestLogs: (params: ListMailDigestLogsParams) => ['mail-digest', 'logs', params] as const,
@@ -804,12 +811,16 @@ export const qk = {
   // ============================================================
   // 2026-10-16 新增：mail 域（定时任务 → 邮件的**邮箱账号**子域）queryKey 工厂。
   //
-  // 根命名空间取 `mail`（与页面路由 `/mail`、后端 URL 段 `/mail/*` 逐段对齐，便于按 URL
-  // 反查键），**不**挂 `partsPrefix` 下 —— 理由沿本文件 `inspection` /
+  // ⚠️ **2026-10-17：键的命名空间刻意不动**（仍是 `['mail', …]`），尽管同批后端把 API
+  // 前缀从 `/mail/*` 硬切到了 `/cron/mail/*`。**键 = 功能域标识，不要求与 API 前缀一致**
+  // —— 见上方 mail-digest 段的完整论证与仓内先例（`qk.deliveryNotesList` =
+  // `['delivery-notes','list']` 对应后端 `/com/delivery/note`）。
+  //
+  // **不**挂 `partsPrefix` 下 —— 理由沿本文件 `inspection` /
   // `process-design` / `statistics` / `iam-roles` 几段的「根命名空间」取舍：键的根只要求
   // 「同根前缀匹配」才有意义，挂了才有共享写点。本域的四条写端点（建档 / 改档 / 删除 /
-  // 设为默认）写的是邮箱账号表，交期汇总那条写端点（`POST /mail-digest/config`）写的是
-  // 自己的配置表 —— 两者与零件域、生产队列**零共享写点**；挂 parts 下只会让全仓最热的
+  // 设为默认）写的是邮箱账号表，交期汇总那条写端点（`POST /cron/mail-digest/config`）写的
+  // 是自己的配置表 —— 两者与零件域、生产队列**零共享写点**；挂 parts 下只会让全仓最热的
   // `qk.partsPrefix` 一把全刷把邮箱列表捎带重拉。
   //
   // ⚠️ **与上方 mail-digest 那组是两个独立前缀**（`mail` vs `mail-digest`），刻意**不**
@@ -822,9 +833,9 @@ export const qk = {
   // 本域零 WS 失效通道，属于 CLAUDE.md「跨页面写操作不做穷举失效」的既定策略。
   //
   // 两条读键：
-  //   - mailAccounts()      —— GET /mail/accounts（**常量键**：端点不接 Query extractor，
+  //   - mailAccounts()      —— GET /cron/mail/accounts（**常量键**：端点不接 Query extractor，
   //     一次性返全部，没有分页 / 筛选 / 维度可言）
-  //   - mailMeta()          —— GET /mail/meta（**常量键**：SMTP 预设选项，后端不接受入参）
+  //   - mailMeta()          —— GET /cron/mail/meta（**常量键**：SMTP 预设选项，后端不接受入参）
   //
   // 失效编排点（消费方 `views/mail/accounts/composables/useMailAccountsStore.ts`）：
   //   四条写端点的 onSuccess **与 onError** 都失效 `qk.mailPrefix` 一把。**失败也失效**的
@@ -832,10 +843,10 @@ export const qk = {
   //   （被定时任务引用禁止删除）说明引用关系只有后端知道，列表页无从自证；21706 / 21707
   //   同理（那两条是「你的副本错了」的信号）。理由同 `useQueueDispatch` 的 OCC 分支。
   // ============================================================
-  /** 邮箱账号列表键（`GET /api/v2/mail/accounts`）。**常量键**：端点不接 Query extractor、
+  /** 邮箱账号列表键（`GET /api/v2/cron/mail/accounts`）。**常量键**：端点不接 Query extractor、
    *  一次性返全部（无分页信封）。⚠️ 不要在调用点拼 `['mail','accounts']` 字面量。 */
   mailAccounts: () => ['mail', 'accounts'] as const,
-  /** SMTP 预设选项键（`GET /api/v2/mail/meta`）。**常量键**：端点不接受任何入参。 */
+  /** SMTP 预设选项键（`GET /api/v2/cron/mail/meta`）。**常量键**：端点不接受任何入参。 */
   mailMeta: () => ['mail', 'meta'] as const,
   /** mail 域前缀 —— 四条写端点在**成功与失败两条路径**上都失效（理由见上方「失效编排点」）。
    *  同时覆盖将来新加的 `['mail', …]` 读键。 */
@@ -864,4 +875,64 @@ export const qk = {
     ['print-templates', 'list', params] as const,
   /** print-templates 域前缀 —— 上传 / 软删完成后一把全失效（任意 params 形态都命中）。 */
   printTemplatesPrefix: ['print-templates'] as const,
+  // ============================================================
+  // 2026-10-17 新增：**企业微信 webhook 通道**（`/api/v2/cron/wecom/webhooks`）queryKey
+  // 工厂。根命名空间取 `wecom`，**不**挂 `partsPrefix` 下 —— 理由沿上方 mail /
+  // mail-digest / statistics / inspection 几段的「根命名空间」取舍：本域的写端点
+  // （建档 / 改档 / 软删 / 置默认 / 测试连通）写的是 webhook 配置表，**一个字都不写
+  // `t_part` / `t_part_batch`** ⇒ 与零件域、生产队列零共享写点；挂 parts 下只会让全仓
+  // 最热的 `qk.partsPrefix` 一把全刷把这个配置列表连带重拉。
+  //
+  // ⚠️ **与下方 `wecom-daily` 那组是两个独立前缀**（`wecom` vs `wecom-daily`），刻意
+  // **不**合并：合并会让「保存一次每日总结配置」把 webhook 列表也刷了 —— 而 `webhook_id`
+  // 是配置里的一个**引用字段**，不是 webhook 行的副本，改配置本身不改变 webhook 行
+  // （真改了行的是 webhook 那四条写端点，那时刷它是正确的）。两者写的是两张表。
+  // ⚠️ `qk.wecomWebhooks()` 被「Webhook 配置」与「每日总结」两个 tab **共用同一份缓存**
+  //   （每日总结页的 webhook 选择器从 `views/wecom/webhooks/composables/` 引同一个 hook），
+  //   切 tab 不重新打列表 —— 这也是两条边刻意分开的收益之一。
+  // ============================================================
+  /** webhook 列表键（`GET /api/v2/cron/wecom/webhooks`）。**常量键**：端点不接 Query
+   *  extractor、一次性返全部（无分页信封，出参是 `{items: [...]}`）。 */
+  wecomWebhooks: () => ['wecom', 'webhooks'] as const,
+  /** wecom 域前缀 —— 四条写端点在成功与失败两条路径上都失效；同时覆盖将来新加的
+   *  `['wecom', …]` 读键。⚠️ **测连通（`/test`）刻意不失效**：它不写 `t_wecom_daily_log`，
+   *  只是通道探测。 */
+  wecomWebhooksPrefix: ['wecom'] as const,
+  // ============================================================
+  // 2026-10-17 新增：**企业微信每日总结**（`/api/v2/cron/wecom-daily/*`）queryKey 工厂。
+  // 根命名空间取 `wecom-daily`，**不**挂 `partsPrefix` 下 —— 理由同上（写的是本域配置
+  // 表与发送流水表，与零件域零共享写点）。
+  //
+  // ⚠️ **`wecomDailyLogs` 刻意**不**挂在 `wecomDailyPrefix` 之下**，反过来 `wecomDailyPrefix`
+  //   也不该连带刷 logs。这不是遗漏，是两端各有理由：
+  //   - 若 logs 挂在 prefix 下：保存一次配置会把「发送历史」也重拉一遍，而**保存配置不改变
+  //     任何一条历史行**（历史是已经发出去的事实快照）⇒ 纯浪费往返，且用户在「保存」后看
+  //     到列表闪一下 loading。
+  //   - 若 prefix 挂在 logs 的父级下（即把 logs 做成 prefix 的一部分）：每次**翻页**都会
+  //     连带失效 config + meta，而翻页只换 logs 一条 ⇒ 同理纯浪费。
+  //   ⇒ 两条互不隶属，各自失效：save-config 成功失效 `wecomDailyPrefix`（只覆盖 config +
+  //   meta）；send 成功**与失败**都失效**日志那条精确键**（失败时后端仍落一条 FAILED 流水，
+  //     只在成功分支失效会让「刚才那次为什么没发出去」凭空消失，理由同 mail-digest 域）。
+  //
+  // 四条读键：
+  //   - wecomDailyConfig()   —— GET /cron/wecom-daily/config（**常量键**：全局单行配置，
+  //     无行时后端返「全默认 + version 0 + id "0"」，端点不接 Query extractor）
+  //   - wecomDailyMeta()     —— GET /cron/wecom-daily/meta（**常量键**：频率选项 /
+  //     worker_metric 选项 / 缺省值 / 三段取值范围，后端不接受任何入参）
+  //   - wecomDailyLogs(params) —— GET /cron/wecom-daily/logs（**参数键**：端点接 limit /
+  //     offset，翻页必须换缓存身份）
+  // ============================================================
+  /** 每日总结配置键（`GET /api/v2/cron/wecom-daily/config`）。**常量键**：端点返回全局
+   *  单行配置，键里没有任何可变量。⚠️ 表空时后端返「全默认 + version 0」，不是 404/null。 */
+  wecomDailyConfig: () => ['wecom-daily', 'config'] as const,
+  /** 每日总结元数据键（`GET /api/v2/cron/wecom-daily/meta`）。**常量键**：端点不接受入参。
+   *  ⚠️ 三个 `*_range` 与 `frequencies[].needs_*` 全由它下发，**前端一律不硬编码**。 */
+  wecomDailyMeta: () => ['wecom-daily', 'meta'] as const,
+  /** 发送历史分页键（`GET /api/v2/cron/wecom-daily/logs`）。**参数键**：端点接 limit /
+   *  offset，键必须随 params 变化才能拿到不同 cache identity。 */
+  wecomDailyLogs: (params: ListWeComDailyLogsParams) =>
+    ['wecom-daily', 'logs', params] as const,
+  /** 每日总结域前缀（**只覆盖 config + meta 两条**）。⚠️ **不覆盖 logs** —— 理由见上方
+   *  「logs 刻意不挂 prefix 之下」那一段。⚠️ 不要在调用点拼 `['wecom-daily']` 字面量。 */
+  wecomDailyPrefix: ['wecom-daily'] as const,
 } as const;

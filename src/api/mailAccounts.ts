@@ -1,12 +1,22 @@
 // 后端 scheduled_task 域 mail 子域（邮箱账号管理）API。走 `@/api/http` 统一 axios 客户端。
 //
-// 2026-10-16 新建。后端契约（冻结版，与本文件逐字对齐）：
-//   GET  /mail/meta                        → SMTP 预设选项（label / host / port / tls_mode）
-//   GET  /mail/accounts                    → 邮箱账号列表（`{items:[…]}`，一次性返全部）
-//   POST /mail/accounts                    → 建档
-//   POST /mail/accounts/{id}               → 改档（**不是 PUT**，本仓后端只允许 GET/POST）
-//   POST /mail/accounts/{id}/delete        → 删除（被定时任务引用时后端 21708 拒）
-//   POST /mail/accounts/{id}/set-default   → 设为默认（列表标记，⚠️ 不影响发信）
+// 2026-10-16 新建。2026-10-17 随企业微信子模块同批**硬切**到 `/cron/` 前缀（见下）。
+// 后端契约（冻结版，与本文件逐字对齐）：
+//   GET  /cron/mail/meta                   → SMTP 预设选项（label / host / port / tls_mode）
+//   GET  /cron/mail/accounts               → 邮箱账号列表（`{items:[…]}`，一次性返全部）
+//   POST /cron/mail/accounts               → 建档
+//   POST /cron/mail/accounts/{id}          → 改档（**不是 PUT**，本仓后端只允许 GET/POST）
+//   POST /cron/mail/accounts/{id}/delete   → 删除（被定时任务引用时后端 21708 拒）
+//   POST /cron/mail/accounts/{id}/set-default → 设为默认（列表标记，⚠️ 不影响发信）
+//
+// ⚠️ **部署顺序：后端必须先上**。2026-10-17 把定时任务域的三条 URL 线（`/mail/*` →
+//   `/cron/mail/*`、`/mail-digest/*` → `/cron/mail-digest/*`、新增 `/cron/wecom/*` 与
+//   `/cron/wecom-daily/*`）**归拢到一个 `/cron` 根下**，旧路径 404、无 alias ⇒ 反序发布时
+//   本页六个端点全部 404，且失败发生在**网络层**（不是 Zod 契约层），现场只看到一句
+//   axios 错误。排查先看部署顺序，别查权限与配置。
+// ⚠️ **前端路由 `/mail` 与 API 前缀 `/cron/mail` 是两层，不要求一致**：path 是浏览器书签
+//   URL + 后端菜单表 `t_menu.path` 列，`src/router/index.ts` 的 `redirect: '/mail'` 老书签
+//   兼容路由一并保持原样（照 `views/wecom/` 域 `/wecom` 与 `/cron/wecom` 的同款做法）。
 //
 // 端点全部 MANAGER 独占（后端 handler 层统一 require_role）。
 //
@@ -50,7 +60,7 @@ import type {
 import { mailAccountSchema } from '@/views/mail/accounts/mailAccountSchema';
 
 /**
- * 读 SMTP 预设选项（`GET /api/v2/mail/meta`）。
+ * 读 SMTP 预设选项（`GET /api/v2/cron/mail/meta`）。
  *
  * 返回 `presets[]`：`{value, label, host, port, tls_mode}`。**前端不另存一份映射** ——
  * 弹窗里那条只读的 `host:port:tls_mode` 描述行、预设下拉的选项，全部取自本端点；前端
@@ -62,12 +72,12 @@ import { mailAccountSchema } from '@/views/mail/accounts/mailAccountSchema';
  * 失败抛 `ApiError`：40101 未登录 / 403 非 MANAGER。
  */
 export async function fetchMailMeta(): Promise<MailMetaData> {
-  const resp = await api.get<MailMetaData>('/mail/meta');
+  const resp = await api.get<MailMetaData>('/cron/mail/meta');
   return resp.data;
 }
 
 /**
- * 读邮箱账号列表（`GET /api/v2/mail/accounts`）。
+ * 读邮箱账号列表（`GET /api/v2/cron/mail/accounts`）。
  *
  * 出参是**信封对象** `{ items: MailAccountOut[] }`（后端 `R<MailAccountListOut>`），不是裸
  * 数组 —— 一次性返全部、无分页参数，但 `data` 本身仍带一层 `items`。
@@ -79,12 +89,12 @@ export async function fetchMailMeta(): Promise<MailMetaData> {
  * 失败抛 `ApiError`：40101 未登录 / 403 非 MANAGER。
  */
 export async function listMailAccounts(): Promise<MailAccountListData> {
-  const resp = await api.get<MailAccountListData>('/mail/accounts');
+  const resp = await api.get<MailAccountListData>('/cron/mail/accounts');
   return resp.data;
 }
 
 /**
- * 新建邮箱账号（`POST /api/v2/mail/accounts`）。
+ * 新建邮箱账号（`POST /api/v2/cron/mail/accounts`）。
  *
  * 请求体 `{name, preset, account, secret}`，**`secret` 必填**（库里还没有授权码）。
  *
@@ -95,12 +105,12 @@ export async function listMailAccounts(): Promise<MailAccountListData> {
  * - 40001 参数非法（长度 / 枚举越界 —— 前端 schema 已提前拦，真到这里说明两边上限漂了）。
  */
 export async function createMailAccount(payload: SaveMailAccountPayload): Promise<MailAccountData> {
-  const resp = await api.post<MailAccountData>('/mail/accounts', payload);
+  const resp = await api.post<MailAccountData>('/cron/mail/accounts', payload);
   return mailAccountSchema.parse(resp.data);
 }
 
 /**
- * 改档（`POST /api/v2/mail/accounts/{id}`）。
+ * 改档（`POST /api/v2/cron/mail/accounts/{id}`）。
  *
  * @param payload `version` **必填**（OCC 锚，取该行当前的 `version`；缺省是 axum 的
  *   HTTP 422 纯文本，不是业务信封）。
@@ -116,12 +126,15 @@ export async function updateMailAccount(
   id: string,
   payload: UpdateMailAccountPayload,
 ): Promise<MailAccountData> {
-  const resp = await api.post<MailAccountData>(`/mail/accounts/${encodeURIComponent(id)}`, payload);
+  const resp = await api.post<MailAccountData>(
+    `/cron/mail/accounts/${encodeURIComponent(id)}`,
+    payload,
+  );
   return mailAccountSchema.parse(resp.data);
 }
 
 /**
- * 删除邮箱账号（`POST /api/v2/mail/accounts/{id}/delete`）。
+ * 删除邮箱账号（`POST /api/v2/cron/mail/accounts/{id}/delete`）。
  *
  * **不是 DELETE 方法** —— 本仓后端全站只允许 GET / POST。删除走独立的 action 路径而不是
  * `DELETE /accounts/{id}`，是为了与 `set-default` 同形、且给「被引用时拒绝」留出一个能带
@@ -141,11 +154,11 @@ export async function deleteMailAccount(
   id: string,
   payload: MailAccountVersionPayload,
 ): Promise<void> {
-  await api.post<null>(`/mail/accounts/${encodeURIComponent(id)}/delete`, payload);
+  await api.post<null>(`/cron/mail/accounts/${encodeURIComponent(id)}/delete`, payload);
 }
 
 /**
- * 设为默认（`POST /api/v2/mail/accounts/{id}/set-default`）。
+ * 设为默认（`POST /api/v2/cron/mail/accounts/{id}/set-default`）。
  *
  * ⚠️ **只是给这一行打上「默认」标记，不决定发信**：后端对 `is_default` 的全部消费只有列表
  * 排序与那条「至多一条为 true」的唯一索引；发信邮箱由交期汇总配置里的
@@ -163,7 +176,7 @@ export async function setDefaultMailAccount(
   payload: MailAccountVersionPayload,
 ): Promise<MailAccountData> {
   const resp = await api.post<MailAccountData>(
-    `/mail/accounts/${encodeURIComponent(id)}/set-default`,
+    `/cron/mail/accounts/${encodeURIComponent(id)}/set-default`,
     payload,
   );
   return mailAccountSchema.parse(resp.data);

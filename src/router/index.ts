@@ -327,8 +327,9 @@ const routes: RouteRecordRaw[] = [
       },
       {
         // 2026-10-16 新增：邮件中心页（`/mail`，页内两个 tab：邮箱设置 / 交期汇总）。
-        // 后端 scheduled_task 域的 mail 子域（`/api/v2/mail/*` 与 `/api/v2/mail-digest/*`，
-        // 全部 MANAGER 独占 —— 权限走菜单 code，不另加 allowRoles）。
+        // 后端 scheduled_task 域的 mail 子域（`/api/v2/cron/mail/*` 与
+        // `/api/v2/cron/mail-digest/*`，全部 MANAGER 独占 —— 权限走菜单 code，不另加
+        // allowRoles）。
         //
         // ⚠️ **一级分组菜单「定时任务」（code `scheduled_task`、path NULL）没有前端路由**
         // —— 它由后端菜单树下发，渲染成 `el-sub-menu`（见 `MenuTreeItem.vue` 的分支判定：
@@ -363,6 +364,31 @@ const routes: RouteRecordRaw[] = [
         // 为空 ⇒ 继续放行），带上 code 反而会让守卫把这次重定向拦成一次「无权跳转」。
         path: 'mail/digest',
         redirect: '/mail',
+      },
+      {
+        // 2026-10-17 新增：企业微信推送页（`/wecom`，页内两个 tab：Webhook 配置 / 每日总结）。
+        // 后端 scheduled_task 域新增 wecom 子域（`/api/v2/cron/wecom/webhooks` 与
+        // `/api/v2/cron/wecom-daily/*`），与上面 mail 那组同 MANAGER 独占口径 ——
+        // 权限走菜单 code，不另加 allowRoles。
+        //
+        // ⚠️ `menuCode` 必须与后端 `seeds/menu.sql` 的 `wecom` code **逐字一致**：
+        // 不一致时路由守卫第 3 条（menuCode 不在菜单树 → 重定向到菜单树里一个有 path
+        // 的节点）会把用户踢出本页，且现象是「点菜单闪一下又回到别的页」，**不是**编译错误
+        // （router 侧没有反向测试，靠 `composables/__fixtures__/__tests__/adminMenus.spec.ts`
+        // 那组定位断言把 fixture 侧的 path 钉死）。
+        //
+        // ⚠️ **`/wecom` 是书签 URL，与后端 `/api/v2/cron/wecom/*` 的 API 前缀毫无关系** ——
+        // 这两层不要求一致（与 `shelves` / `iam/roles` / `mail` 那几条同款做法）。将来改 API
+        // 前缀时**不要**连带改这里的 path：它同时是浏览器可见的书签 URL 与后端菜单表
+        // `t_menu.path` 的值，改它会断掉已收藏的链接与菜单下发。
+        path: 'wecom',
+        name: 'WeComCenter',
+        component: () => import('@/views/wecom/WeComCenter.vue'),
+        meta: {
+          title: '企业微信',
+          icon: 'ChatDotRound',
+          menuCode: 'wecom',
+        },
       },
       {
         path: 'customers',

@@ -1,6 +1,11 @@
 // src/api/__tests__/mailAccounts.contract.spec.ts
 //
 // 2026-10-16 新增：`src/api/mailAccounts.ts` 的两组守卫 ——
+//
+// ⚠️ 2026-10-17：本文件的 URL 断言随定时任务域的 `/cron/` 归拢**全量改写**
+//   （`/mail/meta` → `/cron/mail/meta`、`/mail/accounts*` → `/cron/mail/accounts*`）。
+//   这批断言存在的价值恰恰在这里：URL 打错只会表现为 404，而 404 只在「点一下才发现」时
+//   暴露 —— 前端没有任何类型能挡住 URL 打错。旧路径**无 alias**，反序发布时 404。
 //   ① **wire 契约**（URL / method / body 逐条钉死）；
 //   ② **守门点分工**（哪几条 parse、哪几条不 parse）。
 //
@@ -17,7 +22,7 @@
 //   - N2：三条**有对象出参**的写端点（建档 / 改档 / 设为默认）**必须** parse —— 它们走
 //     useMutation、**没有 queryFn 承载**（CLAUDE.md 为这类调用留的口子）。漏掉 parse 时
 //     坏响应会一路流到「刚建的邮箱 `id` 是 undefined / `version` 是 undefined」，下一次
-//     编辑/删除就会拿 undefined 打 URL（`/mail/accounts/undefined`）。
+//     编辑/删除就会拿 undefined 打 URL（`/cron/mail/accounts/undefined`）。
 //   - N2b：**删除端点不做 parse**，因为后端 `delete_account` 返 `R<()>`、信封 `data` 是
 //     `null` —— 没有形状可守（`parse(null)` 必抛，那正是「删除永远失败」的成因）。软删成功
 //     与否由 HTTP 状态码表达：失败一律 reject（21706 / 21708），store 的 onError 转人话。
@@ -178,32 +183,32 @@ describe('mailAccounts api — 四条写端点必须 Zod 校验（N2）', () => 
 });
 
 describe('mailAccounts 五个端点的 URL / method / body 契约', () => {
-  it('U1：读预设打 GET /mail/meta（无入参）', async () => {
+  it('U1：读预设打 GET /cron/mail/meta（无入参）', async () => {
     httpGetMock.mockReset().mockResolvedValue({ data: { presets: [] } });
     await fetchMailMeta();
     expect(httpGetMock).toHaveBeenCalledTimes(1);
-    expect(httpGetMock.mock.calls[0]![0]).toBe('/mail/meta');
+    expect(httpGetMock.mock.calls[0]![0]).toBe('/cron/mail/meta');
   });
 
-  it('U2：读列表打 GET /mail/accounts（无入参 —— 端点一次性返全部、无分页参数）', async () => {
+  it('U2：读列表打 GET /cron/mail/accounts（无入参 —— 端点一次性返全部、无分页参数）', async () => {
     httpGetMock.mockReset().mockResolvedValue({ data: { items: [] } });
     await listMailAccounts();
-    expect(httpGetMock.mock.calls[0]![0]).toBe('/mail/accounts');
+    expect(httpGetMock.mock.calls[0]![0]).toBe('/cron/mail/accounts');
     // 没有第二个实参（没有 params 形参）⇒ 不会有 `?limit=&offset=` 那种空串 query。
     expect(httpGetMock.mock.calls[0]![1]).toBeUndefined();
   });
 
-  it('U3：建档打 POST /mail/accounts，body 四个键逐字', async () => {
+  it('U3：建档打 POST /cron/mail/accounts，body 四个键逐字', async () => {
     const [url, body] = await postArgs(() => createMailAccount(CREATE_BODY));
-    expect(url).toBe('/mail/accounts');
+    expect(url).toBe('/cron/mail/accounts');
     expect(body).toEqual(CREATE_BODY);
   });
 
-  it('U4：改档打 POST /mail/accounts/{id}（**不是 PUT**），id 经 encodeURIComponent', async () => {
+  it('U4：改档打 POST /cron/mail/accounts/{id}（**不是 PUT**），id 经 encodeURIComponent', async () => {
     const [url, body] = await postArgs(() =>
       updateMailAccount('SN/A B', { ...CREATE_BODY, version: 7 }),
     );
-    expect(url).toBe('/mail/accounts/SN%2FA%20B');
+    expect(url).toBe('/cron/mail/accounts/SN%2FA%20B');
     expect(body).toMatchObject({ version: 7, secret: 'abc123' });
   });
 
@@ -214,13 +219,13 @@ describe('mailAccounts 五个端点的 URL / method / body 契约', () => {
     const [delUrl, delBody] = await postArgs(() =>
       deleteMailAccount('9000000000000902', VERSION_BODY),
     );
-    expect(delUrl).toBe('/mail/accounts/9000000000000902/delete');
+    expect(delUrl).toBe('/cron/mail/accounts/9000000000000902/delete');
     expect(delBody).toEqual({ version: 7 });
 
     const [defUrl, defBody] = await postArgs(() =>
       setDefaultMailAccount('9000000000000902', VERSION_BODY),
     );
-    expect(defUrl).toBe('/mail/accounts/9000000000000902/set-default');
+    expect(defUrl).toBe('/cron/mail/accounts/9000000000000902/set-default');
     expect(defBody).toEqual({ version: 7 });
   });
 });
@@ -237,7 +242,7 @@ describe('mailAccounts api 的引法纪律', () => {
     expect(match?.[1]).toBe('type ');
   });
 
-  it('U7：api 层**不**另存 SMTP 预设映射（host / port 由 `/mail/meta` 下发）', () => {
+  it('U7：api 层**不**另存 SMTP 预设映射（host / port 由 `/cron/mail/meta` 下发）', () => {
     // 前端存一份「163 ⇒ smtp.163.com:465」就是这个域的第二真源：后端改端口时它不会
     // 报错、只会静默显示旧值。唯一允许出现在 api 层的是**入参**里的枚举别名。
     const src = readFileSync(new URL('../mailAccounts.ts', import.meta.url), 'utf8');

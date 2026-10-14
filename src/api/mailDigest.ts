@@ -1,14 +1,27 @@
 // 后端 mail_digest 域（交期汇总邮件定时任务）API。走 `@/api/http` 统一 axios 客户端。
 //
-// 2026-10-13 新建。后端契约（冻结版，与本文件逐字对齐）：
-//   GET  /mail-digest/config                 → 读定时配置（无行时返回全默认 + version 0）
-//   POST /mail-digest/config                 → 保存（**不是 PUT**，本仓后端只允许 GET/POST）
-//   GET  /mail-digest/meta                   → 频率选项 / 列白名单候选 / 默认值 / 天数范围 / SMTP 状态
-//   POST /mail-digest/preview                → 按（可覆盖的）配置渲染 HTML，不落库
-//   POST /mail-digest/send                   → 真发一封，落一条发送日志
-//   GET  /mail-digest/logs?limit=&offset=    → 发送日志分页
+// 2026-10-13 新建。2026-10-17 随企业微信子模块同批**硬切**到 `/cron/` 前缀（见下）。
+// 后端契约（冻结版，与本文件逐字对齐）：
+//   GET  /cron/mail-digest/config               → 读定时配置（无行时返回全默认 + version 0）
+//   POST /cron/mail-digest/config               → 保存（**不是 PUT**，本仓后端只允许 GET/POST）
+//   GET  /cron/mail-digest/meta                 → 频率选项 / 列白名单候选 / 默认值 / 天数范围
+//   POST /cron/mail-digest/preview              → 按（可覆盖的）配置渲染 HTML，不落库
+//   POST /cron/mail-digest/send                 → 真发一封，落一条发送日志
+//   GET  /cron/mail-digest/logs?limit=&offset=  → 发送日志分页
 //
-// 端点全部 MANAGER 独占（后端 handler 层统一 require_role）。
+// ⚠️ **部署顺序：后端必须先上**。2026-10-17 把定时任务域的三条 URL 线（`/mail/*` →
+//   `/cron/mail/*`、`/mail-digest/*` → `/cron/mail-digest/*`、新增 `/cron/wecom/*` 与
+//   `/cron/wecom-daily/*`）**归拢到一个 `/cron` 根下**，旧路径 404、无 alias ⇒ 反序发布时
+//   本文件六个端点全部 404，且失败发生在**网络层**（不是 Zod 契约层），现场只看到一句
+//   axios 错误。排查先看部署顺序，别查权限与配置。
+// ⚠️ **前端路由 `/mail` 与 API 前缀 `/cron/mail-digest` 是两层，不要求一致**：path 是浏览器
+//   书签 URL + 后端菜单表 `t_menu.path` 列，`src/router/index.ts` 的 `redirect: '/mail'`
+//   老书签兼容路由保持原样（照 `views/wecom/` 域 `/wecom` 与 `/cron/wecom` 的同款做法）。
+// ⚠️ **queryKey 命名空间刻意不动**（仍是 `qk.mailDigestPrefix` = `['mail-digest']`）：
+//   queryKey 的根是**功能域标识**，不要求与 API 前缀逐段一致（仓内先例：
+//   `qk.deliveryNotesList` = `['delivery-notes','list']` 对应的后端 URL 是 `/com/delivery/note`）。
+//   改键会让 localStorage 之外的一切缓存身份失效、且没有任何功能收益。详见
+//   `src/composables/queries/keys.ts` 的 mail / mail-digest 两段论证。
 //
 // ⚠️ **2026-10-14：错误码段是 217xx**。本域第一版按「215 段往后排」猜成了 215xx，后端
 // 实查发现 215xx 已被 outsource 发货域占用（`BIZ_OUTSOURCE_SHIPMENT_*=21501..21504`，
@@ -46,7 +59,7 @@ import {
 } from '@/views/mail/digest/mailDigestSchema';
 
 /**
- * 读定时配置（`GET /api/v2/mail-digest/config`）。
+ * 读定时配置（`GET /api/v2/cron/mail-digest/config`）。
  *
  * ⚠️ **不会 404**：表里无行时后端返回「全部默认值 + `version: 0` + `id: "0"`」，
  * 所以调用方永远拿到一个可用的配置对象，首次保存用 `version: 0` 建行。
@@ -54,12 +67,12 @@ import {
  * 失败抛 `ApiError`：40101 未登录 / 403 非 MANAGER / 21705 配置不存在。
  */
 export async function fetchMailDigestConfig(): Promise<MailDigestConfigData> {
-  const resp = await api.get<MailDigestConfigData>('/mail-digest/config');
+  const resp = await api.get<MailDigestConfigData>('/cron/mail-digest/config');
   return resp.data;
 }
 
 /**
- * 保存定时配置（`POST /api/v2/mail-digest/config`）。
+ * 保存定时配置（`POST /api/v2/cron/mail-digest/config`）。
  *
  * @param payload `version` **必填**（OCC 锚，取 `GET /config` 的 `version`；缺省是
  *   axum 的 HTTP 422 纯文本，不是业务信封）。
@@ -80,7 +93,7 @@ export async function fetchMailDigestConfig(): Promise<MailDigestConfigData> {
 export async function saveMailDigestConfig(
   payload: SaveMailDigestConfigPayload,
 ): Promise<MailDigestConfigData> {
-  const resp = await api.post<MailDigestConfigData>('/mail-digest/config', payload);
+  const resp = await api.post<MailDigestConfigData>('/cron/mail-digest/config', payload);
   // ⚠️ **部署顺序：后端必须先上**（照 CLAUDE.md「写侧 schema 接 `.strict()`」的登记口径）。
   // `mailDigestConfigSchema` 是 `.strict()` 的写侧语义：后端给 `ConfigOut` **加一个字段**，
   // 这行当场抛 ZodError（mutation 进 `onError` 弹「格式不符合预期」，而库里已落库成功）。
@@ -90,13 +103,13 @@ export async function saveMailDigestConfig(
 }
 
 /**
- * 读本域元数据（`GET /api/v2/mail-digest/meta`）。
+ * 读本域元数据（`GET /api/v2/cron/mail-digest/meta`）。
  *
  * 返回频率选项（含三个 `needs_*` 判据）、表格列白名单候选、默认配置、`upcoming_days`
  * 的取值范围。
  *
  * ⚠️ 2026-10-16：**`smtp` 段已从出参删除**。SMTP 不再是部署级环境变量，而是页面内可
- * 维护的邮箱账号实体（`GET /api/v2/mail/accounts`，前端 `views/mail/accounts/`）——
+ * 维护的邮箱账号实体（`GET /api/v2/cron/mail/accounts`，前端 `views/mail/accounts/`）——
  * 发信地址、授权码、选哪条发信都由那几张表承载。`defaults` 段里的
  * `sender_account_id`（选哪条邮箱发信）取的就是那个域的行 id，页面顶部的告警判据随之
  * 从「`meta.smtp.configured === false`」改为「邮箱列表为空 / 未选发信邮箱」。
@@ -104,12 +117,12 @@ export async function saveMailDigestConfig(
  * 失败抛 `ApiError`：40101 未登录 / 403 非 MANAGER。
  */
 export async function fetchMailDigestMeta(): Promise<MailDigestMetaData> {
-  const resp = await api.get<MailDigestMetaData>('/mail-digest/meta');
+  const resp = await api.get<MailDigestMetaData>('/cron/mail-digest/meta');
   return resp.data;
 }
 
 /**
- * 渲染邮件预览（`POST /api/v2/mail-digest/preview`）。
+ * 渲染邮件预览（`POST /api/v2/cron/mail-digest/preview`）。
  *
  * 请求体 = 配置部分（**不含 version**），全部键可选：空体 `{}` = 完全用服务端当前配置；
  * 传部分键 = 只覆盖那几项（其余仍取当前配置）。**不落库、不写日志、不发信**。
@@ -119,12 +132,12 @@ export async function fetchMailDigestMeta(): Promise<MailDigestMetaData> {
 export async function previewMailDigest(
   payload: MailDigestRunPayload,
 ): Promise<MailDigestPreviewData> {
-  const resp = await api.post<MailDigestPreviewData>('/mail-digest/preview', payload);
+  const resp = await api.post<MailDigestPreviewData>('/cron/mail-digest/preview', payload);
   return mailDigestPreviewSchema.parse(resp.data);
 }
 
 /**
- * 立即发送一封（`POST /api/v2/mail-digest/send`）。
+ * 立即发送一封（`POST /api/v2/cron/mail-digest/send`）。
  *
  * 请求体与 preview 同形。**真发、不可撤销** —— UI 侧必须挂二次确认
  * （`MailDigestSettings.vue` 的 `el-popconfirm`）。
@@ -138,17 +151,17 @@ export async function previewMailDigest(
 export async function sendMailDigestNow(
   payload: MailDigestRunPayload,
 ): Promise<MailDigestSendResultData> {
-  const resp = await api.post<MailDigestSendResultData>('/mail-digest/send', payload);
+  const resp = await api.post<MailDigestSendResultData>('/cron/mail-digest/send', payload);
   return mailDigestSendResultSchema.parse(resp.data);
 }
 
 /**
- * 发送日志分页（`GET /api/v2/mail-digest/logs?limit=&offset=`）。
+ * 发送日志分页（`GET /api/v2/cron/mail-digest/logs?limit=&offset=`）。
  *
  * 守门在 queryFn（同三条读端点），本函数**不 parse**。
  */
 export async function listMailDigestLogs(params: ListMailDigestLogsParams = {}) {
-  const resp = await api.get<MailDigestLogListData>('/mail-digest/logs', {
+  const resp = await api.get<MailDigestLogListData>('/cron/mail-digest/logs', {
     params: cleanParams(params),
   });
   return resp.data;

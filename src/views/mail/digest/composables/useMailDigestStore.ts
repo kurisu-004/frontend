@@ -187,7 +187,7 @@ export const useMailDigestStore = defineStore('mail-digest', () => {
   const configLoading = configQuery.isFetching;
 
   // 2026-10-16：SMTP 不再是部署级环境变量，改由**页面内可维护的邮箱账号实体**承载
-  // （后端 `/api/v2/mail/accounts`，前端 `views/mail/accounts/`）。本页因此多挂一条
+  // （后端 `/api/v2/cron/mail/accounts`，前端 `views/mail/accounts/`）。本页因此多挂一条
   // `qk.mailAccounts()` 的 query —— 与「邮箱设置」那个 tab **共用同一条缓存**（同屏去重
   // / 切 tab 不重新打）。发信地址、授权码、选哪条发信三件事全在这个域里。
   const accountsQuery = useMailAccountsQuery({ enabled: ready });
