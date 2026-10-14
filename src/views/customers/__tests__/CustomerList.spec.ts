@@ -132,7 +132,6 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/api/customer', () => ({
   listCustomers: mocks.listCustomers,
-  getCustomer: vi.fn(),
   createCustomer: mocks.createCustomer,
   updateCustomer: mocks.updateCustomer,
   softDeleteCustomer: mocks.softDeleteCustomer,

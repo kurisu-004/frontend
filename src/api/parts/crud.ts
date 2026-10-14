@@ -25,16 +25,13 @@
 // 域内 schema 的派生类型用 `import type` 引入（编译期擦除）：本文件**不做 parse**，
 // 守门留在 queryFn / mutationFn（CLAUDE.md「Zod schema-first」）。
 //
-// 2026-10-10（review 第 1 轮）：11 个写端点的返回类型从 `PartDetailDto` 订正为
-// `PartOutDto` —— 后端 handler 一律返 `R<PartOut>`（10 字段窄投影），此前声明的
-// 28 字段详情 VO 后端一个都不返：`placeOnShelf` / `releaseFromProgramming` /
-// `forceCompletePart` / `scanInspect` / `deliverPart` / `scanDeliverPart` /
-// `completePart` / `startPartRepair` / `completePartRepair` / `repairDispatch`，
-// 以及 `api/parts/batch.ts` 两个批量版的 `submitted[].part` 与
-// `api/productionScan.contract.ts::ScanPickUpResultDto`。判据是后端 handler 的
-// 返回类型，不是「历史上前端写成了什么」。
-// **无运行时影响**（这些返回值的消费方一律丢弃，只靠失效链重拉），但本文件此前的
-// 声明与同文件新建的 `BatchFlowOut` 自相矛盾，而它正是本次重构的立项靶子。
+// 写端点（`placeOnShelf` / `releaseFromProgramming` / `forceCompletePart` /
+// `repairDispatch` / `cancelPart`）的返回类型统一是 `PartOutDto` —— 后端 handler
+// 一律返 `R<PartOut>`（10 字段窄投影），**不是**详情 VO。判据是后端 handler 的
+// 返回类型，不是「前端历史上写成了什么」。这些返回值的消费方一律丢弃（只靠失效链
+// 重拉），但声明必须与后端一致 —— 否则本文件会并存两种互相矛盾的出参类型。
+// 同族的另一处：`api/productionScan.contract.ts::ScanPickUpResultDto`
+// （批量版封装本仓不声明，其契约见 backend-rust `docs/api/batch.md`）。
 // ⚠️ 例外五处**保持** `PartDetailDto`：`getPart` / `createPart` / `updatePart` /
 // `getPartBySerial`（后端真返 `PartDetailOut`），以及 `scanPart`（打的是 v1(Python)
 // 的 `POST /parts/scan`，v2 无此路由，契约不属本次核对范围）。
@@ -72,19 +69,16 @@ export type PartDetailDto = PartDetailData;
  *  `TPartInspected`）。
  *
  *  返它的端点：`POST /parts/{id}/cancel`、`POST /prod/parts/{id}/force-complete`、
- *  `POST /prod/batches/{batch_id}/cancel`、`/deliver`、`/complete`、`/start-repair`、
- *  `/complete-repair`、`/repair-dispatch`、`/place-on-shelf`、
- *  `/release-from-programming`、`/scan-inspect`、`/scan/deliver`，
- *  以及三个流转端点 `to-ship` / `to-process` / `to-inspection` 的 `BatchFlowOut.part`
- *  与两个批量版的 `submitted[].part`。
+ *  `POST /prod/batches/{batch_id}/cancel`、`/repair-dispatch`、`/place-on-shelf`、
+ *  `/release-from-programming`，以及三个流转端点 `to-ship` / `to-process` /
+ *  `to-inspection` 的 `BatchFlowOut.part`。
  *
  *  比 `PartDetailDto` 少的 **18** 个字段（applicant_name / 价格 / 交期 / 工艺链 id …）
  *  是**后端刻意不返**（`TPartInspected` 就是流转流的最小投影），不是前端遗漏。
  *  消费侧若要展示详情，请改读 `GET /parts/{id}`。
  *
  *  判据是**后端 handler 的返回类型**（`Result<Json<R<PartOut>>, _>`），不是「历史上
- *  前端写成了什么」—— 2026-10-10 订正前其中 11 个 wrapper 声明的是 28 字段的
- *  `PartDetailDto`，后端一个都不返。 */
+ *  前端写成了什么」。 */
 export interface PartOutDto {
   id: string;
   serial_no: string | null;
@@ -377,8 +371,8 @@ export async function placeOnShelf(
 // 归属地。本文件随之删除 `PartRecallPayload` 与 `recallToPending`。
 
 // 2026-09-30 新增：系统管理员专属「强制完成」—— 绕过状态机将该工单及所有非取消
-// 批次置为 COMPLETED（与正常 `completePart` DELIVERED → COMPLETED 不同）。仅 MANAGER
-// 角色可见，按钮守卫由 usePartDispatch.canForceComplete 收口。
+// 批次置为 COMPLETED（正常流转里 DELIVERED → COMPLETED 要逐单确认，强制完成不经
+// 那一步）。仅 MANAGER 角色可见，按钮守卫由 usePartDispatch.canForceComplete 收口。
 export interface ForceCompletePayload {
   note?: string | null;
 }
@@ -479,47 +473,6 @@ export async function updatePart(id: string, payload: PartUpdatePayload): Promis
 // 另：`pass-inspection` / `fail-inspection` 两条 v1 Python 遗留路由在 v2 从未注册
 // （「待品检」页点这两个按钮报 404 的根因），本文件不再声明对应封装 ——
 // 品检通过走 `toShip`、品检打回走 `toProcess`。
-
-/** 扫码快捷品检（PENDING/PROGRAMMING/IN_PROCESS+PRODUCTION_SHELF → INSPECTION）。
- * 事件类型 INSPECTED（pass=true）/ INSPECTION_FAILED（pass=false）。
- *
- * payload 与后端 v2 `ScanInspectRequest` 对齐：`pass` / `version` 两者必填（后端无
- * `#[serde(default)]`，缺任一 → HTTP 422），`next_process_id` 仅 pass=false 分支必填。
- *
- * 2026-10-10：`target_inspection_shelf_id` 与 `shelf_id` 后端**一并删除** —— 送检目标
- * 品检架 / 打回目标生产架都改由后端按负载自动选（见 CLAUDE.md「货架自动选择」）。 */
-export interface ScanInspectPayload {
-  /** 必填；true = 走 INSPECTED（品检通过）/ false = 走 INSPECTION_FAILED（打回）。 */
-  pass: boolean;
-  /** 必填；t_part_batch.version（OCC 锚），不匹配 → 40901。 */
-  version: number;
-  /** 仅 pass=false 必填；下一道工序 id。 */
-  next_process_id?: string;
-  /** 可选；品检备注（≤ 500 字符）。 */
-  note?: string | null;
-  /** 可选；缺省 = 批次全量。 */
-  quantity?: number | null;
-}
-
-/**
- * ⚠️ 2026-10-10：`target_inspection_shelf_id` 与 `shelf_id` 后端**一并删除**（目标架改
- * 由后端按负载自动选），两个字段已从上面的 payload 移除。
- *
- * ⚠️ 2026-10-05 起本封装在生产侧**零调用方**：待品检页的「快捷品检」已改成
- *  `GET /prod/inspection/scan/{serial_no}` 取树 + `to-inspection`（送检）/
- *  `to-ship`（品检通过）/ `to-process`（指定工序）三个显式端点，快捷品检那套
- *  pass/pass=false 分流不再有调用点。后端 `scan-inspect` 端点仍在，签名照上注释
- *  保留待用，不要当死代码删。 */
-export async function scanInspect(
-  batchId: string,
-  payload: ScanInspectPayload,
-): Promise<PartOutDto> {
-  const resp = await api.post<PartOutDto>(
-    `/prod/batches/${encodeURIComponent(batchId)}/scan-inspect`,
-    payload,
-  );
-  return resp.data;
-}
 
 /** 单件送检 / 品检通过 / 打回三个流转端点的出参（后端 `ToXxxOut`）。
  *
@@ -634,100 +587,6 @@ export interface ToProcessPayload {
 export async function toProcess(batchId: string, payload: ToProcessPayload): Promise<BatchFlowOut> {
   const resp = await api.post<BatchFlowOut>(
     `/prod/batches/${encodeURIComponent(batchId)}/to-process`,
-    payload,
-  );
-  return resp.data;
-}
-
-/** READY_TO_SHIP → DELIVERED：发货（文员/管理员手动）。
- *  2026-10-02 迁 prod 域：批次锚定 + `version` 必填（OCC 锚 t_part_batch）。 */
-export interface DeliverPayload {
-  version: number;
-  note?: string | null;
-}
-
-export async function deliverPart(batchId: string, payload: DeliverPayload): Promise<PartOutDto> {
-  const resp = await api.post<PartOutDto>(
-    `/prod/batches/${encodeURIComponent(batchId)}/deliver`,
-    payload,
-  );
-  return resp.data;
-}
-
-/** 扫码台：司机确认发货。
- *  `POST /prod/batches/scan/deliver`（prod 域，静态双段路径，无 path 参数 ——
- *  服务端按序列号 + status 自行解析目标批次）。
- *  字段名对齐后端 `ScanDeliverPartRequest`：`part_serial_no` / `worker_badge_code`
- *  均必填且无 `#[serde(default)]`，对不上就是 422。
- *  2026-10-03：本函数仍零生产调用方（死代码），接上调用方时直接用本签名。 */
-export interface ScanDeliverPartPayload {
-  part_serial_no: string;
-  worker_badge_code: string;
-}
-
-export async function scanDeliverPart(payload: ScanDeliverPartPayload): Promise<PartOutDto> {
-  const resp = await api.post<PartOutDto>('/prod/batches/scan/deliver', payload);
-  return resp.data;
-}
-
-/** DELIVERED → COMPLETED：确认完成，释放流水号。
- *  2026-10-02 迁 prod 域：批次锚定 + `version` 必填（OCC 锚 t_part_batch）。 */
-export interface CompletePayload {
-  version: number;
-  note?: string | null;
-}
-
-export async function completePart(batchId: string, payload: CompletePayload): Promise<PartOutDto> {
-  const resp = await api.post<PartOutDto>(
-    `/prod/batches/${encodeURIComponent(batchId)}/complete`,
-    payload,
-  );
-  return resp.data;
-}
-
-/** → REPAIRING：开始返修（INSPECTION/READY_TO_SHIP/DELIVERED 进入）。
- *  2026-10-02 迁 prod 域：批次锚定，`batch_id` 已是路径参数。
- *  ⚠️ 该 DTO **无 quantity**（后端 `StartRepairRequest` 只有 version / reason / note）：
- *  要返修部分数量必须先 split 出子批次，再对子批次调本端点。 */
-export interface StartRepairPayload {
-  version: number;
-  reason?: string | null;
-  note?: string | null;
-}
-export async function startPartRepair(
-  batchId: string,
-  payload: StartRepairPayload,
-): Promise<PartOutDto> {
-  const resp = await api.post<PartOutDto>(
-    `/prod/batches/${encodeURIComponent(batchId)}/start-repair`,
-    payload,
-  );
-  return resp.data;
-}
-
-/** REPAIRING → ON_SHELF / INSPECTION：返修完成（PR-M 2026-08-04）。
- *
- * - shelf.zone=PRODUCTION → REPAIRING → ON_SHELF（需 next_process_id）
- * - shelf.zone=INSPECTION → REPAIRING → INSPECTION（无需 next_process_id）
- *
- * 2026-10-02 迁 prod 域：批次锚定；`shelf_id` 从 query 参数移入 body
- * （后端 `CompleteRepairRequest` 是 body DTO，旧实现的 `params: { shelf_id }`
- *  与之不同构）。
- */
-export interface CompleteRepairPayload {
-  /** 必填；目标货架 id（zone 决定落 ON_SHELF 还是 INSPECTION）。 */
-  shelf_id: string;
-  /** 必填；t_part_batch.version（OCC 锚）。 */
-  version: number;
-  next_process_id?: string | null;
-  note?: string | null;
-}
-export async function completePartRepair(
-  batchId: string,
-  payload: CompleteRepairPayload,
-): Promise<PartOutDto> {
-  const resp = await api.post<PartOutDto>(
-    `/prod/batches/${encodeURIComponent(batchId)}/complete-repair`,
     payload,
   );
   return resp.data;

@@ -1,4 +1,4 @@
-// src/api/shelves.spec.ts
+// src/api/__tests__/shelves.spec.ts
 //
 // 2026-10-10 新增：货架管理 CRUD 端点**迁 iam 域**的 URL 契约守卫。
 //
@@ -24,7 +24,7 @@
 //     变更记录，不该被当成残留。静态扫描的代价是「改注释即红」，故这里刻意只在
 //     「剥完注释后仍命中请求调用形态」时报错 —— 注释改动不会触发。
 //
-// mock 手法沿 `shelfProcesses.spec.ts` 同款：整模块桩掉 `@/api/http`（不
+// mock 手法沿同目录 `shelfProcesses.spec.ts` 同款：整模块桩掉 `@/api/http`（不
 // importOriginal），只保留 `api.get` / `api.post` 两个可断言入口 + `cleanParams`。
 // 工序映射那 3 个端点（`/prod/shelf-processes*`，属 prod 域）由
 // `shelfProcesses.spec.ts` 的 C1~C5 守卫，本文件不重复覆盖，只在 D5 里一并纳入
@@ -54,7 +54,7 @@ import {
   listShelves,
   setShelfProcesses,
   updateShelf,
-} from './shelves';
+} from '../shelves';
 
 beforeEach(() => {
   httpGetMock.mockReset();
@@ -167,7 +167,8 @@ describe('2026-10-10：货架管理 CRUD 端点迁 iam 域的 URL 契约（shelv
     // 否则 `src/composables/__fixtures__/adminMenus.ts` 里刻意保持的菜单
     // `path: '/shelves'`（前端路由 / 后端菜单表字段，见 CLAUDE.md「目录归位」）
     // 会被误判。
-    const ROOT = fileURLToPath(new URL('../..', import.meta.url));
+    // 2026-10-20 归位到 `__tests__/` 后多一级目录，根要从仓库根往上数三段。
+    const ROOT = fileURLToPath(new URL('../../..', import.meta.url));
     const SRC = join(ROOT, 'src');
     // 扫 src 下全部 .ts / .vue，**只跳过 __tests__ 目录**（断言里必然出现旧字面量）。
     //
@@ -175,8 +176,10 @@ describe('2026-10-10：货架管理 CRUD 端点迁 iam 域的 URL 契约（shelv
     // 的人留一个盲区。代价是本文件内的注释必须避开「`api.get` 打旧前缀」这种**请求
     // 调用形态**的字面示例 —— 本文件对 `stripComments` 自身会失同步（注释不剥，见
     // 该函数说明），这类示例留在注释里会被 D6 当成真残留报出来。
+    // 本文件搬进 `__tests__/` 后落在 `collectSourceFiles` 的跳过规则内，故显式补回。
+    const files = [...collectSourceFiles(SRC), fileURLToPath(import.meta.url)];
     const offenders: string[] = [];
-    for (const file of collectSourceFiles(SRC)) {
+    for (const file of files) {
       const src = stripComments(readFileSync(file, 'utf8'));
       const rel = relative(SRC, file).split(sep).join('/');
       for (const m of src.matchAll(

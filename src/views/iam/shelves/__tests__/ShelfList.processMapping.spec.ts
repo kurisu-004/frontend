@@ -15,7 +15,7 @@
 //
 // 为什么这个文件放在 views/iam/shelves/__tests__ 而不是 api/：
 //   被测的守卫是**视图层**的（ref 状态位 + saveShelf 早退），api 层拿不到
-//   processLoadFailed；反过来 src/api/shelfProcesses.spec.ts 已把两个纯函数
+//   processLoadFailed；反过来 src/api/__tests__/shelfProcesses.spec.ts 已把两个纯函数
 //   （toShelfProcessIds / toShelfProcessesPayload）逐字钉死，本文件复用它们
 //   （importOriginal，不桩成假实现），保证「读形态 → 写形态」两端仍是真代码。
 //
@@ -83,7 +83,7 @@ const setShelfProcessesMock = vi.fn();
 const listProcessesMock = vi.fn();
 
 // importOriginal：两个纯函数 toShelfProcessIds / toShelfProcessesPayload 走真实现
-// （它们已被 src/api/shelfProcesses.spec.ts 逐字钉死），只桩 4 个发请求的函数。
+// （它们已被 src/api/__tests__/shelfProcesses.spec.ts 逐字钉死），只桩 4 个发请求的函数。
 vi.mock('@/api/shelves', async (importOriginal) => ({
   ...(await importOriginal<typeof ShelvesModule>()),
   listShelves: (...args: unknown[]) => listShelvesMock(...args),

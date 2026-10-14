@@ -1,7 +1,7 @@
-// src/api/workType.spec.ts
+// src/api/__tests__/workType.spec.ts
 //
 // 2026-10-02 新增：工种↔工序映射端点的**契约级**回归守卫（与
-// src/api/shelfProcesses.spec.ts 同款设计，理由照抄那份的判断：后端集成测试逐字用
+// src/api/__tests__/shelfProcesses.spec.ts 同款设计，理由照抄那份的判断：后端集成测试逐字用
 // 正确形态 ⇒ 「后端自测绿」被误当成「前后端对接没问题」；前端唯一同域测试又把
 // **前端的错误形态**复刻进 mock ⇒ 「前端自测也绿」。两个绿拼起来，功能从未成功过
 // 一次。⇒ 契约必须在前端侧被逐字钉死，不能靠后端自测 + 类型系统兜底 —— **类型系统
@@ -25,7 +25,7 @@
 //   - W2b：toWorkTypeProcessIds 按 sort_order 升序取 process_id、不读 processes 键；
 //         sort_order 重复 / 乱序时仍稳定（ES2019 sort 稳定性承担）。
 //
-// mock 手法沿 src/api/shelfProcesses.spec.ts / dashboard.spec.ts 同款：整模块桩掉
+// mock 手法沿同目录 src/api/__tests__/shelfProcesses.spec.ts / dashboard.spec.ts 同款：整模块桩掉
 // `@/api/http`（不 importOriginal），只保留 `api.get` / `api.post` 两个可断言入口
 // + `cleanParams`（workType.ts 实际 import 的就这两个）。真实理由不是「http.ts 在
 // node 下求值不安全」（它在模块求值期只做 axios.create，localStorage 读取全在拦截器
@@ -50,7 +50,7 @@ import {
   setWorkTypeProcesses,
   toWorkTypeProcessIds,
   toWorkTypeProcessesPayload,
-} from './workType';
+} from '../workType';
 
 beforeEach(() => {
   httpGetMock.mockReset();

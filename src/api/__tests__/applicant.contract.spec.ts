@@ -51,7 +51,6 @@ vi.mock('@/api/http', () => ({
 
 import {
   createApplicant,
-  getApplicant,
   getOrCreateApplicant,
   listApplicants,
   softDeleteApplicant,
@@ -73,7 +72,8 @@ async function fetchedRequest(
     string,
     { params?: Record<string, unknown> } | undefined,
   ];
-  // ⚠️ config 本身可以是 undefined：`getApplicant` 调的是 `api.get(url)`、不带第二参。
+  // cfg 在本文件里恒为对象（唯一的读端点 `listApplicants` 必传 params），`?? {}`
+  // 只是不让类型收窄失败。
   return { path, params: cfg?.params ?? {} };
 }
 
@@ -94,7 +94,7 @@ beforeEach(() => {
   httpPostMock.mockReset();
 });
 
-describe('api/applicant — 6 个端点的 method + URL 逐字钉死', () => {
+describe('api/applicant — 5 个端点的 method + URL 逐字钉死', () => {
   it('A1：列表 = GET /com/applicants（过滤键走 query，不是 path 分段）', async () => {
     const { path, params } = await fetchedRequest(() =>
       listApplicants({ customer_id: L1_CUSTOMER_ID, limit: 200, offset: 20 }),
@@ -125,10 +125,7 @@ describe('api/applicant — 6 个端点的 method + URL 逐字钉死', () => {
     expect(typeof body.customer_id, '雪花 id 发数字会被 serde 拒成 422').toBe('string');
   });
 
-  it('A4：详情 = GET /com/applicants/{id}，改 = POST /com/applicants/{id}/update', async () => {
-    const { path: got } = await fetchedRequest(() => getApplicant(APPLICANT_ID));
-    expect(got).toBe(`/com/applicants/${APPLICANT_ID}`);
-
+  it('A4：改 = POST /com/applicants/{id}/update', async () => {
     const { path, body } = await postedRequest(() =>
       updateApplicant(APPLICANT_ID, { name: '李四', customer_id: L1_CUSTOMER_ID }),
     );

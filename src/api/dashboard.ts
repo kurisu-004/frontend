@@ -609,7 +609,7 @@ export function onDashboardConnection(h: ConnectionHandler): () => void {
 
 /** 只拿三态字符串的薄封装（`onDashboardConnection` 的 `state.status`）。
  *
- *  保留它是为了不打断 `src/api/dashboard.spec.ts` 的既有用例（生产侧零消费方）；新写的
+ *  保留它是为了不打断 `src/api/__tests__/dashboard.spec.ts` 的既有用例（生产侧零消费方）；新写的
  *  UI 一律用 `onDashboardConnection` —— 三态字符串表达不了「closed 是主动关闭还是
  *  真的断了」，而这两者对界面的含义恰好相反（见 DashboardConnectionState）。 */
 export function onDashboardStatus(h: StatusHandler): () => void {

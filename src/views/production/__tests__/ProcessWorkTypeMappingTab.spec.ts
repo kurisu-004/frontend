@@ -66,7 +66,7 @@ const setWorkTypeProcessesMock = vi.fn();
 const listProcessesMock = vi.fn();
 
 // importOriginal：两个纯函数 toWorkTypeProcessIds / toWorkTypeProcessesPayload 走真
-// 实现（已被 src/api/workType.spec.ts 逐字钉死），只桩发请求的函数 —— 保证
+// 实现（已被 src/api/__tests__/workType.spec.ts 逐字钉死），只桩发请求的函数 —— 保证
 // 「读形态 → 写形态」两端仍是真代码。
 vi.mock('@/api/workType', async (importOriginal) => ({
   ...(await importOriginal<typeof WorkTypeModule>()),

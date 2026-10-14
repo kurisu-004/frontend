@@ -1,8 +1,8 @@
 // types/part_file.ts
 //
 // 2026-07-10 起统一的零件 / 装配体文件类型（与后端 schema/part_file.PartFileOut 对齐）。
-// 取代旧的 DrawingFileItem / CncProgramItem。Assembly master / 零件图纸 / 3D 模型 /
-// G 代码 / 设定单 / CAD 源文件 全部走这一个类型，用 `kind` 字段区分。
+// Assembly master / 零件图纸 / 3D 模型 / G 代码 / 设定单 / CAD 源文件 全部走
+// `PartFileItem` 这一个类型，用 `kind` 字段（枚举见 `PartFileKind`）区分。
 //
 // 2026-07-14 扩展：新增 CAD_2D kind（DWG/DXF）；所有 row 带可选 `content_sha256` 用于去重提示。
 // ⚠️ **DRAWING 当前只收 PDF**：后端 `part_file::policy::allowed_exts("DRAWING")` 就是
@@ -245,8 +245,6 @@ export interface CncPairedFileRef {
 
 /** @deprecated 用 PartFileItem 替代 */
 export type DrawingFileItem = PartFileItem;
-/** @deprecated 用 PartFileItem 替代 */
-export type CncProgramItem = PartFileItem;
 
 // ============================================================
 // 2026-09-16 M3 新增：STS 直传 COS 契约（与 backend-rust files::part_file::dto 对齐）

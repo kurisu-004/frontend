@@ -4,7 +4,7 @@
 //
 // 背景：本轮重构把零件主数据的 30 字段联合类型 `PartItem` 拆成
 // `PartDetailDto`（28 字段，= 后端 `PartDetailOut`）与 `PartOutDto`（10 字段，
-// = 后端 `PartOut`）。但「写端点返哪个 VO」此前从未逐个核对过 —— 11 个 wrapper
+// = 后端 `PartOut`）。但「写端点返哪个 VO」此前从未逐个核对过 —— 这些 wrapper
 // 声明的是 28 字段的详情 VO，而后端 handler 一律返 `R<PartOut>`，后端一个都不返。
 // **没有运行时影响**（这些返回值的消费方一律丢弃，只靠失效链重拉），但它正是本次
 // 重构的立项靶子，且同一文件里两种互相矛盾的声明并存（「我按后端 VO 订正过」与
@@ -33,7 +33,6 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import type { PartDetailDto, PartOutDto } from '../crud';
-import type { BatchToInspectionOutFE, BatchToShipOutFE } from '../batch';
 import type { ScanPickUpResultDto } from '../../productionScan.contract';
 
 /** 后端 `PartOut` 的字段集，逐字对齐（顺序即 VO 声明顺序）。 */
@@ -58,12 +57,6 @@ const PART_OUT_WRAPPERS = [
   'placeOnShelf',
   'releaseFromProgramming',
   'forceCompletePart',
-  'scanInspect',
-  'deliverPart',
-  'scanDeliverPart',
-  'completePart',
-  'startPartRepair',
-  'completePartRepair',
   'repairDispatch',
   'cancelPart',
 ] as const;
@@ -109,18 +102,6 @@ describe('T2：写端点 wrapper 的返回类型是 PartOutDto', () => {
         'Promise<PartDetailDto>',
       );
     }
-  });
-
-  it('T2b：批量版的 submitted[].part 同样是 PartOutDto，且带 synced_assembly_id', () => {
-    expectTypeOf<BatchToShipOutFE['submitted'][number]['part']>().toEqualTypeOf<PartOutDto>();
-    expectTypeOf<BatchToInspectionOutFE['submitted'][number]['part']>().toEqualTypeOf<PartOutDto>();
-    // 后端 `ToXxxOut` 的三个字段：part / new_batch_id / synced_assembly_id
-    expectTypeOf<keyof BatchToShipOutFE['submitted'][number]>().toEqualTypeOf<
-      'part' | 'new_batch_id' | 'synced_assembly_id'
-    >();
-    expectTypeOf<BatchToInspectionOutFE['submitted'][number]['synced_assembly_id']>().toEqualTypeOf<
-      string | null
-    >();
   });
 
   it('T2c：报工台取件的出参 ScanPickUpResultDto 同样是 PartOutDto', () => {

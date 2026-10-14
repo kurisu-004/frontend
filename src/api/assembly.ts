@@ -396,8 +396,3 @@ export async function updateAssembly(
  * 相比之下同批的 `deleteFile` alias（0 调用方）已随之删除。
  */
 export { getPartFileDownloadUrl as getDownloadUrl } from '@/api/files/objects';
-
-/** 类型守卫 */
-export function isAssemblyItem(v: unknown): v is AssemblyItem {
-  return !!v && typeof v === 'object' && 'drawing_no' in v && 'child_count' in v;
-}

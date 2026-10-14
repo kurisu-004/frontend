@@ -96,11 +96,6 @@ export async function listCustomers(): Promise<CustomerListResult> {
   return normalizeListResult(resp.data);
 }
 
-export async function getCustomer(id: string): Promise<Customer> {
-  const resp = await api.get<Customer>(`/com/customers/${id}`);
-  return resp.data;
-}
-
 export async function createCustomer(payload: CustomerCreatePayload): Promise<Customer> {
   const resp = await api.post<Customer>('/com/customers', payload);
   return resp.data;

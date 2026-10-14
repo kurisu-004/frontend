@@ -1,4 +1,4 @@
-// src/api/dashboard.spec.ts
+// src/api/__tests__/dashboard.spec.ts
 //
 // 覆盖：
 //   - URL 拼接（带 token）
@@ -192,7 +192,7 @@ async function loadDashboardApi(opts: { token?: string | null } = {}) {
     setItem: vi.fn(),
     removeItem: vi.fn(),
   });
-  return import('./dashboard');
+  return import('../dashboard');
 }
 
 /** 可变 token 的 localStorage 桩：模拟「拦截器刷新 / 登录写入 / 登出删除」三条路径。 */
@@ -471,7 +471,7 @@ describe('dashboard WS：auth:session-changed 驱动 token 生命周期', () => 
     FakeWebSocket.instances = [];
     vi.stubGlobal('WebSocket', FakeWebSocket);
     vi.stubGlobal('location', { protocol: 'http:', host: 'localhost:5173' });
-    const api = await import('./dashboard');
+    const api = await import('../dashboard');
     await bootstrapSocket(api);
 
     expect(FakeWebSocket.instances[0]?.url).toBe(
@@ -499,7 +499,7 @@ describe('dashboard WS：auth:session-changed 驱动 token 生命周期', () => 
     FakeWebSocket.instances = [];
     vi.stubGlobal('WebSocket', FakeWebSocket);
     vi.stubGlobal('location', { protocol: 'http:', host: 'localhost:5173' });
-    const api = await import('./dashboard');
+    const api = await import('../dashboard');
     await bootstrapSocket(api);
 
     const socket = FakeWebSocket.instances[0]!;
@@ -524,7 +524,7 @@ describe('dashboard WS：auth:session-changed 驱动 token 生命周期', () => 
     FakeWebSocket.instances = [];
     vi.stubGlobal('WebSocket', FakeWebSocket);
     vi.stubGlobal('location', { protocol: 'http:', host: 'localhost:5173' });
-    const api = await import('./dashboard');
+    const api = await import('../dashboard');
     await bootstrapSocket(api);
     expect(FakeWebSocket.instances[0]?.url).toContain('token=old-token');
 
@@ -570,7 +570,7 @@ describe('dashboard WS：auth:session-changed 驱动 token 生命周期', () => 
     FakeWebSocket.instances = [];
     vi.stubGlobal('WebSocket', FakeWebSocket);
     vi.stubGlobal('location', { protocol: 'http:', host: 'localhost:5173' });
-    const api = await import('./dashboard');
+    const api = await import('../dashboard');
     await bootstrapSocket(api);
     const socket = FakeWebSocket.instances[0]!;
     socket.open();
@@ -624,7 +624,7 @@ describe('dashboard WS：auth:session-changed 驱动 token 生命周期', () => 
     FakeWebSocket.instances = [];
     vi.stubGlobal('WebSocket', FakeWebSocket);
     vi.stubGlobal('location', { protocol: 'http:', host: 'localhost:5173' });
-    const api = await import('./dashboard');
+    const api = await import('../dashboard');
     await bootstrapSocket(api);
     const dead = FakeWebSocket.instances[0]!;
     dead.open();

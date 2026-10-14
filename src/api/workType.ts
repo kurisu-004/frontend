@@ -34,11 +34,6 @@ export async function listWorkTypes(params: WorkTypeListParams = {}): Promise<Wo
   return resp.data;
 }
 
-export async function getWorkType(id: string): Promise<WorkType> {
-  const resp = await api.get<WorkType>(`/prod/work-types/${id}`);
-  return resp.data;
-}
-
 export async function createWorkType(payload: WorkTypeCreatePayload): Promise<WorkType> {
   const resp = await api.post<WorkType>('/prod/work-types', payload);
   return resp.data;
@@ -67,7 +62,7 @@ export async function softDeleteWorkType(id: string): Promise<void> {
  * ⚠️ 整组替换语义本身是危险操作：任何形态错误的 payload 一旦被归一化成
  * `items: []`，该工种的全部映射会被无声清掉且无提示。防线有三层：
  *   ① 形状收口到纯函数（类型系统挡不住对象字面量 key 拼错，见该函数注释）；
- *   ② src/api/workType.spec.ts 逐字断言 payload 形态；
+ *   ② src/api/__tests__/workType.spec.ts 逐字断言 payload 形态；
  *   ③ 视图层 onSave 前的「映射加载失败硬闸」（加载失败时禁止保存）——
  *      否则「加载失败 + 用户看到空勾选 + 点保存」= 拿不完整快照整组覆盖真实映射。
  */

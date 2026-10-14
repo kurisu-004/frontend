@@ -20,7 +20,7 @@
 //     （强推 `t_part_batch.status`），故归 prod 域 `POST /prod/parts/{part_id}/force-complete`
 //     —— 它的守卫在本文件之外（`src/api/__tests__/part.forceComplete.spec.ts`）。
 //
-// 2026-10-03 补：本文件**同时钉 body 形态** —— R2b / R2c / R4 三条都断言 body
+// 2026-10-03 补：本文件**同时钉 body 形态** —— R2b / R2d 两条都断言 body
 //   （原先只钉 URL，字段名与 number/string 之差的契约缺口正是这么漏出去的）。
 //   pick-up 迁出后，**批次锚定的写端点已全部离开 part 域**；part 域仍留 part 级 /
 //   多批次写端点（create / update / cancel / soft-delete / scan），
@@ -37,7 +37,7 @@
 //   的 `splitBatch` 里 —— 那条 URL / body 的守卫随之搬到
 //   `src/api/__tests__/batch.contract.spec.ts`，本文件不再覆盖它。
 //
-// mock 手法沿 src/api/shelfProcesses.spec.ts 同款：整模块桩掉 `@/api/http`
+// mock 手法沿 src/api/__tests__/shelfProcesses.spec.ts 同款：整模块桩掉 `@/api/http`
 // （不 importOriginal），只留可断言的 api.get / api.post 入口。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -64,19 +64,13 @@ vi.mock('@/composables/queries/schemas', () => ({
   repairBatchListResultSchema: { parse: (v: unknown) => v },
 }));
 
-import { batchToInspection, batchToShip, cancelPartBatch, listPartBatches } from '../batch';
+import { cancelPartBatch, listPartBatches } from '../batch';
 import {
-  completePart,
-  completePartRepair,
-  deliverPart,
   listRepairBatches,
   listRepairingBatches,
   placeOnShelf,
   releaseFromProgramming,
   repairDispatch,
-  scanDeliverPart,
-  scanInspect,
-  startPartRepair,
   toInspection,
   toProcess,
   toShip,
@@ -108,7 +102,7 @@ beforeEach(() => {
   httpPostMock.mockReset();
 });
 
-describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () => {
+describe('2026-10-02：批次写端点锚定 prod 域', () => {
   it('R1：lifecycle 流转端点全部落在 /prod/batches/{batch_id}/<action>', async () => {
     expect(await postedPath(() => placeOnShelf(BATCH, { next_process_id: 'p' }))).toBe(
       `/prod/batches/${BATCH}/place-on-shelf`,
@@ -122,23 +116,8 @@ describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () 
     expect(await postedPath(() => toProcess(BATCH, { next_process_id: 'p', version: 1 }))).toBe(
       `/prod/batches/${BATCH}/to-process`,
     );
-    expect(await postedPath(() => deliverPart(BATCH, { version: 1 }))).toBe(
-      `/prod/batches/${BATCH}/deliver`,
-    );
-    expect(await postedPath(() => completePart(BATCH, { version: 1 }))).toBe(
-      `/prod/batches/${BATCH}/complete`,
-    );
-    expect(await postedPath(() => startPartRepair(BATCH, { version: 1 }))).toBe(
-      `/prod/batches/${BATCH}/start-repair`,
-    );
-    expect(await postedPath(() => completePartRepair(BATCH, { shelf_id: 's', version: 1 }))).toBe(
-      `/prod/batches/${BATCH}/complete-repair`,
-    );
     expect(await postedPath(() => repairDispatch(BATCH, { version: 1 }))).toBe(
       `/prod/batches/${BATCH}/repair-dispatch`,
-    );
-    expect(await postedPath(() => scanInspect(BATCH, { pass: true, version: 1 }))).toBe(
-      `/prod/batches/${BATCH}/scan-inspect`,
     );
     expect(await postedPath(() => cancelPartBatch(BATCH, 1))).toBe(`/prod/batches/${BATCH}/cancel`);
     // 单件送检的 URL。别与外协三合一前的 `receive-from-outsource-to-inspection`
@@ -157,12 +136,12 @@ describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () 
     expect(body.version).toBe(1);
   });
 
-  // 2026-10-03：钉住 repair-dispatch / start-repair 的 body 键集合 = 后端 DTO 认识的
-  // 字段子集。api 层不做键改名/增删（payload 原样透传），所以这条断言实际锁的是
-  // 「前端不会主动发后端 DTO 之外的键」：两个 DTO 都没有 quantity（start-repair 连
-  // shelf_id 都没有），而 serde 未开 deny_unknown_fields ⇒ 多带的键被静默忽略，
-  // 端点仍整批生效，操作员却以为只返修了自己填的数量。
-  it('R2b：repair-dispatch / start-repair 的 body 不含 quantity（后端 DTO 无此字段）', async () => {
+  // 2026-10-03：钉住 repair-dispatch 的 body 键集合 = 后端 DTO 认识的字段子集。
+  // api 层不做键改名/增删（payload 原样透传），所以这条断言实际锁的是「前端不会
+  // 主动发后端 DTO 之外的键」：该 DTO 没有 quantity，而 serde 未开
+  // deny_unknown_fields ⇒ 多带的键被静默忽略，端点仍整批生效，操作员却以为只返修了
+  // 自己填的数量。
+  it('R2b：repair-dispatch 的 body 不含 quantity（后端 DTO 无此字段）', async () => {
     httpPostMock.mockReset();
     httpPostMock.mockResolvedValue({ data: {} });
     await repairDispatch(BATCH, {
@@ -180,13 +159,6 @@ describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () 
       'version',
     ]);
     expect(dispatchBody).not.toHaveProperty('quantity');
-
-    httpPostMock.mockReset();
-    httpPostMock.mockResolvedValue({ data: {} });
-    await startPartRepair(BATCH, { version: 1, reason: 'r', note: 'n' });
-    const [, startBody] = httpPostMock.mock.calls[0] as [string, Record<string, unknown>];
-    expect(Object.keys(startBody).sort()).toEqual(['note', 'reason', 'version']);
-    expect(startBody).not.toHaveProperty('quantity');
   });
   // 2026-10-10：原 R2c（`send-to-outsource` 的 body 键契约）随该端点下线一并删除 ——
   // 它已随外协三合一硬切到 `POST /outsource-queue/move`（无 alias），前端 wrapper
@@ -199,7 +171,7 @@ describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () 
   // 2026-10-03：place-on-shelf / release-from-programming 两个后端 DTO 都把 `version`
   //（t_part_batch.version）列为必填且无 `#[serde(default)]`
   // ⇒ 缺字段 422。api 层只做透传，本条钉的是「调用方给了 version 就逐字进 body」。
-  // 断言强度对齐 R2b / R4b：钉全量键集（防多余字段混入）+ 钉 version 形态是 number
+  // 断言强度对齐 R2b：钉全量键集（防多余字段混入）+ 钉 version 形态是 number
   // （后端 i32 无自定义 deserializer，发字符串会 422）+ 负向钉 batch_id 不进 body
   // （已是路径参数）。两条端点同规格，不给「某个字段先炸时给出已守住的假信心」。
   // 召回（recall-to-pending）已不在本文件：2026-10-08 起它归 queue 域
@@ -227,35 +199,6 @@ describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () 
     expect(releaseBody).toEqual({ next_process_id: 'p', version: 3 });
     expect(releaseBody).not.toHaveProperty('batch_id');
   });
-});
-
-describe('2026-10-02：静态批量 / 事件端点只改前缀（2 条）', () => {
-  // 2026-10-10：worker-scan 随报工台整体迁进后端 `prod::scan` 域
-  // （`POST /prod/scan/worker-scan`），URL / body 的守卫搬到
-  // `src/api/__tests__/productionScan.contract.spec.ts`（A10）。
-  it('R3：批量送检 / 批量品检通过', async () => {
-    expect(await postedPath(() => batchToInspection({ items: [] }))).toBe(
-      '/prod/batches/to-inspection',
-    );
-    expect(await postedPath(() => batchToShip({ items: [] }))).toBe('/prod/batches/to-ship');
-  });
-
-  // 2026-10-03 契约修复：body 字段名对齐后端 `ScanDeliverPartRequest`（此前发
-  // `part_id`，与后端 `part_serial_no` 不同名且无 serde default ⇒ 恒 422）。
-  // 这条缺口之所以拖到现在，正是因为旧断言**只钉了 URL**；现在 body 一起钉。
-  it('R4：司机扫码发货（2 段、首段静态 scan），body 字段名与后端 DTO 一致', async () => {
-    httpPostMock.mockReset();
-    httpPostMock.mockResolvedValue({ data: {} });
-    await scanDeliverPart({ part_serial_no: 'S1', worker_badge_code: 'B1' });
-    expect(httpPostMock).toHaveBeenCalledWith('/prod/batches/scan/deliver', {
-      part_serial_no: 'S1',
-      worker_badge_code: 'B1',
-    });
-  });
-
-  // 2026-10-10：取件的 `pick-up` 随报工台整体迁进后端 `prod::scan` 域
-  // （`POST /prod/scan/batches/{batch_id}/pick-up`），URL / body 的守卫搬到
-  // `src/api/__tests__/productionScan.contract.spec.ts`（A11 / A12）。
 });
 
 describe('2026-10-02：集合读迁入 prod 域（2 条）', () => {

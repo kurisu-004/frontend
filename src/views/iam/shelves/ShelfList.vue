@@ -442,7 +442,7 @@ async function editShelf(s: Shelf) {
     // 恒 undefined → `.map` 抛 TypeError → 被下面的裸 catch 吞掉 → 每次打开编辑
     // 弹窗已选工序必被清空，用户不察觉点保存就静默清空整组映射。
     // 形态还原（items + sort_order 升序）收口到 api/shelves::toShelfProcessIds，
-    // 由 src/api/shelfProcesses.spec.ts 钉死，避免读形态再漂。
+    // 由 src/api/__tests__/shelfProcesses.spec.ts 钉死，避免读形态再漂。
     selectedProcessIds.value = toShelfProcessIds(sp);
   } catch (e: unknown) {
     // 2026-10-02 不再吞异常：加载失败时**保持原状**（不覆盖 selectedProcessIds），
@@ -497,7 +497,7 @@ async function saveShelf() {
     // `items` 必填且无 serde default，旧的 `{process_ids: [...]}` 直接 40001 →
     // HTTP 422（该功能自 v1 迁 v2 以来从未成功过一次）。
     // payload 构造收口到 api/shelves::toShelfProcessesPayload（sort_order = 数组
-    // 下标，沿 v1「提交顺序即 sort_order」语义），并由 src/api/shelfProcesses.spec.ts
+    // 下标，沿 v1「提交顺序即 sort_order」语义），并由 src/api/__tests__/shelfProcesses.spec.ts
     // 逐字钉死形态，避免调用方再编出 v1 形态。
     //
     // 2026-10-04：非 PRODUCTION 区提交 `{items: []}`（= 显式清空），**不是跳过这一次

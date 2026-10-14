@@ -24,11 +24,6 @@ export async function listProcesses(
   return resp.data;
 }
 
-export async function getProcess(id: string): Promise<Process> {
-  const resp = await api.get<Process>(`/prod/processes/${id}`);
-  return resp.data;
-}
-
 export async function createProcess(payload: ProcessCreatePayload): Promise<Process> {
   const resp = await api.post<Process>('/prod/processes', payload);
   return resp.data;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { serializeParamsV2 } from './http';
+import { serializeParamsV2 } from '../http';
 
 describe('serializeParamsV2', () => {
   // 白名单内 key（`statuses` / `locations` / `holder_ids`）数组 → CSV 单值

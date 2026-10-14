@@ -73,11 +73,6 @@ export async function getOrCreateApplicant(payload: ApplicantCreatePayload): Pro
   return resp.data;
 }
 
-export async function getApplicant(id: string): Promise<Applicant> {
-  const resp = await api.get<Applicant>(`/com/applicants/${id}`);
-  return resp.data;
-}
-
 export async function createApplicant(payload: ApplicantCreatePayload): Promise<Applicant> {
   const resp = await api.post<Applicant>('/com/applicants', payload);
   return resp.data;

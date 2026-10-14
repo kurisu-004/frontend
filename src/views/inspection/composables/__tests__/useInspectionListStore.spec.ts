@@ -72,7 +72,6 @@ vi.mock('@/api/inspection', () => ({
 // ---------------------------------------------------------------- 共享基础数据层桩
 vi.mock('@/api/customer', () => ({
   listCustomers: vi.fn(async () => ({ items: [], total: 0, limit: 20, offset: 0 })),
-  getCustomer: vi.fn(),
   createCustomer: vi.fn(),
   updateCustomer: vi.fn(),
   softDeleteCustomer: vi.fn(),

@@ -32,11 +32,6 @@ export async function listWorkers(params: ListWorkersParams = {}): Promise<Worke
   return normalizeListResult(resp.data);
 }
 
-export async function getWorker(id: string): Promise<Worker> {
-  const resp = await api.get<Worker>(`/prod/workers/${id}`);
-  return resp.data;
-}
-
 export async function createWorker(payload: WorkerCreatePayload): Promise<Worker> {
   const resp = await api.post<Worker>('/prod/workers', payload);
   return resp.data;
