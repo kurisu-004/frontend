@@ -3,6 +3,14 @@
 // 2026-10-13 新增：`src/api/mailDigest.ts` 的 **wire 契约守卫**（URL / method / body
 // 逐条钉死）+ **守门点分工守卫**。
 //
+// ⚠️ 2026-10-17：本文件的 URL 断言随定时任务域的 `/cron/` 归拢**全量改写**
+//   （`/mail-digest/*` → `/cron/mail-digest/*`）。这批断言存在的价值恰恰在这里：URL 打错
+//   只会表现为 404，而 404 只在「点一下才发现」时暴露；旧路径**无 alias**，反序发布时
+//   六个端点全 404 且失败发生在网络层（不是 Zod 契约层）。
+// ⚠️ **queryKey 命名空间刻意未改**（仍是 `['mail-digest', …]`）：键的根是**功能域标识**，
+//   不要求与 API 前缀一致（仓内先例：`qk.deliveryNotesList` 对应的后端 URL 是
+//   `/com/delivery/note`）。见 `src/composables/queries/keys.ts` 的 mail-digest 段论证。
+//
 // 为什么要逐字钉 URL：本域六个端点的路径一旦打错就是 404 / 405，而 404 只在「点一下才
 // 才发现」时暴露 —— 前端没有任何类型或测试能挡住 URL 打错（这正是
 // `inspection.contract.spec.ts` / `processChain.contract.spec.ts` 同款理由）。
@@ -108,44 +116,44 @@ beforeEach(() => {
 });
 
 describe('mailDigest 六个端点的 URL 与 method', () => {
-  it('U1：读配置打 GET /mail-digest/config（无 Query 参数）', async () => {
+  it('U1：读配置打 GET /cron/mail-digest/config（无 Query 参数）', async () => {
     await fetchMailDigestConfig();
     expect(httpGetMock).toHaveBeenCalledTimes(1);
-    expect(httpGetMock.mock.calls[0]![0]).toBe('/mail-digest/config');
+    expect(httpGetMock.mock.calls[0]![0]).toBe('/cron/mail-digest/config');
     expect(httpGetMock.mock.calls[0]![1]).toBeUndefined();
   });
 
-  it('U2：保存配置打 **POST** /mail-digest/config（不是 PUT —— 后端只允许 GET/POST）', async () => {
+  it('U2：保存配置打 **POST** /cron/mail-digest/config（不是 PUT —— 后端只允许 GET/POST）', async () => {
     await saveMailDigestConfig(CONFIG_PAYLOAD);
     expect(httpPostMock).toHaveBeenCalledTimes(1);
-    expect(httpPostMock.mock.calls[0]![0]).toBe('/mail-digest/config');
+    expect(httpPostMock.mock.calls[0]![0]).toBe('/cron/mail-digest/config');
     // body 逐字透传（含必填的 version —— 漏传是后端 HTTP 422 纯文本）
     expect(httpPostMock.mock.calls[0]![1]).toEqual(CONFIG_PAYLOAD);
     expect(httpPostMock.mock.calls[0]![1]).toHaveProperty('version', 3);
   });
 
-  it('U3：元数据打 GET /mail-digest/meta', async () => {
+  it('U3：元数据打 GET /cron/mail-digest/meta', async () => {
     await fetchMailDigestMeta();
-    expect(httpGetMock.mock.calls[0]![0]).toBe('/mail-digest/meta');
+    expect(httpGetMock.mock.calls[0]![0]).toBe('/cron/mail-digest/meta');
   });
 
-  it('U4：预览打 POST /mail-digest/preview，请求体是配置部分（**不含 version**）', async () => {
+  it('U4：预览打 POST /cron/mail-digest/preview，请求体是配置部分（**不含 version**）', async () => {
     const { version: _drop, ...runBody } = CONFIG_PAYLOAD;
     await previewMailDigest(runBody);
-    expect(httpPostMock.mock.calls[0]![0]).toBe('/mail-digest/preview');
+    expect(httpPostMock.mock.calls[0]![0]).toBe('/cron/mail-digest/preview');
     expect(httpPostMock.mock.calls[0]![1]).toEqual(runBody);
     expect(httpPostMock.mock.calls[0]![1]).not.toHaveProperty('version');
   });
 
-  it('U5：立即发送打 POST /mail-digest/send，请求体同 preview（空体 = 用当前配置）', async () => {
+  it('U5：立即发送打 POST /cron/mail-digest/send，请求体同 preview（空体 = 用当前配置）', async () => {
     await sendMailDigestNow({});
-    expect(httpPostMock.mock.calls[0]![0]).toBe('/mail-digest/send');
+    expect(httpPostMock.mock.calls[0]![0]).toBe('/cron/mail-digest/send');
     expect(httpPostMock.mock.calls[0]![1]).toEqual({});
   });
 
-  it('U6：日志打 GET /mail-digest/logs，limit / offset 进 params', async () => {
+  it('U6：日志打 GET /cron/mail-digest/logs，limit / offset 进 params', async () => {
     await listMailDigestLogs({ limit: 20, offset: 40 });
-    expect(httpGetMock.mock.calls[0]![0]).toBe('/mail-digest/logs');
+    expect(httpGetMock.mock.calls[0]![0]).toBe('/cron/mail-digest/logs');
     const config = httpGetMock.mock.calls[0]![1] as { params: Record<string, unknown> };
     expect(config.params).toEqual({ limit: 20, offset: 40 });
   });

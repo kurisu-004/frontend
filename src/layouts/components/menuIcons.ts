@@ -40,6 +40,10 @@ import {
   // 2026-10-14：RBAC 角色权限（roles_list）用 Lock，与生产 t_menu.icon 对齐
   // （父节点 auth_group 是 Key，两者刻意区分）。
   Lock,
+  // 2026-10-17：新增「企业微信」子菜单（wecom，与定时任务下的 mail 同级）用 ChatDotRound。
+  // ⚠️ 漏掉这一行的话，`MenuTreeItem.vue` 的 `ICON_MAP[icon]` 查不到 → `v-if` **静默隐藏**
+  //   （不报错），表现为侧栏「企业微信」那一项没有图标而无人察觉。
+  ChatDotRound,
 } from '@element-plus/icons-vue';
 
 /** 图标名 → 组件（覆盖 router `meta.icon` 与后端菜单树 `t_menu.icon` 的取值域）。 */
@@ -67,4 +71,5 @@ export const ICON_MAP: Record<string, unknown> = {
   Clock,
   Message,
   Lock,
+  ChatDotRound,
 };

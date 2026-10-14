@@ -89,7 +89,7 @@ const ElAlertStub = {
     '<div class="mock-alert"><span class="alert-title">{{ title }}</span><span class="alert-description">{{ description }}</span></div>',
 };
 
-/** 2026-10-16：「发信邮箱」下拉的候选（query `GET /mail/accounts` 的行）。
+/** 2026-10-16：「发信邮箱」下拉的候选（query `GET /cron/mail/accounts` 的行）。
  *  label 是**管理员起的自定义名称**，不是登录账号 —— 同一家服务商的多个账号靠它区分。 */
 const SENDER_ACCOUNTS: readonly MailAccountData[] = [
   {

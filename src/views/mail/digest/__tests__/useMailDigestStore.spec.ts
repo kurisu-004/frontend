@@ -52,7 +52,7 @@ vi.mock('@/api/mailDigest', () => ({
   sendMailDigestNow: (...args: unknown[]) => sendMailDigestNowMock(...args),
 }));
 
-// 2026-10-16：邮箱列表（`/api/v2/mail/accounts`）—— 「发信邮箱」下拉的选项来源。
+// 2026-10-16：邮箱列表（`/api/v2/cron/mail/accounts`）—— 「发信邮箱」下拉的选项来源。
 const listMailAccountsMock = vi.fn();
 
 vi.mock('@/api/mailAccounts', () => ({
@@ -143,7 +143,7 @@ const META = {
   upcoming_days_range: { min: 1, max: 60 },
 };
 
-/** 2026-10-16：SMTP 改由邮箱账号实体承载（`/api/v2/mail/accounts`），本页多挂一条
+/** 2026-10-16：SMTP 改由邮箱账号实体承载（`/api/v2/cron/mail/accounts`），本页多挂一条
  *  `qk.mailAccounts()` 的 query 给「发信邮箱」下拉供选项。与「邮箱设置」tab 共用同一条
  *  缓存，切 tab 不重新打。 */
 const ACCOUNTS = [

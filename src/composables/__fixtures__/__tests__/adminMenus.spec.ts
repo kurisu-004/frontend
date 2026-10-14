@@ -51,6 +51,9 @@ function flatten(nodes: MenuNode[]): MenuNode[] {
  *     `mail_digest` → `mail`（邮件类型改用页内 tab 区分，不再占菜单层级，path 随之
  *     /mail/digest → /mail）。**改了 code 就必须改这里**：漏改的症状是用例红在
  *     `covers all menuCodes exactly` 上。
+ *   - 2026-10-17（企业微信推送子模块）：`scheduled_task` 分组下**新增** `wecom`
+ *     （path /wecom、icon ChatDotRound、sort_order 20）。**新增 code 也必须改这里**：
+ *     漏改的症状同上（fixture 里多一个 code、清单里没有 → 红）。
  *   - 2026-10-16（review 第 1 轮 MAJOR-1）：`template_management` + `print_templates_designer`
  *     **复活**（2026-09-14 首次落地 → 09-24 随 x-data-spreadsheet 弃用从 fixture 删除 →
  *     10-16 送货单打印模板上传页重新占用同一个 URL 与菜单节点）。
@@ -106,6 +109,8 @@ const COVERED_CODES: readonly string[] = [
   'floor_group',
   'scheduled_task',
   'mail',
+  // 2026-10-17（企业微信推送子模块）：scheduled_task 分组下新增 wecom（path /wecom）。
+  'wecom',
   'settings_root',
   'work_types_list',
   'processes_list',
@@ -196,15 +201,17 @@ describe('ADMIN_MENUS', () => {
   // 2026-10-16 新增：`scheduled_task` / `mail` 两个节点的定位断言。改名的这一轮最容易
   // 漏的是「fixture 改了、router 没改」（或反过来）—— code 与 path 两边各写一份字面量，
   // 对不上时运行时症状是「点菜单闪一下又回到别的页」（守卫第 3 条），不是编译错误。
-  describe('scheduled_task / mail 节点（定时任务 → 邮件）', () => {
+  describe('scheduled_task / mail / wecom 节点（定时任务 → 邮件 + 企业微信）', () => {
     const all = () => flatten(ADMIN_MENUS);
     const group = () => all().find((n) => n.code === 'scheduled_task')!;
     const leaf = () => all().find((n) => n.code === 'mail')!;
+    const wecom = () => all().find((n) => n.code === 'wecom')!;
 
     it('一级分组 scheduled_task「定时任务」path 为 null（渲染成 el-sub-menu）', () => {
       expect(group().title).toBe('定时任务');
       expect(group().path).toBeNull();
-      expect(group().children.map((c) => c.code)).toEqual(['mail']);
+      // 2026-10-17：children 由 1 个变 2 个（mail + wecom），**顺序即渲染顺序**。
+      expect(group().children.map((c) => c.code)).toEqual(['mail', 'wecom']);
     });
 
     it("二级 mail「邮件」path 为 /mail（与 router 的 `path: 'mail'` 逐字一致）", () => {
@@ -216,12 +223,14 @@ describe('ADMIN_MENUS', () => {
     it('两个 icon 都在 MenuTreeItem 的 ICON_MAP 白名单内（查不到会静默不显示）', () => {
       expect(ICON_MAP[group().icon!]).toBeDefined();
       expect(ICON_MAP[leaf().icon!]).toBeDefined();
+      expect(ICON_MAP[wecom().icon!]).toBeDefined();
     });
 
-    it('id 用后端 seed 的新 id、不复用软删的旧 id（9000000000000014 / …902）', () => {
+    it('id 用后端 seed 的新 id、不复用软删的旧 id（9000000000000014 / …902 / …903）', () => {
       // 旧的两行已被后端软删；id 是唯一能把「软删 + 改名」与「原地改名」区分开的标识。
       expect(group().id).toBe('9000000000000014');
       expect(leaf().id).toBe('9000000000000902');
+      expect(wecom().id).toBe('9000000000000903');
     });
 
     it('**数组物理位置**落在 floor_group(40) 与 settings_root(50) 之间', () => {
@@ -234,6 +243,35 @@ describe('ADMIN_MENUS', () => {
       const codes = all().map((n) => n.code);
       expect(codes).not.toContain('mail_group');
       expect(codes).not.toContain('mail_digest');
+    });
+
+    // ── 2026-10-17 企业微信推送子模块新增的四条 ──────────────────────────────
+    // 这一组与上面那组同源：code 与 path 两边（fixture ↔ router `meta.menuCode`）各写一份
+    // 字面量，对不上时的运行时症状是「点菜单闪一下又回到别的页」，不是编译错误。
+    it("wecom「企业微信」path 为 /wecom（与 router 的 `path: 'wecom'` 逐字一致）", () => {
+      expect(wecom().title).toBe('企业微信');
+      // ⚠️ path 与后端 API 前缀（/api/v2/cron/wecom/*）**无关**：它是浏览器书签 URL +
+      // 后端菜单表 t_menu.path 的值。将来改 API 前缀时不要连带改这里。
+      expect(wecom().path).toBe('/wecom');
+      expect(wecom().parent_id).toBe(group().id);
+    });
+
+    it('icon 是权威值 ChatDotRound（与 backend-rust seeds/menu.sql 的 t_menu.icon 对齐）', () => {
+      // 上面那条只保证「图标在白名单里、渲染得出来」；`Message` 也在白名单里，所以换掉它
+      // 不会红。这条单独钉住权威值，让「dummy 模式与生产图标不一致」这类漂移有测试信号。
+      expect(wecom().icon).toBe('ChatDotRound');
+    });
+
+    it('**数组物理位置**接在 mail 之后（侧栏按数组顺序渲染、不排 sort_order）', () => {
+      const codes = group().children.map((c) => c.code);
+      expect(codes.indexOf('wecom')).toBe(codes.indexOf('mail') + 1);
+    });
+
+    it('sort_order 落在 mail(10) 之后', () => {
+      const children = group().children;
+      const w = children.find((c) => c.code === 'wecom')!;
+      const m = children.find((c) => c.code === 'mail')!;
+      expect(w.sort_order).toBeGreaterThan(m.sort_order);
     });
   });
 

@@ -30,7 +30,7 @@
 
   2026-10-16 新增「发信邮箱」一行（`senderAccounts` prop + `sender_account_id` 字段）：
   SMTP 不再是部署级环境变量，而是页面内可维护的邮箱账号实体（`views/mail/accounts/`，后端
-  `/api/v2/mail/accounts`），发信用哪一条由**用户在本页选**。选项取自 **query**（壳传下来
+  `/api/v2/cron/mail/accounts`），发信用哪一条由**用户在本页选**。选项取自 **query**（壳传下来
   的 `senderAccounts`），**不在本组件硬编码**、也不 props 传一堆预设文案 —— 邮箱列表是
   会变的运行时数据，props 硬编码等于把「有什么邮箱」写在模板里。
 -->
@@ -186,7 +186,7 @@ const props = defineProps<{
   modelValue: MailDigestFormModel;
   /** 频率选项，取自 `GET /meta` 的 `frequencies[]`；meta 未到达时壳传兜底表。 */
   frequencyOptions: readonly MailDigestFrequencyOptionData[];
-  /** 2026-10-16：可选的发信邮箱（`GET /mail/accounts` 的行）。选项 label 用管理员
+  /** 2026-10-16：可选的发信邮箱（`GET /cron/mail/accounts` 的行）。选项 label 用管理员
    *  起的自定义名称（同名登录账号靠它区分）。空数组 = 还没建任何邮箱。 */
   senderAccounts?: readonly MailAccountData[];
   /** 字段红字（Zod / 后端 21703·21704）。 */

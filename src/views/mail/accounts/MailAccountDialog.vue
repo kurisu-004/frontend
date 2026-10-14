@@ -13,7 +13,7 @@
      输入框 `type="password"` + `show-password` + `autocomplete="new-password"` ——
      `autocomplete` 不给，浏览器会拿登录名/密码自动填进这个框，用户没留意就把**自己
      的登录密码**当成授权码提交了（明文进库、且永远看不到）。
-  2. **预设下拉 + 只读描述行**：下拉选项取 `/mail/meta` 的 `presets[]`（展示 `label`），
+  2. **预设下拉 + 只读描述行**：下拉选项取 `/cron/mail/meta` 的 `presets[]`（展示 `label`），
      选中后下方那条只读行展示 `host:port:tls_mode`。**这三值由后端下发**（前端的
      `mailAccountPresetSchema` 只守**入参**侧的封闭集，没有「163 是什么端口」这种常量）——
      前端另存一份就是第二个真源，后端改端口 / 加一家服务商时它不会报错、只会静默显示
@@ -53,7 +53,7 @@
             :value="opt.value"
           />
         </el-select>
-        <!-- 只读描述行：三值全部取自 `/mail/meta` 的下发值，前端不推导也不缓存。 -->
+        <!-- 只读描述行：三值全部取自 `/cron/mail/meta` 的下发值，前端不推导也不缓存。 -->
         <div v-if="presetDetail" class="preset-detail">
           {{ presetDetail.host }}:{{ presetDetail.port }} · {{ presetDetail.tls_mode }}
         </div>

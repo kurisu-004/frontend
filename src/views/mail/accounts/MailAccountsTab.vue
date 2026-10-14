@@ -53,7 +53,7 @@
       <el-table v-else :data="store.query.accounts" row-key="id" class="accounts-table">
         <el-table-column prop="name" label="名称" min-width="140" show-overflow-tooltip />
         <el-table-column label="预设" min-width="110">
-          <!-- 标签**直接取行上的 `preset_label`**（后端下发），不查 `/mail/meta`：
+          <!-- 标签**直接取行上的 `preset_label`**（后端下发），不查 `/cron/mail/meta`：
                meta 还在飞或失败时这一列会整列显示 `NET_EASE_163` 原文。降级到字面量的
                唯一情形是后端对未知 preset 的既定降级（那时 `preset_label` 是空串）。 -->
           <template #default="{ row }">{{ row.preset_label || row.preset }}</template>

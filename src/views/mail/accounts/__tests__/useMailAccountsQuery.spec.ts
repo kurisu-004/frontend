@@ -56,7 +56,7 @@ const ACCOUNT = {
   updated_at: '2026-10-16 08:00:00',
 };
 
-/** `GET /mail/accounts` 的出参是**信封对象**（后端 `MailAccountListOut`），不是裸数组。 */
+/** `GET /cron/mail/accounts` 的出参是**信封对象**（后端 `MailAccountListOut`），不是裸数组。 */
 const LIST = { items: [ACCOUNT] };
 
 const META = {
