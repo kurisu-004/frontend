@@ -31,6 +31,10 @@
 //   - C14：卡片右键 → 板级 opener 带**区域标签** `'outsource-candidate'` 与候选行上下文
 //     （发送白名单的五条锚只在候选 DTO 上，卡片 model 里没有）；C14b：未 provide opener
 //     时右键不抛错（inject 缺省 noop）。
+//   - C15 / C16 / C17 / C18（2026-10-20）：序列号 / 图号 / 批次号 / 名称的**本地**过滤 ——
+//     C15 只渲染命中的卡（三处计数口径保持全量）；C16 两条空态分支各说各的话且都在
+//     .pool-cards 之外；C17 搜索行是 .pool-cards 的兄弟节点；C18 扫码命中被关键词过滤掉的
+//     行 ⇒ 关键词自动清空（否则操作员「勾上了却看不见卡」）。
 //
 // 测试策略：
 //   - vi.mock('vue-draggable-plus') 复刻重载判别（照 WorkerColumn.spec.ts 同款），捕获
@@ -101,10 +105,16 @@ const ElTooltipStub = defineComponent({
 const ElEmptyStub = defineComponent({
   name: 'ElEmptyStub',
   props: { description: String, imageSize: Number },
+  // description 透出成 data-description：两条空态分支各说各的话，断言要读得到文案本身
+  //（EP 真实 el-empty 把 description 渲染成插画下方的一行字）。
   setup:
-    (_, { slots }) =>
+    (props, { slots }) =>
     () =>
-      h('div', { class: 'el-empty-stub' }, slots.default?.()),
+      h(
+        'div',
+        { class: 'el-empty-stub', 'data-description': props.description ?? '' },
+        slots.default?.(),
+      ),
 });
 const ElCheckboxStub = defineComponent({
   name: 'ElCheckboxStub',
@@ -123,12 +133,36 @@ const ElCheckboxStub = defineComponent({
   },
 });
 
+/** 搜索框桩：真 <input>，v-model 走 update:modelValue。prefixIcon / clearable / size
+ *  一并声明，避免未声明的 prop 落到 DOM 属性上。 */
+const ElInputStub = defineComponent({
+  name: 'ElInputStub',
+  props: {
+    modelValue: { type: String, default: '' },
+    placeholder: String,
+    size: String,
+    clearable: Boolean,
+    prefixIcon: { type: Object, default: undefined },
+  },
+  emits: ['update:modelValue'],
+  setup(props, { emit }) {
+    return () =>
+      h('input', {
+        class: 'el-input-stub__input',
+        value: props.modelValue,
+        placeholder: props.placeholder ?? '',
+        onInput: (evt: Event) => emit('update:modelValue', (evt.target as HTMLInputElement).value),
+      });
+  },
+});
+
 const globalConfig = {
   components: {
     ElTag: ElTagStub,
     ElTooltip: ElTooltipStub,
     ElEmpty: ElEmptyStub,
     ElCheckbox: ElCheckboxStub,
+    ElInput: ElInputStub,
   },
 };
 
@@ -515,6 +549,156 @@ describe('CandidatePool（外协候选池：拖拽源）', () => {
     await expect(
       wrapper.find('.pool-cards .batch-card').trigger('contextmenu'),
     ).resolves.not.toThrow();
+    wrapper.unmount();
+  });
+
+  // ── 2026-10-20：本地关键词过滤（序列号 / 图号 / 批次号 / 名称） ─────────────────
+  it('C15：输入关键词只渲染命中的卡（四字段各自命中都试；三处计数口径保持全量）', async () => {
+    const wrapper = mountPool([
+      makeCandidate({
+        batch_id: '3000000000001',
+        part_serial_no: 'SN-A',
+        part_drawing_no: 'DRW-1',
+      }),
+      makeCandidate({
+        batch_id: '3000000000002',
+        batch_no: 2048,
+        part_serial_no: 'SN-B',
+        part_drawing_no: 'DRW-2',
+        part_name: '齿轮',
+      }),
+      makeCandidate({
+        batch_id: '3000000000003',
+        batch_no: 4096,
+        part_serial_no: null,
+        part_drawing_no: 'DRW-3',
+        part_name: '轴承',
+      }),
+      makeNotShelved({ batch_id: '3000000000004', part_serial_no: 'SN-D', part_name: '卡板' }),
+    ]);
+    const search = () => wrapper.find('.el-input-stub__input');
+    const renderedIds = () =>
+      wrapper.findAll('.pool-cards .batch-card').map((el) => el.attributes('data-batch-id'));
+
+    expect(renderedIds()).toHaveLength(4);
+    // 过滤前的工具条基线：徽标 4 / 未上架 1 / 已选 0
+    expect(wrapper.find('.el-tag-stub').text()).toBe('4');
+
+    await search().setValue('sn-b');
+    expect(renderedIds()).toEqual(['3000000000002']);
+
+    await search().setValue('DRW-3');
+    expect(renderedIds()).toEqual(['3000000000003']);
+
+    // 批次号：候选 DTO 是数字，卡片 model 上是适配层补过 B 前缀的串
+    await search().setValue('B4096');
+    expect(renderedIds()).toEqual(['3000000000003']);
+
+    await search().setValue('连杆');
+    expect(renderedIds()).toEqual(['3000000000001']);
+
+    // 未上架的行同样可被搜索命中（过滤只管可见，不管可拖 —— is-locked 与 filter 选项不动）
+    await search().setValue('卡板');
+    const locked = wrapper.find('.pool-cards .batch-card');
+    expect(renderedIds()).toEqual(['3000000000004']);
+    expect(locked.classes()).toContain('is-locked');
+
+    // 清空 → 回到全量；工具条三处计数都读 items，不随过滤变
+    await search().setValue('');
+    expect(renderedIds()).toHaveLength(4);
+    expect(wrapper.find('.el-tag-stub').text()).toBe('4');
+    expect(wrapper.text()).toContain('1 个尚未上架');
+    expect(wrapper.text()).toContain('已选 0 件');
+    await search().setValue('SN-B');
+    expect(wrapper.find('.el-tag-stub').text()).toBe('4');
+    expect(wrapper.text()).toContain('1 个尚未上架');
+    wrapper.unmount();
+  });
+
+  it('C16：两条空态分支（无候选 / 无匹配）各说各的话，且都在 .pool-cards 之外', async () => {
+    // 分支一：本来就没有候选 —— 走「该工序暂无可发送候选」
+    const empty = mountPool([]);
+    expect(empty.find('.el-empty-stub').attributes('data-description')).toBe(
+      '该工序暂无可发送候选',
+    );
+    expect(empty.find('.pool-cards').exists()).toBe(true);
+    expect(empty.find('.pool-empty').element.closest('.pool-cards')).toBeNull();
+    empty.unmount();
+
+    // 分支二：有候选但被关键词全部过滤掉 —— 走「无匹配…」，容器仍在（Sortable 实例载体）
+    const wrapper = mountPool([
+      makeCandidate({ batch_id: '3000000000001', part_serial_no: 'SN-A' }),
+      makeCandidate({ batch_id: '3000000000002', part_serial_no: 'SN-B' }),
+    ]);
+    await wrapper.find('.el-input-stub__input').setValue('ZZZ-不存在');
+
+    expect(wrapper.findAll('.pool-cards .batch-card')).toHaveLength(0);
+    const overlay = wrapper.find('.pool-empty');
+    expect(overlay.exists()).toBe(true);
+    expect(overlay.find('.el-empty-stub').attributes('data-description')).toContain('无匹配');
+    const container = wrapper.find('.pool-cards').element as HTMLElement;
+    expect(container.children).toHaveLength(0);
+    expect(overlay.element.closest('.pool-cards')).toBeNull();
+    // 只有一条覆盖层在屏（v-if / v-else-if 两分支互斥）
+    expect(wrapper.findAll('.pool-empty')).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it('C17：搜索行是 .pool-cards 的兄弟节点（容器内不许混非可拖子元素）', async () => {
+    const wrapper = mountPool([makeCandidate()]);
+    const row = wrapper.find('.pool-search');
+    expect(row.exists()).toBe(true);
+    const rowEl = row.element as HTMLElement;
+    const container = wrapper.find('.pool-cards').element as HTMLElement;
+    expect(rowEl.closest('.pool-cards')).toBeNull();
+    expect(container.contains(rowEl)).toBe(false);
+    // 搜索行挂在 .pool-body 之外（工具条已排满 30% 窄栏，搜索独占一行）
+    expect(rowEl.parentElement?.classList.contains('candidate-pool')).toBe(true);
+    expect(rowEl.parentElement?.classList.contains('pool-body')).not.toBe(true);
+    expect(rowEl.closest('.pool-toolbar')).toBeNull();
+    wrapper.unmount();
+  });
+
+  it('C18：扫码命中被关键词过滤掉的行 → 关键词自动清空（勾上了得看得见卡）', async () => {
+    const { ElMessage } = await import('element-plus');
+    const items = [
+      makeCandidate({ batch_id: '3000000000001', part_serial_no: 'SN-0001', part_name: '连杆' }),
+      makeCandidate({ batch_id: '3000000000002', part_serial_no: 'SN-0002', part_name: '齿轮' }),
+    ];
+    const { wrapper, selectedIds } = mountedParent(items);
+    const search = () => wrapper.find('.el-input-stub__input');
+
+    // 关键词把被扫中的那张卡挡掉了
+    await search().setValue('齿轮');
+    expect(wrapper.findAll('.pool-cards .batch-card')).toHaveLength(1);
+
+    fireScan('SN-0001');
+    await nextTick();
+
+    // 命中行仍按全量 items 匹配并勾上（勾选集合是全量口径），同时关键词被清空 ⇒ 卡片回到可见
+    expect(Array.from(selectedIds.value)).toEqual(['3000000000001']);
+    expect((search().element as HTMLInputElement).value).toBe('');
+    expect(wrapper.findAll('.pool-cards .batch-card')).toHaveLength(2);
+    // 提示与界面必须同时自洽 ⇒ 成功文案照常弹（次数不定：本 spec 里前序用例挂载的实例
+    // 也订阅着模块级扫码枪，同一次扫码会命中它们）
+    expect(ElMessage.success).toHaveBeenCalledWith(expect.stringContaining('已选中'));
+    wrapper.unmount();
+  });
+
+  it('C18b：扫码命中的行本来就在可见集里 → 关键词保持不变（不打断连续扫码）', async () => {
+    const items = [
+      makeCandidate({ batch_id: '3000000000001', part_serial_no: 'SN-0001', part_name: '连杆' }),
+      makeCandidate({ batch_id: '3000000000002', part_serial_no: 'SN-0002', part_name: '齿轮' }),
+    ];
+    const { wrapper, selectedIds } = mountedParent(items);
+    await wrapper.find('.el-input-stub__input').setValue('齿轮');
+
+    fireScan('SN-0002');
+    await nextTick();
+
+    expect(Array.from(selectedIds.value)).toEqual(['3000000000002']);
+    expect((wrapper.find('.el-input-stub__input').element as HTMLInputElement).value).toBe('齿轮');
+    expect(wrapper.findAll('.pool-cards .batch-card')).toHaveLength(1);
     wrapper.unmount();
   });
 });

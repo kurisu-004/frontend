@@ -1,6 +1,10 @@
 <!-- 工序候选池抽屉（Sortable 的源与落点），消费方 ProcessBoardTab。
      接收父级 provide 注入：moveBatchToPool / openBatchContextMenu。
 
+     2026-10-20 新增：序列号 / 图号 / 批次号 / 名称的**本地**关键词过滤（判定收在
+     `utils/batchCardKeyword.ts`，端点零筛选参数故不发请求）。口径只影响显示：头部
+     `{{ pool.batches.length }}` 徽标保持全量。
+
      @start 把候选池源信息（含批次真实 shelf_id）写到 dndSourceTracker；@add 时调
      moveBatchToPool 撤回批次。徽标与跨域计数靠 move 的失效链与服务器对账（成功走
      onSuccess、失败走 onError，两条路都会失效 queue 域）。
@@ -38,6 +42,19 @@
         <span class="process-name">{{ pool.process_name }}</span>
         <el-tag size="small" type="info">{{ pool.batches.length }}</el-tag>
       </div>
+      <!-- 2026-10-20 新增：序列号 / 图号 / 批次号 / 名称的本地过滤（判定收在
+           utils/batchCardKeyword.ts，端点零筛选参数故不发请求）。搜索行是 .pool-cards 的
+           **兄弟节点**且排在该容器之外 —— 容器的直接子元素必须全是可拖项。徽标与工具条
+           的口径保持全量（pool.batches），只有渲染出来的卡片是过滤后的可见集。 -->
+      <div class="section-search">
+        <el-input
+          v-model="keyword"
+          size="small"
+          clearable
+          :prefix-icon="Search"
+          placeholder="序列号 / 图号 / 批次号 / 名称"
+        />
+      </div>
       <!-- 卡片渲染收敛到 BatchCard.vue，无包装层。Sortable 容器的
            直接子元素必须**全是可拖项**（空态 div 是本容器的兄弟节点，不在其中）。
            data-shelf-id 经 BatchCard 的 fallthrough attrs 落到卡片根 div
@@ -54,7 +71,7 @@
            容器的直接子节点（守卫见本组件 spec 的 D7b：容器内不许有 comment 节点）。 -->
       <div ref="containerRef" class="section-body pool-cards" :data-process-id="pool.process_id">
         <BatchCard
-          v-for="batch in pool.batches"
+          v-for="batch in visibleBatches"
           :key="batch.batch_id"
           :batch="batch"
           :data-shelf-id="batch.shelf_id ?? ''"
@@ -62,17 +79,27 @@
           @contextmenu.prevent="onCardContextMenu($event, batch)"
         />
       </div>
+      <!-- 「无匹配」是**兄弟覆盖层**：关键词清空可见集时容器照常渲染（本容器同时是落点，
+           空容器必须仍是合法投放目标），pointer-events:none 保证不吃落点判定。判定带上
+           pool.batches.length > 0 —— 「这个工序本来就没有候选批次」是页面的常态之一（工序下
+           暂时没活），说成「无匹配序列号…」是在对没发生过的搜索撒谎；那种情况下保持容器空着
+           不说话。 -->
+      <div v-if="pool.batches.length > 0 && visibleBatches.length === 0" class="pool-no-match">
+        无匹配序列号 / 图号 / 批次号 / 名称
+      </div>
     </div>
     <div v-else class="pool-empty">无工序数据</div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { inject, ref } from 'vue';
+import { computed, inject, ref } from 'vue';
+import { Search } from '@element-plus/icons-vue';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
 import type { BatchMenuOpener } from '@/composables/useBatchContextMenu';
 import type { ProcessPoolView } from '@/types/productionQueue';
 import type { BatchCardModel } from '@/types/batchCard';
+import { filterBatchCardsByKeyword } from '@/utils/batchCardKeyword';
 import {
   consumeWorkerSource,
   recordPoolSource,
@@ -81,10 +108,21 @@ import {
 } from '@/utils/dndSourceTracker';
 import BatchCard from '@/components/BatchCard.vue';
 
-// 不接变量 —— 模板直接用 pool（script setup 模板自动解包 props），脚本侧无 props 读取。
-defineProps<{
+/** 2026-10-20 起 props **接变量**：关键词过滤的 computed 要在脚本侧读 pool.batches。
+ *  模板侧仍直接用 pool（script setup 模板自动解包 props），两种用法并存不冲突。 */
+const props = defineProps<{
   pool: ProcessPoolView | null;
 }>();
+
+/** 搜索关键词。组件局部状态、刻意不上抛 —— 过滤只影响本抽屉的可见集，头部徽标与
+ *  右键菜单的可选范围都保持 pool.batches 的全量。 */
+const keyword = ref<string>('');
+
+/** 当前可见卡片 = pool.batches（已是 BatchCardModel[]，无需再过适配层）过关键词。
+ *  pool 为 null 时是空数组，模板上那一层有 v-if="pool" 挡着。 */
+const visibleBatches = computed<BatchCardModel[]>(() =>
+  props.pool ? filterBatchCardsByKeyword(props.pool.batches, keyword.value) : [],
+);
 
 // containerRef 在 <div v-if="pool"> 内，而 pool 要等父级 query 解析完才非 null，所以组件
 // 挂载瞬间 containerRef 必为 null。裸 useDraggable 默认 immediate:true 会在 onMounted
@@ -170,6 +208,7 @@ async function onDragAdd(evt: DraggableStartEvent) {
    抽屉本身不再滚（overflow: hidden），只有卡片区 .pool-cards 内部滚动，
    .section-header（工序 code + name + 数量徽标）常驻可见。 */
 .pool-drawer {
+  position: relative;
   width: 100%;
   height: 100%;
   padding: 12px;
@@ -204,6 +243,12 @@ async function onDragAdd(evt: DraggableStartEvent) {
   font-size: 13px;
   flex: 1;
 }
+/* 2026-10-20 新增：搜索行独立一行（section-header 里已排满工序 code + name + 徽标），
+   且是 Sortable 容器的兄弟节点。 */
+.section-search {
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
 /* 多列卡片布局用 flex + wrap。 */
 .pool-cards {
   display: flex;
@@ -224,5 +269,16 @@ async function onDragAdd(evt: DraggableStartEvent) {
   color: var(--el-text-color-secondary);
   font-size: 13px;
   flex-shrink: 0;
+}
+/* 「无匹配」兄弟覆盖层（.pool-empty 那条是 pool 为 null 的分支，两者不同义）。 */
+.pool-no-match {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
 }
 </style>

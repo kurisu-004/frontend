@@ -3,6 +3,10 @@
      `utils/queueItemToCard.ts` 的 pendingBatchToCard；本文件只持工具条 / footer /
      拖拽源配置。
 
+     2026-10-20 新增：序列号 / 图号 / 批次号 / 名称的**本地**关键词过滤（判定收在
+     `utils/batchCardKeyword.ts`，端点零筛选参数故不发请求）。口径只影响显示：全选 /
+     已选 N 件 / 「总计 N 件待下发」全部保持全量。
+
      本容器同时是「拖入高亮」的事件源 —— Sortable 的 _onMove 只从被拖起的容器（源）
      取 options.onMove，投放目标（工序卡）侧永不触发，故由本容器读
      evt.related.dataset.processId 上报，父级 QueueBoard 转成 PendingPoolsPanel 的
@@ -28,6 +32,21 @@
       >
         自动下发
       </el-button>
+    </div>
+
+    <!-- 2026-10-20 新增：序列号 / 图号 / 批次号 / 名称的本地过滤（纯前端，见
+         utils/batchCardKeyword.ts）。搜索行是 `.pending-cards` 的**兄弟节点**，且刻意排
+         在 v-if / v-else-if / v-else 链**之外** —— Sortable 容器的直接子元素必须全是可
+         拖项，搜索框混进去会让 oldIndex 与可拖项下标错位。口径只影响显示：全选 / 已选 N 件
+         / 「总计 N 件待下发」全部走 props.batches 的全量，不随过滤变。 -->
+    <div class="search-row">
+      <el-input
+        v-model="keyword"
+        size="small"
+        clearable
+        :prefix-icon="Search"
+        placeholder="序列号 / 图号 / 批次号 / 名称"
+      />
     </div>
 
     <div v-if="isLoading && batches.length === 0" class="loading-state">
@@ -59,6 +78,14 @@
       />
     </div>
 
+    <!-- 「无匹配」也是**兄弟覆盖层**：关键词把可见集清空时容器照常渲染（它同时是拖拽
+         源，空容器不该消失），文案层压在它上面且不吃指针事件。判定带上
+         batches.length > 0 —— 「本来就没有待下发批次」由上面那条 v-else-if 的既有空态
+         负责，两条空态各说各的事。 -->
+    <div v-if="batches.length > 0 && cards.length === 0" class="no-match">
+      无匹配序列号 / 图号 / 批次号 / 名称
+    </div>
+
     <div class="footer">
       <span class="total-hint">总计 {{ total }} 件待下发</span>
     </div>
@@ -68,10 +95,12 @@
 <script setup lang="ts">
 import { computed, inject, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
+import { Search } from '@element-plus/icons-vue';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
 import type { BatchMenuOpener } from '@/composables/useBatchContextMenu';
 import type { QueuePendingBatchDto } from '@/api/productionQueue.contract';
 import type { BatchCardModel } from '@/types/batchCard';
+import { filterBatchCardsByKeyword } from '@/utils/batchCardKeyword';
 import { pendingBatchToCard } from '../utils/queueItemToCard';
 import type { UseQueueDispatchReturn } from '@/views/production/queue/composables/useQueueDispatch';
 import BatchCard from '@/components/BatchCard.vue';
@@ -103,8 +132,15 @@ const emit = defineEmits<(e: 'hoverProcess', processId: string | null) => void>(
 // 解构 props.selectedIds 时 .value 拿响应式 Set（与父级 composable.selectedIds 同源）
 const selectedIdsValue = computed<Set<string>>(() => props.selectedIds.value);
 
-/** 待下发 DTO → 卡片 model（统一适配层，组件零 DTO 依赖）。 */
-const cards = computed<BatchCardModel[]>(() => props.batches.map(pendingBatchToCard));
+/** 2026-10-20 新增：搜索关键词。组件局部状态、刻意不上抛 —— 过滤只影响本面板的可见集，
+ *  父级的全选 / 已选 / 总计口径一律走 props.batches 的全量，两者不该互相牵动。 */
+const keyword = ref<string>('');
+
+/** 待下发 DTO → 卡片 model（统一适配层，组件零 DTO 依赖）→ 本地关键词过滤。
+ *  sortableCards 从本 computed 派生，自动跟随过滤结果，Sortable 侧零改动。 */
+const cards = computed<BatchCardModel[]>(() =>
+  filterBatchCardsByKeyword(props.batches.map(pendingBatchToCard), keyword.value),
+);
 
 const cardsRef = ref<HTMLElement | null>(null);
 /** 2026-10-02：传给 useLazyDraggable 的本地副本，**不是渲染源**（模板 v-for 走
@@ -206,6 +242,7 @@ function onAutoDispatch() {
 
 <style scoped>
 .pending-batches-panel {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -224,6 +261,12 @@ function onAutoDispatch() {
   border-radius: 4px;
   flex-shrink: 0;
 }
+/* 2026-10-20 新增：搜索行独立一行（工具条里已排满「全选 + 已选 + 自动下发」），
+   且是 Sortable 容器的兄弟节点。 */
+.search-row {
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
 .selected-hint {
   flex: 1;
   color: var(--el-text-color-secondary);
@@ -238,6 +281,18 @@ function onAutoDispatch() {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+/* 「无匹配」兄弟覆盖层：覆盖整个面板，pointer-events:none 保证不吃落点判定与搜索框
+   的输入（框在上一行，文案压在面板中点 ≈ 卡片区中点）。 */
+.no-match {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
 }
 /* 2026-10-02：flex: 1 + min-height: 0 打通「固定一屏、内部滚动」的高度链 ——
    旧写法 max-height: calc(100% - 100px) 是魔法数，且对 auto 高度的父级解析为

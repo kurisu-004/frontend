@@ -25,6 +25,10 @@
 //   - D7b / D7c（2026-10-06）：Sortable 容器 .pool-cards 内的节点构成 —— 只有卡片根元素
 //     与 v-for 的 2 个空文本锚点，**没有注释节点**（dev 构建保留模板注释，注释同样是
 //     容器直接子节点）；空池时零元素子节点、容器仍是合法投放目标。
+//   - D10 / D11 / D11b / D12（2026-10-20）：序列号 / 图号 / 批次号 / 名称的**本地**过滤
+//     —— D10 只渲染命中的卡（头部徽标仍为全量）；D11 无匹配时渲染「无匹配」空态而
+//     .pool-cards 容器仍在、零元素子节点；D11b 工序本来就没有候选批次时不弹「无匹配」
+//     （没发生过的搜索不说谎）；D12 搜索行是容器的**兄弟节点**。
 //
 // 测试策略：
 //   - vi.mock('vue-draggable-plus') 捕获 useDraggable 的入参与 options（happy-dom
@@ -95,8 +99,31 @@ const ElTooltipStub = defineComponent({
   },
 });
 
+/** 搜索框桩：真 <input>，v-model 走 update:modelValue。prefixIcon / clearable / size
+ *  一并声明，避免未声明的 prop 落到 DOM 属性上。 */
+const ElInputStub = defineComponent({
+  name: 'ElInputStub',
+  props: {
+    modelValue: { type: String, default: '' },
+    placeholder: String,
+    size: String,
+    clearable: Boolean,
+    prefixIcon: { type: Object, default: undefined },
+  },
+  emits: ['update:modelValue'],
+  setup(props, { emit }) {
+    return () =>
+      h('input', {
+        class: 'el-input-stub__input',
+        value: props.modelValue,
+        placeholder: props.placeholder ?? '',
+        onInput: (evt: Event) => emit('update:modelValue', (evt.target as HTMLInputElement).value),
+      });
+  },
+});
+
 const globalConfig = {
-  components: { ElTag: ElTagStub, ElTooltip: ElTooltipStub },
+  components: { ElTag: ElTagStub, ElTooltip: ElTooltipStub, ElInput: ElInputStub },
 };
 
 const PROCESS_ID = '2000000000001';
@@ -461,6 +488,105 @@ describe('PoolDrawer（2026-10-03 Sortable 接线）', () => {
     });
     const card = wrapper.find('.pool-cards').find('.batch-card');
     await expect(card.trigger('contextmenu')).resolves.not.toThrow();
+    wrapper.unmount();
+  });
+
+  // ── 2026-10-20：本地关键词过滤（序列号 / 图号 / 批次号 / 名称） ─────────────────
+  it('D10：输入关键词只渲染命中的卡（四字段各自命中都试；徽标口径保持全量）', async () => {
+    const wrapper = mountDrawer(
+      makePool([
+        makeCard({ batch_id: '3000000000001', serial_no: 'SN-A', drawing_no: 'DRW-1' }),
+        makeCard({
+          batch_id: '3000000000002',
+          serial_no: 'SN-B',
+          drawing_no: 'DRW-2',
+          batch_no: 'B2048',
+          part_name: '齿轮',
+        }),
+        makeCard({
+          batch_id: '3000000000003',
+          serial_no: null,
+          drawing_no: 'DRW-3',
+          batch_no: 'B4096',
+          part_name: '轴承',
+        }),
+      ]),
+    );
+    await nextTick();
+    const search = () => wrapper.find('.el-input-stub__input');
+    const renderedIds = () =>
+      wrapper.findAll('.pool-cards .batch-card').map((el) => el.attributes('data-batch-id'));
+
+    expect(renderedIds()).toHaveLength(3);
+
+    await search().setValue('sn-b');
+    expect(renderedIds()).toEqual(['3000000000002']);
+
+    await search().setValue('DRW-3');
+    expect(renderedIds()).toEqual(['3000000000003']);
+
+    await search().setValue('B2048');
+    expect(renderedIds()).toEqual(['3000000000002']);
+
+    await search().setValue('连杆');
+    expect(renderedIds()).toEqual(['3000000000001']);
+
+    // 清空 → 回到全量；头部徽标读 pool.batches，过滤期间也不变
+    await search().setValue('');
+    expect(renderedIds()).toHaveLength(3);
+    expect(wrapper.find('.el-tag-stub').text()).toBe('3');
+    await search().setValue('DRW-3');
+    expect(wrapper.find('.el-tag-stub').text()).toBe('3');
+    wrapper.unmount();
+  });
+
+  it('D11：无匹配 → 渲染「无匹配」空态，.pool-cards 容器仍在且零子节点', async () => {
+    const wrapper = mountDrawer(
+      makePool([makeCard({ serial_no: 'SN-A' }), makeCard({ serial_no: 'SN-B' })]),
+    );
+    await nextTick();
+    await wrapper.find('.el-input-stub__input').setValue('ZZZ-不存在');
+
+    expect(wrapper.findAll('.pool-cards .batch-card')).toHaveLength(0);
+    const overlay = wrapper.find('.pool-no-match');
+    expect(overlay.exists()).toBe(true);
+    expect(overlay.text()).toContain('无匹配');
+    // 容器必须还在：它同时是落点（撤回投放）与源，空容器摘掉会连 Sortable 实例一起没
+    const container = wrapper.find('.pool-cards').element as HTMLElement;
+    expect(container.children).toHaveLength(0);
+    expect(
+      Array.from(container.childNodes).filter((n) => n.nodeType === Node.COMMENT_NODE),
+    ).toHaveLength(0);
+    // 空态覆盖层是容器的兄弟节点，不在容器内部
+    expect(overlay.element.closest('.pool-cards')).toBeNull();
+    // pool 为 null 时走的是另一条空态（.pool-empty），两条不重叠
+    expect(wrapper.find('.pool-empty').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('D11b：工序本来就没有候选批次 → 不弹「无匹配」（没发生过的搜索不说谎）', async () => {
+    // 「这个工序暂时没有候选批次」是常态，此时页面上没有任何关键词，却弹出「无匹配序列号
+    // / 图号 / 批次号 / 名称」就是对用户说谎。保持容器空着不说话（D7c 仍守它的节点构成）。
+    const wrapper = mountDrawer(makePool([]));
+    await nextTick();
+    expect(wrapper.findAll('.pool-cards .batch-card')).toHaveLength(0);
+    expect(wrapper.find('.pool-no-match').exists()).toBe(false);
+    expect(wrapper.find('.pool-cards').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('D12：搜索行是 .pool-cards 的兄弟节点（容器内不许混非可拖子元素）', async () => {
+    const wrapper = mountDrawer(makePool([makeCard()]));
+    await nextTick();
+    const row = wrapper.find('.section-search');
+    expect(row.exists()).toBe(true);
+    const rowEl = row.element as HTMLElement;
+    const container = wrapper.find('.pool-cards').element as HTMLElement;
+    expect(rowEl.closest('.pool-cards')).toBeNull();
+    expect(container.contains(rowEl)).toBe(false);
+    expect(container.parentElement).toBe(rowEl.parentElement);
+    // 搜索行独立一行，不挤进 section-header
+    expect(rowEl.closest('.section-header')).toBeNull();
     wrapper.unmount();
   });
 });

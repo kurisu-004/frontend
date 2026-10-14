@@ -2,6 +2,10 @@
      数据源是父级 tab body 透传的 `items[]`（`GET /outsource-queue/processes/{id}` 的
      `OutsourceQueueCandidate[]`），本组件**零请求**。
 
+     2026-10-20 新增：序列号 / 图号 / 批次号 / 名称的**本地**关键词过滤（判定收在
+     `utils/batchCardKeyword.ts`，端点零筛选参数故不发请求）。口径只影响显示：工具条的
+     徽标 / 未上架计数 / 已选数与勾选集合全部保持全量。
+
      两条 Sortable 硬约定（照 `views/production/queue/components/PendingBatchesPanel.vue`
      的源侧形态）：
        1. **三参重载（带 list）**。源侧必须有库内建的 `onRemove` —— 它的第一句是
@@ -34,6 +38,20 @@
       </el-tooltip>
       <span class="pool-selected">已选 {{ selectedIds.size }} 件</span>
     </div>
+    <!-- 2026-10-20 新增：序列号 / 图号 / 批次号 / 名称的本地过滤（判定收在
+         utils/batchCardKeyword.ts，端点零筛选参数故不发请求）。工具条里已排满 30% 窄栏的
+         全部四格（标题 / 徽标 / 未上架提示 / 已选数），搜索行独立成行且是 .pool-body 的
+         兄弟节点 —— .pool-cards 内部绝不许混入任何非可拖子元素。口径只影响显示：工具条的
+         三处计数与勾选集合全部走 items 的全量。 -->
+    <div class="pool-search">
+      <el-input
+        v-model="keyword"
+        size="small"
+        clearable
+        :prefix-icon="Search"
+        placeholder="序列号 / 图号 / 批次号 / 名称"
+      />
+    </div>
     <div class="pool-body">
       <div ref="containerRef" class="pool-cards" :data-process-id="processId">
         <BatchCard
@@ -52,6 +70,9 @@
       <div v-if="items.length === 0" class="pool-empty">
         <el-empty description="该工序暂无可发送候选" :image-size="60" />
       </div>
+      <div v-else-if="cards.length === 0" class="pool-empty">
+        <el-empty description="无匹配序列号 / 图号 / 批次号 / 名称" :image-size="60" />
+      </div>
     </div>
   </div>
 </template>
@@ -59,10 +80,12 @@
 <script setup lang="ts">
 import { computed, inject, onBeforeUnmount, onMounted, ref, watch, type ComputedRef } from 'vue';
 import { ElMessage } from 'element-plus';
+import { Search } from '@element-plus/icons-vue';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
 import type { BatchCardModel } from '@/types/batchCard';
 import { recordOutsourceSource, type DraggableStartEvent } from '@/utils/dndSourceTracker';
+import { filterBatchCardsByKeyword } from '@/utils/batchCardKeyword';
 import type { OutsourceQueueCandidateData } from '../composables/outsourceQueueSchema';
 import { poolCandidateToCard } from '../composables/outsourceItemToCard';
 import {
@@ -98,11 +121,21 @@ const emit = defineEmits<{
  *  必拒这类行 —— UI 据此同时关掉「可拖」与「可选」。 */
 type PoolCard = BatchCardModel & { __draggable: boolean };
 
+/** 2026-10-20 新增：搜索关键词。组件局部状态、刻意不上抛 —— 过滤只影响可见集，工具条的
+ *  三处计数与勾选集合仍由板级按 items 全量持有。 */
+const keyword = ref<string>('');
+
+/** 候选 DTO → 卡片 model → 本地关键词过滤（可见集）。工具条的徽标 / 未上架计数 / 已选数
+ *  三处刻意读 props.items 而不是本 computed：口径只让「看得见的卡片」变少，不让
+ *  「一共多少件」变少。 */
 const cards = computed<PoolCard[]>(() =>
-  props.items.map((it) => ({
-    ...poolCandidateToCard(it, props.processName),
-    __draggable: isCandidateDraggable(it),
-  })),
+  filterBatchCardsByKeyword(
+    props.items.map((it) => ({
+      ...poolCandidateToCard(it, props.processName),
+      __draggable: isCandidateDraggable(it),
+    })),
+    keyword.value,
+  ),
 );
 
 /** 尚未上架的行数（工具条提示用）。 */
@@ -214,6 +247,13 @@ function handleScan(code: string): void {
   const next = new Set(props.selectedIds);
   next.add(hit.batch_id);
   emit('update:selectedIds', next);
+  // 2026-10-20 新增：命中的行被当前关键词过滤掉了 ⇒ 清空关键词。扫中了却看不见那张卡，
+  // 操作员会以为扫码坏了、又按一次；清空后卡片回到可见集，「勾上了却看不见卡」的死角
+  // 消失。判据走 cards（可见集）而不是 items（数据全量），动作排在成功提示之前 ——
+  // 提示与界面必须同时自洽。
+  if (!cards.value.some((card) => card.batch_id === hit.batch_id)) {
+    keyword.value = '';
+  }
   ElMessage.success(`已选中：${hit.part_name ?? ''}（批次 ${hit.batch_no}）`);
 }
 
@@ -263,6 +303,12 @@ onBeforeUnmount(() => {
   font-size: 12px;
   color: var(--el-text-color-secondary);
 }
+/* 2026-10-20 新增：搜索行独立一行，且是 .pool-body 的兄弟节点。工具条里已经排满
+   30% 窄栏，挤进去会把「已选 N 件」挤出可视区。 */
+.pool-search {
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
 /* 与公司列 / 生产队列池同一条网格基线（200px 卡 + 8px gap + align-content:flex-start）。
    flex:1 + min-height:0 打通「固定一屏、内部滚动」的高度链。 */
 .pool-body {
@@ -296,9 +342,9 @@ onBeforeUnmount(() => {
 :deep(.sortable-ghost) {
   opacity: 0.4;
 }
-/* 空态是容器的**兄弟覆盖层**：容器内混入非可拖子元素会让 Sortable 的可拖项下标与
-   DOM 下标错位；容器不渲染又会让空池失去 Sortable 实例。pointer-events:none 保证
-   插画不吃落点判定。 */
+/* 空态（无候选 / 无匹配两条分支共用）是容器的**兄弟覆盖层**：容器内混入非可拖子元素会让
+   Sortable 的可拖项下标与 DOM 下标错位；容器不渲染又会让空池失去 Sortable 实例。
+   pointer-events:none 保证插画不吃落点判定。 */
 .pool-empty {
   position: absolute;
   inset: 0;
