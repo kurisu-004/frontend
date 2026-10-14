@@ -58,7 +58,12 @@ export type DashboardEventType =
   // `POST /prod/assemblies/{id}/force-complete`，两者都绕过状态机直接写 COMPLETED，
   // 必须各自发事件，否则常驻大屏上的该行不会消失。
   | 'PART_FORCE_COMPLETED'
-  | 'ASSEMBLY_FORCE_COMPLETED';
+  | 'ASSEMBLY_FORCE_COMPLETED'
+  // 2026-10-19：终态序列号一键释放（`POST /serials/release-terminal`）的**汇总事件**。
+  // payload 只有下面两个计数，不带被释放行的 id 列表、不带任何展示字段 —— 消费方只能
+  // 靠 event_type 触发失效后重取（`useDashboardInvalidation` 白名单），不能指望事件带
+  // 全量快照去就地改某一行。
+  | 'TERMINAL_SERIALS_RELEASED';
 
 // 2026-10-13：`DashboardEventPayload` **只剩 id 类键**。
 // 旧版在这里声明过 serial_no / drawing_no / name / customer_path / is_urgent /
@@ -79,6 +84,10 @@ export interface DashboardEventPayload {
   to_worker_id?: string | null;
   // 装配体事件携带的字段
   assembly_id?: string | null;
+  // TERMINAL_SERIALS_RELEASED 携带的两个计数：本次释放的装配件数与零件数（JSON number）。
+  // 只用于让消费方知道「变了多少」，定位到具体行仍要重取。
+  assembly_count?: number;
+  part_count?: number;
 }
 
 export interface DashboardEvent {

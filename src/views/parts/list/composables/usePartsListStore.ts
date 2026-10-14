@@ -27,6 +27,7 @@ import { usePartsColumnFilters } from './usePartsColumnFilters';
 import { usePartBatchSelection } from './usePartBatchSelection';
 import { useBatchPrint } from './useBatchPrint';
 import { usePartDispatch } from './usePartDispatch';
+import { useSerialRelease } from './useSerialRelease';
 import { usePartInlineEdit } from './usePartInlineEdit';
 import { buildPartsListColumnDefs } from '../partsListColumnDefs';
 import type { PartListItem } from '@/types/parts';
@@ -65,7 +66,7 @@ export const usePartsListStore = defineStore('parts-list', () => {
   }
   const getTable = () => tableGetter();
 
-  // ============ 六切片装配（原 PartsList.vue L195-233 原样搬入）============
+  // ============ 七切片装配（原 PartsList.vue L195-233 原样搬入）============
   const query = usePartsListQuery({ isCncProgrammer });
   const filters = usePartsColumnFilters({
     search: query.search,
@@ -84,6 +85,10 @@ export const usePartsListStore = defineStore('parts-list', () => {
     selectedRowTypes: batch.selectedRowTypes,
   });
   const dispatch = usePartDispatch();
+  // 2026-10-19 新增：序列号一键释放（工具栏全局一键）。刻意**与 query / filters / batch
+  // 三个切片零耦合** —— 它不吃列表筛选 / 分页 / 勾选（后端是全表扫），挂上去只会让人
+  // 误以为释放范围与当前列表有关。切片形态与 dispatch / print 同款。
+  const serialRelease = useSerialRelease();
   const edit = usePartInlineEdit({
     items: query.items,
     customerTree: filters.customerTree,
@@ -102,6 +107,7 @@ export const usePartsListStore = defineStore('parts-list', () => {
     batch,
     print,
     dispatch,
+    serialRelease,
     canEdit,
     canBatchPrint,
     isCncProgrammer,

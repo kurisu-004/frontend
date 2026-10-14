@@ -1,4 +1,18 @@
 // ============================================================
+// 序列号一键释放（`POST /serials/release-terminal`）的守门 schema **不在本文件**
+// （2026-10-19 新增，从未进过）→ `src/views/parts/list/composables/serialReleaseSchema.ts`。
+//
+// 迁出的理由与下面 statistics / inspection / process-design / 报工台四处同款：本文件是
+// **跨域共用的基础数据层** schema（货架 / 客户 / 工序 / 工种 / 零件 …），而序列号释放
+// 只服务零件一览页工具栏那一个全局一键入口，守门点也只跟着 `useSerialRelease` 的两条
+// mutationFn 走。放这里既不归属，也会让读代码的人多一次「该 import 哪个路径」的判断。
+//
+// 消费方一律从域内路径 import：`@/views/parts/list/composables/serialReleaseSchema`。
+// 与 statistics 那条一样**不做 re-export**。
+//
+// ============================================================
+
+// ============================================================
 // 生产统计（overview / workers / workers/{id}）的三个守门 schema **已迁出本文件**
 // （2026-10-12）→ `src/views/statistics/composables/statisticsSchema.ts`。
 //

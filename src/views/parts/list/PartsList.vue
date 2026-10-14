@@ -2,7 +2,7 @@
   PartsList.vue
 
   2026-09-15 重构：壳仅保留 filter-card / PartsTable / PartsBatchBar / iframe /
-  分页 / 采购单导入 dialog；其余六切片装配、列定义、列可见性、
+  分页 / 采购单导入 dialog / 序列号释放预览 dialog；其余七切片装配、列定义、列可见性、
   getTable 闭包、ctx 字面量装配、顶层解构块 / void 抑制全部迁入 `usePartsListStore`
 （Pinia setup store，详见 src/views/parts/list/composables/usePartsListStore.ts）。
 
@@ -14,6 +14,7 @@
   - el-pagination；
   - PartsDispatchDialog / PartsBatchDispatchDialog；
   - PurchaseOrderImportDialog（采购订单 Excel 导入）；
+  - 序列号一键释放的工具栏按钮 + SerialReleasePreviewDialog（2026-10-19）；
   - 路由 / 生命周期编排：restoreState、iframe DOM 同步、表头 sort 恢复、
     扫码订阅 / 卸载、store.$dispose()。
 
@@ -62,6 +63,25 @@
           <el-button v-if="store.canEdit" @click="orderImportVisible = true">
             <el-icon><Upload /></el-icon>
             <span>解析系统交期和订单号</span>
+          </el-button>
+
+          <!-- 2026-10-19 新增：一键释放「终态工单仍占用的序列号」。
+               ① 入口判据是**角色 MANAGER**（不是权限点）：后端
+               `POST /serials/release-terminal` 是 handler 层 `require_role(Role::Manager)`，
+               RBAC 面板里没有 `serial.*` 码，自造一个就是「前端比后端宽 / 窄」的分叉；
+               ADMIN 由 hasRole 通配。
+               ② 与当前列表的筛选 / 分页 / 勾选**完全无关**（后端是全表扫）—— 它不是
+               「释放当前这些行」，切筛选不会改变它的范围。
+               ③ ⚠️ 部署顺序：后端必须先上。端点未上线时点按钮拿到 404，只会弹一句 axios
+               错误，不会影响本页其它数据。
+               两段式：点它先发 dry_run 预览，计数与明细在二次确认框里给管理员逐格看。 -->
+          <el-button
+            v-if="store.serialRelease.canReleaseSerials"
+            :loading="store.serialRelease.previewPending"
+            @click="store.serialRelease.onOpenPreview"
+          >
+            <el-icon><Refresh /></el-icon>
+            <span>释放终态序列号</span>
           </el-button>
 
           <!-- 批量打印 toggle（2026-07-17 打印）。
@@ -127,6 +147,16 @@
 
     <!-- 2026-08-12：采购订单 Excel 导入对话框（解析系统交期和订单号） -->
     <PurchaseOrderImportDialog v-model="orderImportVisible" @success="store.query.fetchList" />
+
+    <!-- 2026-10-19：一键释放终态序列号的预览 / 二次确认框。
+         ⚠️ 消费侧禁止解构 store（store 不变量 #3）⇒ 一律 store.serialRelease.* 读写。 -->
+    <SerialReleasePreviewDialog
+      v-model="store.serialRelease.previewOpen"
+      :preview="store.serialRelease.preview"
+      :apply-pending="store.serialRelease.applyPending"
+      @confirm="store.serialRelease.onConfirmRelease"
+      @cancel="store.serialRelease.onCancelPreview"
+    />
   </div>
 </template>
 
@@ -150,10 +180,11 @@
 
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Close, Document, Printer, RefreshLeft, Upload } from '@element-plus/icons-vue';
+import { Close, Document, Printer, Refresh, RefreshLeft, Upload } from '@element-plus/icons-vue';
 import PartsTable from './components/PartsTable.vue';
 import PartsBatchBar from './components/PartsBatchBar.vue';
 import PurchaseOrderImportDialog from './components/PurchaseOrderImportDialog.vue';
+import SerialReleasePreviewDialog from './components/SerialReleasePreviewDialog.vue';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
 import { usePartsListStore } from './composables/usePartsListStore';
 import { PART_SORT_KEY_TO_PROP } from '@/types/parts';
