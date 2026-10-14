@@ -104,7 +104,7 @@ export function useWeComDailyLogsQuery(options: {
     queryKey,
     queryFn: async ({ queryKey }) => {
       // params 从 queryKey 读（reactive params 范式），不闭包捕获 stale 值。
-      const params = queryKey[2] as ListWeComDailyLogsParams | undefined;
+      const params = queryKey[2] as ListWeComDailyLogsParams;
       if (!params) throw new Error('缺少流水分页参数');
       return weComDailyLogListSchema.parse(await listWeComDailyLogs(params));
     },

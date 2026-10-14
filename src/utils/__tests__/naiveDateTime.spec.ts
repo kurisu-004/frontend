@@ -1,7 +1,6 @@
 // src/utils/__tests__/naiveDateTime.spec.ts
 //
-// 2026-10-21 迁入（原先在 `views/wecom/utils/__tests__/naiveDateTime.spec.ts`）：naive 时间
-// 切片的口径守卫。两条不变量：
+// 2026-10-21 新立：naive 时间切片的口径守卫。两条不变量：
 //
 //  1. **不做时区平移**：后端这些列下发的是**不带时区后缀**的 naive 字符串（Asia/Shanghai
 //     墙钟），显示什么就切什么。踩过的坑是走 `utils/date.ts::formatDateTime` —— 那个函数
