@@ -25,6 +25,7 @@
 import { h } from 'vue';
 import { ElButton, ElInput, ElPopconfirm, ElTag } from 'element-plus';
 import ColumnFilterPopover from '@/components/ColumnFilterPopover.vue';
+import { formatNaiveDateTime } from '@/utils/naiveDateTime';
 import type { ComputedRef, Ref } from 'vue';
 import type { ColumnDef } from '@/composables/useColumnVisibility';
 import type { UserOutData } from './usersSchema';
@@ -93,16 +94,6 @@ export interface BuildUsersColumnDefsDeps {
  */
 export function isAlwaysVisibleColumn(def: ColumnDef): boolean {
   return def.fixed !== undefined || def.draggable === false;
-}
-
-/** 后端 `last_login_at` 是 **naive** timestamp（无时区后缀，Asia/Shanghai 墙钟）。
- *  不能走 `utils/date.ts::formatDateTime` —— 那个函数 `new Date()` 后按 UTC 输出，会把
- *  墙钟时间整体平移（东八区的时间戳会被读成 UTC 再减 8 小时）。这里只做字符串切片。 */
-function formatNaiveDateTime(raw: string | null): string {
-  if (!raw) return '-';
-  // '2026-10-10T08:30:00' → '2026-10-10 08:30'
-  const normalized = raw.replace('T', ' ');
-  return normalized.length >= 16 ? normalized.slice(0, 16) : normalized;
 }
 
 export function buildUsersColumnDefs(deps: BuildUsersColumnDefsDeps): ColumnDef[] {
