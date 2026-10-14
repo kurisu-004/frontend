@@ -78,11 +78,13 @@
   2026-10-20 修 Worker 泄漏：`getDocument()` 返回的 `loadingTask` 是**唯一**能终止
     pdf.js worker 线程的句柄 —— `task.destroy()` 会走 `WorkerTransport.destroy()`，
     连带销毁 messageHandler、取消在途网络请求、清 pageCache / commonObjs / fontLoader、
-    终止线程本身。组件把 loadingTask 存在实例上，只在两条路径释放它：
+    终止线程本身。组件把 loadingTask 存在实例上，释放路径共三条：
     ① 切 `props.url` 前先释放旧的，并 await 它 —— 保证旧线程在新线程建出来之前终止，
        否则高频切文件时新旧线程会并存；
-    ② `onBeforeUnmount` 释放（不 await：卸载不阻塞；失败只 console.warn，不打断预览）。
-    doc 上的 `cleanup()` 不在这两条路径里：它只清渲染缓存、worker 照旧活着，destroy
+    ② `props.url` 被清空（宿主收起预览）时也释放，**排在判空 return 之前** —— 少了它，
+       上一份的 worker 就被丢在后台跑完，等于换一种写法复现同一个泄漏；
+    ③ `onBeforeUnmount` 释放（不 await：卸载不阻塞；失败只 console.warn，不打断预览）。
+    doc 上的 `cleanup()` 不在这三条路径里：它只清渲染缓存、worker 照旧活着，destroy
     已经把那份清理做了。
     承载弹窗是 destroy-on-close，所以「不释放」等价于「每打开一次图纸预览就漏一个线程」，
     而图纸预览是工人全天的高频动作。
@@ -94,10 +96,13 @@
     新的 load 打进来；那样一来「谁最后写 loadingTask」与「谁最后调 load()」就分家了 ——
     抢在 await 之前建好 task 的那次会被后来者覆盖掉 loadingTask，从此再没人能 destroy
     它（这恰好把本段要消灭的泄漏又造回来）。注意可见后果是「多建一个孤儿 task + 对同一
-    份文档多下一次重复下载」，**不是**「显示错文档」：url 是在 getDocument() 那一刻读的，
-    被抢跑的那次同样会取到最新的 url，所以别把「谁渲染出来的」当判据。
-    所以 bail 点一律对照 seq，且**必须在建 task 之前**bail（建出来就晚了）。同样的道理，
-    url 被清空也是一条释放路径。
+    份文档多下一次重复下载」，**不是**「显示错文档」：`getDocument()` 那次读的是当时的
+    `props.url`（load() 入口只在判空时读一次，不做快照），被抢跑的那次同样会取到最新的
+    url，所以别把「谁渲染出来的」当判据。
+    所以 bail 点一律对照 seq，且**必须在建 task 之前**bail（建出来就晚了）。
+    ⚠️ 路径 ② 除了释放，还必须**自己把 loading 落回 false**：模板是 `v-if="loading"`，
+    loading 为真就接管整个视图，而被它作废的那次 load 醒来只会命中 stale 守卫直接 return
+    （它没有、也不该有「替别人把 loading 落回去」的职责）⇒ 没人归位就永远停在「加载中…」。
 
   CLAUDE.md #6：仍走 @/utils/pdfjs，不直接 import pdfjs-dist。
 -->
@@ -263,10 +268,17 @@ let loadSeq = 0;
  *   不代表这份文档还能取到页 —— 停在旧文档上等于给工人看一份已经不成立的图纸，比多
  *   留一个待回收的线程更难查。下一次 load / unmount 还会再释放一次（那时 loadingTask
  *   已经指向新 task，旧的只能靠 pdf.js 自身的 GC），这属于可接受的兜底。
+ *
+ * 2026-10-20 补：释放 task 的同一个瞬间把 `pdfDoc` 也置 null。它是**这个 task** 的
+ * promise 兑现出来的，task 一销毁，那份 doc 就再也取不到页（后续 `getPage` 一律
+ * "Worker was destroyed"）。留着它有两个后果：render() 会拿着一个已死的 doc 去摸画布；
+ * 换文件那次还会多刷一条「取页失败」假 warn —— 新 doc 还没 resolve、`pdfDoc` 仍指着旧
+ * doc 的话，`doc !== pdfDoc` 这道竞态守卫就分不清「自 destroy」与「真取页失败」了。
  */
 async function releaseLoadingTask(): Promise<void> {
   const task = loadingTask;
   loadingTask = null;
+  pdfDoc = null;
   if (!task) return;
   try {
     await task.destroy();
@@ -293,8 +305,17 @@ async function load() {
   const seq = (loadSeq += 1);
   if (!props.url) {
     // 2026-10-20 补：url 被清空（宿主收起预览）也是一条释放路径。直接 return 会把
-    // 上一份的 worker 丢在后台跑，等于换一种写法复现同一个泄漏。
+    // 上一份的 worker 丢在后台跑完，等于换一种写法复现同一个泄漏。
     await releaseLoadingTask();
+    // ⚠️ 释放之后**必须自己把 loading 归位**：模板是 `v-if="loading"`，loading 为真就
+    // 接管整个视图；而被本次作废的那次 load 醒来时只会命中 stale 守卫直接 return（它没有、
+    // 也不该有「替别人把 loading 落回去」的职责）⇒ 谁不归位，界面就永远停在「加载中…」。
+    // 附带清 error：那句报错是上一份文档的结论，宿主已经表示「这里没有文档」。
+    // 判据取 seq（本次身份）—— 释放期间完全可能有更新的 load 接手，它的状态不能被覆盖。
+    if (!disposed && seq === loadSeq) {
+      loading.value = false;
+      error.value = null;
+    }
     return;
   }
   loading.value = true;
@@ -363,15 +384,27 @@ async function render() {
   let p: pdfjsLib.PDFPageProxy;
   try {
     p = await doc.getPage(page.value);
-  } catch {
-    // 2026-10-20 补：换文件会把上一份 doc 的 worker 终止掉，在途的 getPage 于是以
-    // "Worker was destroyed" 拒绝。render() 由多处 void 调用，抛出去就是一条未处理
-    // 拒绝；那是竞态的正常收尾，新文档的 load 会自己重渲，直接放弃本次即可。
+  } catch (e) {
+    // 2026-10-20 补：失败**分两种**，别合成一句「拿不到页就算了」——
+    //   · 已卸载 / 这份 doc 已随它的 task 被释放（换文件会 destroy 旧 task，在途 getPage
+    //     于是以 "Worker was destroyed" 拒绝）⇒ 竞态的正常收尾，静默放弃，新文档的
+    //     load / render 会自己重画。render() 由复位 / +/- / ResizeObserver 以 void 调用，
+    //     抛出去就是一条未处理拒绝，所以这里必须吃掉。
+    //   · 当前文档真的取不到页（页码越界、页面损坏、worker 崩溃）⇒ 留一行 warn。零日志地
+    //     吞掉的话画布就静默停在空白或上一帧，排障时没有任何信号（同仓 SCAN_BANNER 的
+    //     「丢弃 + 一行 warn」口径，也与本文件 releaseLoadingTask 的 warn 一致）。
+    if (disposed || doc !== pdfDoc) return;
+    console.warn(
+      `[PdfViewer] 取页失败（第 ${page.value} 页）：${(e as Error).message ?? String(e)}`,
+    );
     return;
   }
-  // ⚠️ getPage 是 await，醒来时可能已经卸载（canvas 随之被移除）或换了文档 ——
-  // 继续往下摸 canvas.width 会是 TypeError。load() 的守卫管不到这里（render 还被
-  // 复位 / +/- / ResizeObserver 直接调用）。
+  // ⚠️ getPage 是 await，醒来时这次渲染有两种「已作废」，后果不同、守卫也不同 ——
+  // load() 的那道守卫管不到这里（render 还被复位 / +/- / ResizeObserver 直接调用）：
+  //   · **已卸载** ⇒ canvasRef 已被 Vue 置 null，继续摸 canvas.width 是 TypeError
+  //     （`!canvas` 拦；`disposed` 是同义的第二道，卸载收尾里两者不保证同一时刻）；
+  //   · **已换文档**（含旧 task 被释放、`pdfDoc` 已置 null）⇒ canvas 还在，不会 TypeError，
+  //     但会把**上一份文档的页**画到新画布上，工人看到闪一帧旧图纸 —— `doc !== pdfDoc` 拦。
   const canvas = canvasRef.value;
   if (disposed || !canvas || doc !== pdfDoc) return;
   // 2026-10-11：先把 renderScale 落到「整页塞进容器」的比例（写 renderScale 而非

@@ -4,7 +4,7 @@
 // 两组守卫：
 //   · P 组 —— 「默认 fit 到容器」的缩放 / 翻页 / 平移契约（2026-10-11 补）；
 //   · W 组 —— loadingTask 即 pdf.js worker 线程的生命周期（2026-10-20 补，含换文件的
-//     并发竞态与 url 清空两条边界）。
+//     并发竞态、url 清空、以及「释放路径自持 UI 状态 / 取页失败分竞态与真失败」几条边界）。
 //
 // 为什么 P 组以前不存在（2026-10-11 补）：fit 那次改动把 `render()` 改成每次都按
 // 容器尺寸覆写 `renderScale`，而 `zoomIn` / `zoomOut` 的实现恰恰是「改 renderScale →
@@ -788,5 +788,239 @@ describe('PdfViewer / pdf.js Worker 生命周期', () => {
     }
 
     expect(unhandled, 'getPage 醒来后摸已卸载的 canvas ⇒ 未处理拒绝').toEqual([]);
+  });
+
+  // N-1：空 url 分支只 `await releaseLoadingTask(); return;` 时**没人给 loading 归位**。
+  // 模板是 `v-if="loading"`，loading 一旦为真就接管整个视图；而被本次作废的那次 load
+  // 醒来只会命中 stale 守卫直接 return（它没有、也不该有替别人落位的职责）⇒ 界面永远
+  // 停在「加载中…」。可达性如实说：8 个消费点当前都把 url 绑在 v-if / v-else / :key 之后，
+  // 没有生产路径触发得到；但 W7 已把这条分支登记成「受支持的释放路径」，被测试承认的
+  // 路径不能带着永久卡 spinner 的状态存在。
+  it('W10：url 在加载途中被清空 ⇒ 不得停在「加载中…」（空 url 分支自己把 loading 归位）', async () => {
+    let resolveDoc: ((d: unknown) => void) | null = null;
+    h.getDocument.mockImplementation(() =>
+      makeLoadingTask(
+        new Promise((res) => {
+          resolveDoc = res;
+        }),
+      ),
+    );
+    const w = mount(PdfViewer, {
+      props: { url: 'https://example.test/slow.pdf' },
+      global: { stubs },
+    });
+    await flushPromises();
+    expect(stateOf(w).loading, '前置：卡在 task.promise 上，界面处于加载中').toBe(true);
+
+    await w.setProps({ url: '' });
+    await flushAll();
+
+    expect(
+      stateOf(w).loading,
+      '宿主已表示「这里没有文档」，却永远停在「加载中…」—— 组件再也回不到画布',
+    ).toBe(false);
+    expect(w.find('.loading').exists(), 'spinner 还挂在 DOM 上').toBe(false);
+    expect(
+      createdTasks[0]!.destroy,
+      '释放路径仍要走（W7 单独钉了次数，这里只防归位代码把释放一起挤掉）',
+    ).toHaveBeenCalledTimes(1);
+
+    // 被作废的那次 load 醒来：它 resolve / reject 都只命中 stale 守卫，不得把 loading 顶回去
+    resolveDoc!(fakeDoc([{ w: PAGE_W, h: PAGE_H }]));
+    await flushAll();
+    expect(stateOf(w).loading, '迟到的 load 醒来后不得把 loading 又顶成 true').toBe(false);
+
+    w.unmount();
+    await flushAll();
+  });
+
+  // N-5：`doc !== pdfDoc` 不是冗余项。切 url 时旧 task 已随 load 开头那次 release 被释放
+  // （`pdfDoc` 同时置 null），而画布在 loading 落回 false 之后又回来了 ⇒ 旧 render() 醒来时
+  // canvas 是在的、**不会 TypeError**，它会真的把上一份文档的页画上去（工人看到闪一帧
+  // 旧图纸）。所以这一侧的守卫只能是 doc 身份比对，`!canvas` 拦不到。
+  it('W11：切 url 时旧 doc 的 getPage 在途 —— 醒来不得把上一份文档的页画到新画布上', async () => {
+    container.w = 800;
+    container.h = 800;
+    // 旧文档的页刻意取 500×500 ⇒ fit = 800/500 = 1.6，与新文档的 2.0 互不相同 ⇒
+    // 「有没有画上去」一眼可辨，不必去数画布像素。
+    let releaseOldPage: (() => void) | null = null;
+    let current = 'a';
+    h.getDocument.mockImplementation(() => {
+      if (current === 'a') {
+        return makeLoadingTask(
+          Promise.resolve({
+            numPages: 1,
+            getPage: () =>
+              new Promise((res) => {
+                releaseOldPage = () => res(makePage(500, 500));
+              }),
+          }),
+        );
+      }
+      return makeLoadingTask(Promise.resolve(fakeDoc([{ w: 400, h: 400 }])));
+    });
+    const w = mount(PdfViewer, {
+      props: { url: 'https://example.test/a.pdf' },
+      global: { stubs },
+    });
+    await flushAll();
+    expect(releaseOldPage, '前置：render() 应当正卡在旧 doc 的 getPage 上').not.toBeNull();
+    expect(renderedScales, '前置：旧文档一页都还没画过').toEqual([]);
+
+    current = 'b';
+    await w.setProps({ url: 'https://example.test/b.pdf' });
+    await flushAll();
+    expect(renderedScales.at(-1), '前置：新文档已渲染（fit = 800/400 = 2.0）').toBeCloseTo(2.0, 6);
+    const drawnBefore = renderedScales.length;
+
+    releaseOldPage!();
+    await flushAll();
+
+    expect(
+      renderedScales.length,
+      '旧 doc 的 render() 醒来把上一份文档的页画到了新画布上（工人看到闪一帧旧图纸）',
+    ).toBe(drawnBefore);
+    expect(
+      renderedScales.some((s) => Math.abs(s - 1.6) < 1e-6),
+      '不该出现旧文档那一页的比例（fit = 800/500 = 1.6）',
+    ).toBe(false);
+
+    w.unmount();
+    await flushAll();
+  });
+
+  // N-1 的第二面：url 清空后那句报错是**上一份文档**的结论（宿主已经表示「这里没有
+  // 文档」），继续挂着就是拿一份不成立的信息当现状展示 —— 与 W11 那条同族：状态里不许
+  // 留着已经不成立的那一份。守卫与 W10 分开：W10 钉 loading，这一条钉 error。
+  it('W12：url 被清空时把上一份文档留下的报错一起清掉', async () => {
+    let rejectDoc: ((r: unknown) => void) | null = null;
+    h.getDocument.mockImplementation(() =>
+      makeLoadingTask(
+        new Promise((_, rej) => {
+          rejectDoc = rej;
+        }),
+      ),
+    );
+    const w = mount(PdfViewer, {
+      props: { url: 'https://example.test/bad.pdf' },
+      global: { stubs },
+    });
+    await flushPromises();
+    rejectDoc!(new Error('PDF 结构损坏'));
+    await flushAll();
+    expect(stateOf(w).error, '前置：加载失败已经上屏').toContain('PDF 结构损坏');
+    expect(stateOf(w).loading).toBe(false);
+
+    await w.setProps({ url: '' });
+    await flushAll();
+
+    expect(stateOf(w).error, '宿主已表示「这里没有文档」，却仍挂着上一份文档的失败原因').toBeNull();
+    expect(stateOf(w).loading).toBe(false);
+    w.unmount();
+    await flushAll();
+  });
+
+  // N-2：getPage 的失败分两种，竞态那种静默、真失败那种必须留痕。零日志地吞掉 ⇒ 画布停在
+  // 空白或上一帧，控制台干干净净，排障时没有任何信号（同仓 SCAN_BANNER 的「丢弃 + 一行
+  // warn」口径）。与 W5（destroy 失败的 warn）成对：释放侧留痕，取页侧也要留痕。
+  it('W13：当前文档的 getPage 真失败时留一行 warn（不静默停在空白画布）', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    container.w = 800;
+    container.h = 800;
+    let failPage: ((e: unknown) => void) | null = null;
+    h.getDocument.mockImplementation(() =>
+      makeLoadingTask(
+        Promise.resolve({
+          numPages: 1,
+          getPage: () =>
+            new Promise((_, rej) => {
+              failPage = rej;
+            }),
+        }),
+      ),
+    );
+    const w = mount(PdfViewer, {
+      props: { url: 'https://example.test/bad.pdf' },
+      global: { stubs },
+    });
+    try {
+      await flushAll();
+      expect(failPage, '前置：render() 应当正卡在 getPage 上').not.toBeNull();
+
+      failPage!(new Error('Invalid page request.'));
+      await flushAll();
+
+      expect(
+        warn,
+        '真实失败（页码越界 / 页面损坏 / worker 崩溃）零日志 ⇒ 画布静默空白，排障时没有任何信号',
+      ).toHaveBeenCalled();
+      expect(String(warn.mock.calls.at(-1)?.[0] ?? '')).toContain('Invalid page request.');
+    } finally {
+      warn.mockRestore();
+    }
+    w.unmount();
+    await flushAll();
+  });
+
+  // N-2 的另一面（别把 warn 放出去的那侧一起打开）：换文件时旧 doc 的 getPage 以
+  // "Worker was destroyed" 拒绝是**竞态的正常收尾**，每次切文件都刷一条 warn 就是噪声。
+  // 这条同时钉住 `releaseLoadingTask` 里那句 `pdfDoc = null`：新 doc 还没 resolve、
+  // `pdfDoc` 若仍指着旧 doc，「自 destroy」与「真取页失败」就分不开了（那条 warn 是假的）。
+  it('W14：换文件时被自己 destroy 掉的旧 doc 取页失败 ⇒ 静默收尾（不刷假 warn）', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    container.w = 800;
+    container.h = 800;
+    let failOldPage: ((e: unknown) => void) | null = null;
+    let resolveNewDoc: ((d: unknown) => void) | null = null;
+    let current = 'a';
+    h.getDocument.mockImplementation(() => {
+      if (current === 'a') {
+        return makeLoadingTask(
+          Promise.resolve({
+            numPages: 1,
+            getPage: () =>
+              new Promise((_, rej) => {
+                failOldPage = rej;
+              }),
+          }),
+        );
+      }
+      return makeLoadingTask(
+        new Promise((res) => {
+          resolveNewDoc = res;
+        }),
+      );
+    });
+    const w = mount(PdfViewer, {
+      props: { url: 'https://example.test/a.pdf' },
+      global: { stubs },
+    });
+    try {
+      await flushAll();
+      expect(failOldPage, '前置：render() 应当正卡在旧 doc 的 getPage 上').not.toBeNull();
+
+      current = 'b';
+      await w.setProps({ url: 'https://example.test/b.pdf' });
+      await flushAll();
+      // 刻意把旧 render() 的拒绝**压在**「旧 task 已释放、新 doc 还没 resolve」的窗口里：
+      // 这一窗口内 `pdfDoc` 已随 release 置 null，正是竞态与真失败唯一能分开的时刻。
+      expect(stateOf(w).loading, '前置：新文档还在下载，界面处于加载中').toBe(true);
+
+      failOldPage!(new Error('Worker was destroyed'));
+      await flushAll();
+      expect(
+        warn,
+        '换文件的正常收尾被当成取页失败上报 —— 每次切文件都刷一条假 warn',
+      ).not.toHaveBeenCalled();
+
+      resolveNewDoc!(fakeDoc([{ w: 400, h: 400 }]));
+      await flushAll();
+      expect(renderedScales.at(-1), '新文档照常渲染（静默不是放弃）').toBeCloseTo(2.0, 6);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+    w.unmount();
+    await flushAll();
   });
 });
