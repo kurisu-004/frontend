@@ -22,8 +22,9 @@
         <el-button v-if="canRecall(note.status, role)" type="warning" @click="emit('recall')">
           撤回
         </el-button>
-        <!-- 两个打印入口共用 canPrint（角色 + 至少 1 个行项）。司机不是入口判据：
-             指定司机的唯一地方是打印对话框内的下拉，而进对话框就要先过这里。 -->
+        <!-- 两个打印入口共用 canPrint（权限点 `delivery_note.print` + 至少 1 个行项）。
+             司机不是入口判据：打印只是拿一张纸，指定司机的强制点在一键送货的确认对话框
+             （DeliveryDriverPickerDialog），与这个入口无关。 -->
         <el-button v-if="canPrint(note, role)" type="success" @click="emit('print')">
           打印送货单
         </el-button>

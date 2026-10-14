@@ -3,11 +3,11 @@
 //
 // 送货单权限 helper 的真值表守卫（2026-10-08 新增；此前该模块 9 个导出零覆盖）。
 //
-// **首要目标是锁死 2026-10-08 修掉的死锁**：canPrint 曾把「已指定司机」写进入口判据，
-// 而唯一能指定司机的地方是打印对话框内的下拉 —— 进对话框的按钮与对话框里的下拉互相
-// 等待，结果两个页面的「打印送货单」按钮**永远不出现**。本文件里所有带
-// `driver_worker_name: null` 的用例都是这条死锁的回归锁：哪天谁又把司机写回
-// canPrint，它们会集体转红。
+// **首要目标是锁死「打印入口与司机状态解耦」**：canPrint 只看权限点 `delivery_note.print`
+// + 状态 + 行项数。打印对话框里的司机下拉只是**可选**便利口，导出不按它 gate；指定司机的
+// 强制点在「一键送货」的确认对话框（DeliveryDriverPickerDialog，由 canDeliver 把关），
+// 与本函数无关 ⇒ 两处之间不存在互相等待，哪天谁把司机写回 canPrint 只会平白多挡一批人。
+// 本文件里所有带 `driver_worker_name: null` 的用例都是这条解耦的回归锁。
 //
 // ⚠️ **2026-10-14（RBAC 控制面板）**：只有 `canPrint` 的判据从「管理角色」换成权限点
 // `delivery_note.print`，其余 8 个 helper 一律**仍按角色判**（下面「不误伤相邻 helper」
@@ -129,8 +129,8 @@ describe('hasManageNoteRole（仍按角色判，2026-10-14 未迁）', () => {
   });
 });
 
-describe('canPrint —— 死锁回归锁', () => {
-  // ⚠️ 下面两条是 2026-10-08 修复的核心断言：司机没指定时**仍然**允许进打印对话框。
+describe('canPrint —— 打印入口与司机状态解耦的回归锁', () => {
+  // ⚠️ 下面两条钉的是「司机没指定时**仍然**允许进打印对话框」——司机不参与本函数判定。
   it('driver_worker_name 为 null 时仍返回 true（不能把按钮锁死成看不见）', () => {
     withPrintPermission();
     expect(canPrint(note({ driver_worker_name: null }), { MANAGER: true })).toBe(true);

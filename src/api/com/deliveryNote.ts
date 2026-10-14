@@ -12,7 +12,7 @@
 //     GET    /scan/{serial_no}       - getDeliveryScanTree    ★ 三层树（纯读，不建单）
 //     POST   /scan                   - submitDeliveryEntries  ★ 入单（find-or-create DRAFT）
 //     POST   /{id}/update            - updateNote
-//     POST   /{id}/driver            - setNoteDriver          ★ 指定司机（打印前置）
+//     POST   /{id}/driver            - setNoteDriver          ★ 指定司机（一键送货前置）
 //     POST   /{id}/remove-batches    - removeBatches
 //     POST   /{id}/submit            - submitNote
 //     POST   /{id}/recall            - recallNote
@@ -136,9 +136,18 @@ export async function updateNote(
   return resp.data;
 }
 
-/** 指定送货司机。打印前必须先指定司机（打印对话框的「导出」按钮按此判空）。
- *  后端校验 version + `validate_driver`（在职 + 工种 code == '送货司机'），不通过
- *  返 21409 `BIZ_DELIVERY_NOTE_DRIVER_INVALID`。 */
+/** 指定送货司机（一键送货时指定；打印**不再**要求先指定司机）。
+ *
+ *  - 入参 `{ version, driver_worker_id }`（version 是 OCC 锚）；后端校验 version +
+ *    `validate_driver`（在职 + 工种 code == '送货司机'），不通过返 21409
+ *    `BIZ_DELIVERY_NOTE_DRIVER_INVALID`；单据非 DRAFT / SUBMITTED 返 21402。
+ *  - **响应是刷新后的整张单据（`DeliveryNoteOut`），version 已推进** ⇒ 紧跟着的
+ *    `POST /{id}/pickup` 必须用这个 `version`，沿用旧 version 必 409。
+ *  - `POST /{id}/pickup` 只吃 version、司机由服务端从单据上读；单据没指定司机返 21409，
+ *    且会**重跑** `validate_driver`（司机可能在指定到送货之间被停用 / 改工种）。
+ *    ⇒ 指定司机与 pickup 是一次「不可拆」的两步动作，编排见
+ *    `views/com/delivery/composables/useDeliveryNoteListStore.ts`。
+ */
 export async function setNoteDriver(noteId: string, payload: DeliveryNoteDriverRequest) {
   const resp = await api.post<DeliveryNoteItemData>(
     `/com/delivery/note/${encodeURIComponent(noteId)}/driver`,
@@ -186,9 +195,12 @@ export async function recallNote(noteId: string, payload: DeliveryNoteVersionPay
 
 /** 一键送货（`SUBMITTED → PICKED_UP`）。
  *
- *  ⚠️ 入参**只剩 version**：司机改由 `POST /{id}/driver` 预先指定，服务端从单据上读
- *  `driver_worker_id`；为 None 返 21409，并**重跑 `validate_driver`**（司机可能在
- *  打印到送货之间被停用 / 改工种）。 */
+ *  ⚠️ 入参**只剩 version**：司机由服务端从单据上读 `driver_worker_id`（本端不知道
+ *  driver_worker_id，VO 只给名字），为 None 返 21409，并**重跑 `validate_driver`**
+ *  （司机可能在打印到送货之间被停用 / 改工种）。
+ *
+ *  ⚠️ **调用方往往紧邻着先发一条 `setNoteDriver`**（送货确认框里现选司机）：那条**推进
+ *  version**，所以本端必须吃它响应里返回的新 `version`，沿用开框时那份必 409。 */
 export async function pickup(noteId: string, payload: DeliveryNoteVersionPayload) {
   const resp = await api.post<DeliveryNoteItemData>(
     `/com/delivery/note/${encodeURIComponent(noteId)}/pickup`,

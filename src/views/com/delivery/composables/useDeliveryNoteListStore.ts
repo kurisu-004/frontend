@@ -36,7 +36,7 @@ import { defineStore } from 'pinia';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/vue-query';
 
-import { pickup, softDeleteNote, type ListNotesParams } from '@/api/com/deliveryNote';
+import { pickup, setNoteDriver, softDeleteNote, type ListNotesParams } from '@/api/com/deliveryNote';
 import { qk } from '@/composables/queries/keys';
 import { useCustomersQuery } from '@/composables/queries/useCustomersQuery';
 import { useColumnVisibility } from '@/composables/useColumnVisibility';
@@ -57,6 +57,20 @@ import { useDeliveryNotesQuery } from './useDeliveryNotesQuery';
  *  先例 —— store 不 import vue-router（不变量 #4，node 单测无 router 实例）。 */
 export interface DeliveryNoteListRouter {
   push: (path: string) => Promise<unknown> | unknown;
+}
+
+/** 送货确认对话框携带的单据快照（2026-10-16）。
+ *
+ *  只取五个字段而不是整行：`id` / `version` 是两条 POST 的入参（OCC 锚），另三个是
+ *  对话框的回显文案。存**快照**而不是行引用 —— 列表中途刷新会换掉 `items` 里的对象，
+ *  这次提交该用的 version 不该被刷新结果改写。 */
+export interface DeliverDialogTarget {
+  id: string;
+  version: number;
+  delivery_note_no: string;
+  part_count: number;
+  /** 单据上已有的司机名（null = 尚未指定；后端 VO 只给名字不给 driver_worker_id）。 */
+  driver_worker_name: string | null;
 }
 
 export const useDeliveryNoteListStore = defineStore('delivery-note-list', () => {
@@ -100,6 +114,11 @@ export const useDeliveryNoteListStore = defineStore('delivery-note-list', () => 
 
   /** 一键送货的 per-row loading 容器（Record 让 :loading 自动响应）。 */
   const deliveringMap = reactive<Record<string, boolean>>({});
+  /** 送货确认对话框态（2026-10-16：确认 + 指定司机合并进
+   *  `components/DeliveryDriverPickerDialog`，不再走 ElMessageBox —— 消息框放不下司机
+   *  下拉，而服务端只吃 `POST /{id}/pickup` 的 version、司机必须先落库才有）。 */
+  const deliverDialogOpen = ref(false);
+  const deliverTarget = ref<DeliverDialogTarget | null>(null);
 
   // ============ buildParams ============
   function buildParams(): ListNotesParams {
@@ -248,34 +267,107 @@ export const useDeliveryNoteListStore = defineStore('delivery-note-list', () => 
   }
 
   // ============ 行操作 mutation ============
-  /** 一键送货（`POST /{id}/pickup`，入参只剩 version；司机由 `/{id}/driver` 预先指定）。 */
+  /** 一键送货：**司机可选中时两条 POST 串成一步**。
+   *
+   *  `driverId` 非空（确认对话框里新选了司机）⇒ 先 `POST /{id}/driver` 把它落库，
+   *  **必须用这条响应里返回的新 `version`** 去发 `POST /{id}/pickup` —— driver POST
+   *  会推进 version，沿用打开对话框时那份 version 必 409（OCC）。
+   *  `driverId` 为空串 ⇒ 沿用单据上已有的司机，只发 pickup 一条，不为同一件事多推进一次
+   *  version。
+   *
+   *  失败语义：`POST /{id}/pickup` 也会**重跑**司机校验（在职 + 工种 code == '送货司机'），
+   *  单据没司机返 21409；这两类失败都走 onError 的 `ElMessage.error`，行内 loading 由
+   *  `onDeliverConfirm` 的 finally 清。
+   *
+   *  ⚠️ **onError 也失效本域**（2026-10-16）：本 mutation 是「两条 POST 串一步」，于是
+   *  存在「服务端已变更、本端缓存没失效」的失败态 —— driver POST 成功（version 3→4、
+   *  司机已改绑）而 pickup 失败（409 OCC / 21409 司机被停用 / 网络）。此时列表缓存仍
+   *  持有 `version: 3` + 旧司机名，本页既无 WS 失效通道又是 `refetchOnWindowFocus: false`
+   *  ⇒ 用户再点一次「送货」必然再吃一次 409，且表上司机与服务端已不一致。
+   *  driver POST 自己失败的那一支服务端没动，失效只是白刷一次列表，无副作用。 */
   const deliverMutation = useMutation({
     mutationKey: ['delivery', 'pickup'],
-    mutationFn: (row: DeliveryNoteRow) => pickup(row.id, { version: row.version }),
+    mutationFn: async ({
+      target,
+      driverId,
+    }: {
+      target: DeliverDialogTarget;
+      driverId: string;
+    }) => {
+      const version = driverId
+        ? (
+            await setNoteDriver(target.id, {
+              version: target.version,
+              driver_worker_id: driverId,
+            })
+          ).version
+        : target.version;
+      return pickup(target.id, { version });
+    },
     onSuccess: async () => {
       await invalidateDeliveryNotesQuery(qc);
       ElMessage.success('已送货');
     },
-    onError: (e: Error) => ElMessage.error(e.message ?? '送货失败'),
+    // 失败也失效：见上面「onError 也失效本域」的注释（driver 成功 + pickup 失败 ⇒ 本端
+    // 副本的 version / 司机名已过期，不刷就必然再吃一次 409）。
+    onError: async (e: Error) => {
+      await invalidateDeliveryNotesQuery(qc);
+      ElMessage.error(e.message ?? '送货失败');
+    },
   });
 
-  async function onDeliver(row: DeliveryNoteRow): Promise<void> {
+  /** 行内「送货」按钮：只打开确认对话框（零请求），司机与确认都在对话框里做。 */
+  function onDeliver(row: DeliveryNoteRow): void {
+    deliverTarget.value = {
+      id: row.id,
+      version: row.version,
+      delivery_note_no: row.delivery_note_no,
+      part_count: row.part_count,
+      driver_worker_name: row.driver_worker_name,
+    };
+    deliverDialogOpen.value = true;
+  }
+
+  /** 对话框显隐（右上角 × / 取消 / 确认后关闭都汇到这里）。
+   *
+   *  ⚠️ **这里只改显隐，不清 target**：el-dialog 的 close 是**带 leave 过渡**的，关闭开始
+   *  到过渡结束（`closed`）之间对话框内容仍在 DOM 里可见约 300ms —— 此刻把 target 置 null
+   *  会让成功送货的主路径上肉眼看见标题闪成「一键送货 — 」、正文闪成「0 条」。
+   *  清快照收在 `onDeliverDialogClosed`（视图挂 `:closed` 那一处）。 */
+  function onDeliverDialogClose(open: boolean): void {
+    deliverDialogOpen.value = open;
+  }
+
+  /** 关闭过渡结束（el-dialog 的 `closed`）⇒ 丢掉 target 快照，下次 `onDeliver` 重新取
+   *  行上的 version。`onDeliver` 每次打开都整体覆写 target，所以即便这一次 closed 丢了
+   *  （例如组件被卸载），也不会有脏快照被下一次提交读到。
+   *
+   *  ⚠️ **陈旧守卫（2026-10-16 补）**：`closed` 比关闭**晚约 300ms** 才到，若这段窗口里
+   *  又 `onDeliver(rowB)`（键盘路径可达：确认后对话框关闭中，用户立刻在另一行按了
+   *  「送货」），A 的那次 `closed` 会把 B 的快照连同显隐一起抹掉 ⇒ B 的对话框凭空消失、
+   *  标题空成「一键送货 — 」。判据是「此刻对话框是否已开」：`open === true` 说明这一下
+   *  `closed` 属于上一张单据，直接忽略。正常关闭路径上 `open` 已是 false，守卫不挡。 */
+  function onDeliverDialogClosed(): void {
+    if (deliverDialogOpen.value) return;
+    deliverTarget.value = null;
+  }
+
+  /** 确认送货：`driverId` 空串 = 沿用本单司机（见 deliverMutation 的注释）。
+   *
+   *  ⚠️ **不在这里清 `deliverTarget`**：本函数第一行把对话框置为关闭，而关闭是带 leave
+   *  过渡的 —— 同 tick 把 target 清掉会让还可见的那 300ms 里标题闪成「一键送货 — 」。
+   *  快照的清理由 `onDeliverDialogClosed`（挂在 el-dialog 的 `closed`）负责。 */
+  async function onDeliverConfirm(driverId: string): Promise<void> {
+    const target = deliverTarget.value;
+    if (!target) return;
+    deliverDialogOpen.value = false;
+    deliveringMap[target.id] = true;
     try {
-      await ElMessageBox.confirm(
-        `一键送货 ${row.delivery_note_no}（${row.part_count} 条）？批次将全部置为已送货。`,
-        '一键送货',
-        { type: 'success', confirmButtonText: '确认送货', cancelButtonText: '取消' },
-      );
-    } catch {
-      return;
-    }
-    deliveringMap[row.id] = true;
-    try {
-      await deliverMutation.mutateAsync(row);
+      await deliverMutation.mutateAsync({ target, driverId });
     } catch {
       // onError 已提示；清 loading 让按钮恢复可点。
     } finally {
-      delete deliveringMap[row.id];
+      delete deliveringMap[target.id];
     }
   }
 
@@ -358,6 +450,16 @@ export const useDeliveryNoteListStore = defineStore('delivery-note-list', () => 
     actions: {
       navigateToDetail,
       onDeliver,
+      /** 送货确认对话框（视图挂 `DeliveryDriverPickerDialog` 用）：
+       *  显隐 + 单据快照（回显 / OCC 锚）都放这里，`target` 为 null 时对话框无内容可显。
+       *  清快照走 `onDeliverDialogClosed`（`:closed`），不在关闭那一刻清。 */
+      deliverDialogOpen,
+      deliverTarget,
+      onDeliverDialogClose,
+      /** 关闭过渡结束 ⇒ 丢掉 target 快照（视图挂 `:closed`） */
+      onDeliverDialogClosed,
+      /** 确认：driverId 空串 = 沿用本单司机 */
+      onDeliverConfirm,
       onSoftDelete,
       canDeliverRow,
       canSoftDeleteRow,

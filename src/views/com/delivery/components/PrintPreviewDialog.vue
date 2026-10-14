@@ -23,7 +23,13 @@
   · tab name = groupKey（`g_<gid>` / `c_<l2id>` 语义字符串，非索引）；
   · 表头排序走 EP 内置比较 + 客户端 `sortPrintRows`，`prop` 是 snake_case 字段名本身；
   · 数量列**只读**，要改必须走行尾「拆分」（守恒校验在 PrintSplitEditor 里）；
-  · 司机变更**在导出确认时随本次导出一并落库**（下拉切换是纯本地态）。
+  · 司机变更**在导出确认时随本次导出一并落库**（下拉切换是纯本地态）；没碰下拉就零 POST。
+  · **司机不再 gate 导出**（2026-10-16）：打印只是拿一张纸，页脚「送货人」没有司机名时
+    留白即可，不该把用户挡在对话框里。指定司机的强制点是**一键送货** ——
+    `POST /{id}/pickup` 入参只有 version、司机由服务端从单据上读（没司机返 21409），
+    所以司机在那一步的确认对话框里选（`DeliveryDriverPickerDialog`），且那一步会先发
+    `POST /{id}/driver` 拿新 version 再发 pickup。这里保留司机下拉纯粹是「顺手能改」：
+    选了照旧随导出落库，不选就沿用单据上已有的司机。
 -->
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
@@ -236,7 +242,9 @@ async function onFileChange(file: { raw?: File; name?: string }): Promise<void> 
 const driverQuery = useDeliveryDriversQuery(computed(() => props.modelValue));
 /** 仅本地选中态。切换下拉**不发请求**（2026-10-08：改动随「导出」确认一并落库，见
  *  persistSelectedDriver）—— 关对话框即放弃，与「改完就生效」的直觉相反是刻意的：
- * 打印对话框是一次性动作，点「取消」不该在服务端留下一条 version 变更。 */
+ * 打印对话框是一次性动作，点「取消」不该在服务端留下一条 version 变更。
+ *
+ *  2026-10-16：下拉**不再参与导出闸门**（见文件头），它只是「顺手改个司机」的便利口。 */
 const driverId = ref<string>('');
 /** 司机落库中（只在 persistSelectedDriver 的 await 期间为 true）。 */
 const driverSaving = ref(false);
@@ -250,7 +258,8 @@ const selectedDriverName = computed(
  * 导出前把所选司机落库；成功返回 true。
  *
  * 落库判据只有一条：**用户在下拉里选过**（`driverId` 非空）。没碰过下拉 ⇒ 用单据上已有的
- * 司机名导出，`driverId` 保持 `''` ⇒ 不 POST。
+ * 司机名导出，`driverId` 保持 `''` ⇒ 不 POST（单据上也没有司机名时也不 POST —— 打印
+ * 不再要求司机，页脚留白即可；指定司机是一键送货那一步的事，见文件头）。
  *
  * ⚠️ **不能拿司机名当判据**：司机名允许重名（后端列表同名时按 id 定序 ⇒ 同名是预期数据现状）。
  * 按名短路会让「选了同名不同 id 的司机」静默跳过落库 ⇒ 单据仍绑着旧 id，`POST /{id}/pickup`
@@ -444,16 +453,18 @@ const resetOrderToken = ref(0);
 // ============================================================
 const exporting = ref(false);
 
+/** 页脚「送货人」要写的名字；单据上没有司机名时为空串（页脚留白，不阻断导出）。 */
 const driverNameOfExport = computed(
   () => selectedDriverName.value ?? props.note.driver_worker_name ?? '',
 );
 
 const exportDisabled = computed(() => {
   if (exporting.value) return true;
-  return !templateOk.value || totalRows.value === 0 || !driverNameOfExport.value;
+  return !templateOk.value || totalRows.value === 0;
 });
 
-/** 「导出」disabled 的原因（tooltip 显示；空串 = 可导出）。 */
+/** 「导出」disabled 的原因（tooltip 显示；空串 = 可导出）。
+ *  ⚠️ **司机不在阻断原因里**（2026-10-16）：导出 gate 只剩模板与行项两项。 */
 const exportHint = computed(() => {
   // ⚠️ **「正在自动选用」要排在最前**（2026-10-16 review 第 1 轮 MINOR-7）：resolve 在途
   // 期间状态是 `templateSource=null` / `diffs=[]` / `boundMissing=false`，三条分支都不命中 ⇒
@@ -473,7 +484,6 @@ const exportHint = computed(() => {
     return '请先上传送货单模板';
   }
   if (totalRows.value === 0) return '没有可打印的行项';
-  if (!driverNameOfExport.value) return '请先指定司机（页脚「送货人」与 pickup 都要它）';
   return '';
 });
 
@@ -492,8 +502,9 @@ async function onExport(): Promise<void> {
   try {
     const src = templateSource.value;
     if (!src) return;
-    // 司机先落库：打印即「这次确认了送货人」。落库失败（409 / 21409 / 网络）时中止，
-    // 不产出文件 —— 否则会下载出一张页脚写着 A 司机、单据上却是 B 司机的送货单。
+    // 司机先落库（**仅在用户选过司机时**才发请求，见 persistSelectedDriver）：选了下拉
+    // 就是「这次确认了送货人」。落库失败（409 / 21409 / 网络）时中止，不产出文件 ——
+    // 否则会下载出一张页脚写着 A 司机、单据上却是 B 司机的送货单。
     if (!(await persistSelectedDriver())) return;
     const bytes = await fetchTemplateBytes(src);
     const { openXlsx } = await import('hucre');
@@ -579,12 +590,14 @@ async function onExport(): Promise<void> {
         />
       </span>
 
-      <!-- 司机下拉：送货单模板页脚的「送货人」字段；打印即确认，改动随导出落库。 -->
+      <!-- 司机下拉：送货单模板页脚的「送货人」字段。**非必填**（2026-10-16：导出不再按
+           它 gate），选了照旧随导出落库，不选则用单据上已有的司机；「一键送货」那一步
+           才强制指定（见 DeliveryDriverPickerDialog）。 -->
       <span class="toolbar-item">
         司机
         <el-select
           v-model="driverId"
-          placeholder="选择司机"
+          placeholder="选择司机（可不选）"
           filterable
           style="width: 180px"
           :loading="driverSaving"

@@ -3,6 +3,8 @@
 
   - 文员 / MANAGER：filter (statuses × customer_id × keyword) → table → 操作
     (详情 / 送货 / 删除)
+  - 行内「送货」→ 确认 + 指定司机对话框（`DeliveryDriverPickerDialog`，2026-10-16）：
+    服务端 `POST /{id}/pickup` 只吃 version、司机从单据上读，所以「谁去送」在这条路上定。
   - 顶部「扫码建单」按钮：入单的唯一入口是扫码（`/delivery-notes/scan`），
     手动新建草稿已下线（`POST /delivery-notes` 端点删除）
   - 配送日期列、送货日期列
@@ -21,6 +23,7 @@ import { columnIdentifier } from '@/composables/useColumnDrag';
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
 import { DELIVERY_NOTE_STATUS_LABEL } from '@/types/deliveryNote';
+import DeliveryDriverPickerDialog from './components/DeliveryDriverPickerDialog.vue';
 import { useDeliveryNoteListStore } from './composables/useDeliveryNoteListStore';
 import type { DeliveryNoteRow } from './deliveryNoteColumnDefs';
 
@@ -203,6 +206,20 @@ onBeforeUnmount(() => {
         @size-change="store.query.onPageSizeChange"
       />
     </el-card>
+
+    <!-- 行内「送货」的落点：确认 + 指定司机合并在这一个对话框里（2026-10-16）。
+         对话框态在 store.actions（局部 import，不进 main.ts 全局注册）。
+         ⚠️ 清单据快照挂 `:closed`（关闭过渡结束后）而不是 `@update:model-value`：leave
+         过渡期间内容仍可见，此刻清会让标题闪成「一键送货 — 」（见 store 的同名注释）。 -->
+    <DeliveryDriverPickerDialog
+      :model-value="store.actions.deliverDialogOpen"
+      :note-no="store.actions.deliverTarget?.delivery_note_no ?? ''"
+      :part-count="store.actions.deliverTarget?.part_count ?? 0"
+      :driver-worker-name="store.actions.deliverTarget?.driver_worker_name ?? null"
+      @update:model-value="store.actions.onDeliverDialogClose"
+      @closed="store.actions.onDeliverDialogClosed"
+      @confirm="store.actions.onDeliverConfirm"
+    />
   </div>
 </template>
 

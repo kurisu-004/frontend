@@ -44,7 +44,8 @@ export const deliveryNoteItemSchema = z.object({
   status: z.string(),
   submitted_at: z.string().nullable(),
   picked_up_at: z.string().nullable(),
-  /** 司机名；打印前的「是否已指定司机」判据（后端不再发 driver_worker_id）。 */
+  /** 司机名（后端不再发 driver_worker_id）；打印页脚回显 +「本单是否已指定司机」的判据
+   *  （一键送货确认对话框据此决定能不能不选直接确认，见 DeliveryDriverPickerDialog）。 */
   driver_worker_name: z.string().nullable(),
   /** 行项条数（非件数）。 */
   part_count: z.number(),
