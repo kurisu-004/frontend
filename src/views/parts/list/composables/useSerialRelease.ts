@@ -114,13 +114,31 @@ export function useSerialRelease(): UseSerialReleaseReturn {
   /** 预览（dry_run）。只有拿到经守门的响应才开对话框 —— 预览失败时对话框内容没意义，
    *  让管理员在一个空框上点「确认释放」比不弹更危险。
    *
+   *  ⚠️ **回显断言**（2026-10-19 补，与 apply 那条成对）：后端出参承诺「与入参原样回显，
+   *  供前端确认这次到底是预览还是实跑」。两个方向的后果**不对称**，所以两边都得比：
+   *  apply 回显错位 = 假成功提示（有守）；**preview 回显错位 = 一次本该只读的请求真跑了
+   *  不可逆释放，而管理员以为只是预览**（无守时无任何信号）。不符即抛，走既有的
+   *  `onError`（报错 + 对话框不开），绝不弹出一份「预览」。后端 `dry_run` 带
+   *  `#[serde(default)]`（空 body 即真跑）正是这条路径的入口。
+   *  刻意**不抽共用 helper**：两个方向各写各的，才不会「两边同时被同一个 helper 保护、
+   *  而 helper 自己被改坏」时两边一起失守。守卫见 `useSerialRelease.spec.ts` 的 U10 / U11。
+   *
    *  两条 mutation 都不写泛型参数也不写 `retry`：mutationFn 无入参（TVariables 由推断
    *  得出，显式写 `void` 会被 `@typescript-eslint/no-invalid-void-type` 拒），而全局
    *  `mutations.retry: 0`（CLAUDE.md「TanStack Query」），非幂等的释放动作也绝不重试。 */
   const previewMutation = useMutation({
     mutationKey: ['serials', 'release-terminal', 'preview'],
-    mutationFn: async () =>
-      releaseTerminalSerialsOutSchema.parse(await releaseTerminalSerials({ dry_run: true })),
+    mutationFn: async () => {
+      const data = releaseTerminalSerialsOutSchema.parse(
+        await releaseTerminalSerials({ dry_run: true }),
+      );
+      if (data.dry_run !== true) {
+        throw new Error(
+          '预览结果异常：后端回显 dry_run=false（请求的是预览），请核对已释放的序列号',
+        );
+      }
+      return data;
+    },
     onSuccess: (data) => {
       preview.value = data;
       previewOpen.value = true;
@@ -136,8 +154,9 @@ export function useSerialRelease(): UseSerialReleaseReturn {
    *  把这条登记为已知风险）。它同时承诺「与入参原样回显，供前端确认这次到底是预览还是实跑」
    *  —— 前端既然在 schema 里要了这个键，就得真的比一次：回显若是 `true`，说明这次拿到的
    *  是一份**预览口径**的响应，此时若照常弹「已释放 N 个」，管理员会以为号已经回池而实际
-   * 并没有（且下一步新建工单照样拿不到号）。不符即抛，走既有的 `onError`（失效 + 报错），
-   * 绝不报成功。 */
+   *  并没有（且下一步新建工单照样拿不到号）。不符即抛，走既有的 `onError`（失效 + 报错），
+   *  绝不报成功。与上面 preview 那条**成对**、两条断言各自内联（不抽共用 helper，理由见
+   *  preview 的注释），守卫见 `useSerialRelease.spec.ts` 的 U10 / U11。 */
   const applyMutation = useMutation({
     mutationKey: ['serials', 'release-terminal', 'apply'],
     mutationFn: async () => {

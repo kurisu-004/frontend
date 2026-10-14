@@ -107,18 +107,11 @@ describe('releaseTerminalSerialsOutSchema（2026-10-19）', () => {
     // 多出来的键**完全无感** —— 后端给 `ReleasedSerialItem` 加一个字段时，本域的表现是
     // 「明细表少渲染一列 + parse 全绿 + typecheck / lint 全绿」，而它正发生在逐格渲染的
     // 位置上（serialReleaseSchema.ts 文件头论证要防的就是这件事）。把行 schema 的
-    // `.strict()` 摘掉时，本条必须变红。
+    // `.strict()` 摘掉时，本条必须变红。另一向（行少键必抛）由 R3 守。
     expect(() =>
       releaseTerminalSerialsOutSchema.parse({
         ...OUT,
         affected: [{ ...AFFECTED[0]!, unexpected_field: 1 }],
-      }),
-    ).toThrow(ZodError);
-    // 反向：行**少**一个键照样必抛（R3 已守），两向都不能少。
-    expect(() =>
-      releaseTerminalSerialsOutSchema.parse({
-        ...OUT,
-        affected: [AFFECTED[0]!, AFFECTED[1]!, { ...AFFECTED[0]!, extra: 'x' }],
       }),
     ).toThrow(ZodError);
   });

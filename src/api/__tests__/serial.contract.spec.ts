@@ -28,8 +28,9 @@
 //     `[跳过]`。所以另配了 L 组（纯前端、永远跑）承担「别把字面量改小写 / 改可空」这道
 //     CI 侧信号；**L 组只钉前端字面量，不证明它对**，对不对由 V 组说了算。
 //   - **只认「Rust 字段名 == wire 上的 JSON 键」这一前提**。V5 专门守它。
-//   - **只比字段名与可空性**，不逐个比标量类型（`i64` → `z.number().int()` 这一层的
-//     运行时后果是**响的**，不是静默失效）。
+//   - **HTTP 出参那半只比字段名与可空性**，不逐个比标量类型（`i64` → `z.number().int()` 这一层
+//     的运行时后果是**响的**，不是静默失效）。**WS 那一半（V7）不受这条限制** —— 它比的是事件
+//     kind 与 payload 键名的字面量，因为那条通道连 Zod 守门都没有，字面量写错是纯静默。
 
 import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -61,12 +62,17 @@ const BACKEND_MODULES_REL = 'src/modules/mod.rs';
  * 根 checkout 选上，然后对着一份**根本没有 serial 域**的源码核出一条读不懂的红。候选顺序
  * 把 worktree 排在根 checkout 前面（前端并行开发分支对应的后端改动也只落在后端的同名
  * worktree 里）。
+ *
+ * ⚠️ **向上走到文件系统根，不设跳数上限**（2026-10-19 改）：原先写死 5 跳，而本 worktree
+ * 已经要**恰好 4 跳**（`.claude/worktrees/release-terminal-serials` → `frontend` →
+ * `hsh-erp`），只剩 1 跳余量 —— 再嵌一层目录就静默返回 null ⇒ V 组整段 skip 并打一行
+ * `[跳过]`，方向安全但守卫会**无声失效**。上限只能是「走到根」。
  */
 function findBackendRoot(): string | null {
   const worktrees: string[] = [];
   const roots: string[] = [];
   let dir = FRONTEND_ROOT;
-  for (let i = 0; i < 5; i += 1) {
+  for (;;) {
     const be = join(dir, 'backend-rust');
     if (existsSync(be)) {
       roots.push(be);
@@ -146,6 +152,32 @@ function zodEnumOptions(schema: unknown): string[] {
   return options as string[];
 }
 
+/**
+ * 取某个 `pub struct` 的**完整定义区**：`pub struct` 那行**上方紧邻的属性 / doc 注释行**
+ * + struct 行本身 + 体内直到收尾 `}` 的全部行。
+ *
+ * ⚠️ **起点必须上移到 struct 上方的属性区**（2026-10-19 改）：`#[serde(rename_all =
+ * "camelCase")]` / `#[serde(flatten)]` 这类让「Rust 字段名 == wire 键」这条前提失效的属性，
+ * 就写在 `pub struct` 那一行**之前** —— 只扫体内行会整段漏掉它们，而 V1 / V2 的双向对账
+ * 恰恰是靠这条前提成立的。doc 注释一并纳入是**为了跨过夹在属性与 struct 之间的注释**
+ * （`#[derive]` / `/// 说明` / `pub struct` 的排列在 Rust 里合法），但 doc 注释里**常引用**
+ * `#[serde(…)]` 的**文字**（讲别的类型怎么改名），所以判定时只认 `#` 开头的行 —— 见 V5。
+ */
+function rustStructRegion(src: string, structName: string): string[] {
+  const lines = src.split('\n');
+  const idx = lines.findIndex((l) =>
+    new RegExp(`^\\s*pub\\s+struct\\s+${structName}\\s*\\{`).test(l),
+  );
+  if (idx < 0) throw new Error(`后端源码里找不到 struct ${structName}`);
+  let start = idx;
+  for (let i = idx - 1; i >= 0; i -= 1) {
+    const t = lines[i]!.trim();
+    if (t.startsWith('#[') || t.startsWith('//')) start = i;
+    else break;
+  }
+  return lines.slice(start);
+}
+
 // ============================================================================
 // L 组：纯前端断言（永远跑，CI 上没有后端仓时这一组是唯一信号）
 // ----------------------------------------------------------------------------
@@ -155,19 +187,22 @@ function zodEnumOptions(schema: unknown): string[] {
 // ============================================================================
 
 describe('L：前端字面量不许被单边改动（CI 侧的唯一信号，对不对由 V 组说了算）', () => {
-  it('L0：跨仓对账的执行状态 —— 读不到后端仓时打一行 `[跳过]` 提示（**不静默通过**）', () => {
+  it('L0：跨仓对账的执行状态播报 —— 读不到后端仓时打一行 `[跳过]` 提示（**本条不断言**）', () => {
     // ⚠️ 这行提示刻意**写在测试体内**而不是模块顶层：vitest 只把「测试体内」的 console
     // 输出挂到该条用例的 stderr 上，写在模块顶层的话提示会被 reporter 直接吞掉，
     // 「没核成」就真的长得跟「核过了」一模一样。
+    //
+    // ⚠️ **本条是状态播报，不是断言**：它没有 `expect`，也不该有 —— 「要么没读到、
+    // 要么读到了且那个文件确实在」这个析取**由 `findBackendRoot` 的构造保证**（该函数
+    // 只在 `existsSync(join(root, dto.rs))` 为真时才返回该 root），写成断言就是一个
+    // **恒真、永不失败**的假信号。本条的真载荷就是下面那行 `console.warn`：CI 只 checkout
+    // 前端仓时它出现，提示「V 组没跑成」；读到后端仓时它不出现。
     if (BACKEND === null) {
       console.warn(
         `[跳过] 未找到后端仓（backend-rust/${BACKEND_DTO_REL}，判据是「存在被核的那个模块」），` +
           'V 组跨仓对账未执行；L 组的前端字面量断言与 serial.spec.ts 的 URL / 守门点断言仍然有效。',
       );
     }
-    // 两种状态都必须是「说得清」的：读到 ⇒ V 组真的跑了（后端源文件此刻可读）；读不到 ⇒
-    // 上面那行提示出现。本条不因为「读不到」而红 —— CI 只 checkout 前端仓，红了就是噪声。
-    expect(BACKEND === null || existsSync(join(BACKEND, BACKEND_DTO_REL))).toBe(true);
   });
 
   it('L1：kind 的两个字面量是大写 ASSEMBLY / PART，且小写形态必抛', () => {
@@ -256,24 +291,26 @@ describe.skipIf(!BACKEND)('V：出参形状 / 判别位大小写真·跨仓对�
     expect(rustFieldType(src, 'ReleasedSerialItem', 'kind')).toBe("&'static str");
   });
 
-  it('V5：两个 struct 里都不许出现 serde rename / skip_serializing_if（否则 wire 键与字段名分家，V1/V2 的前提失效）', () => {
+  it('V5：两个 struct 的完整定义区（**含 struct 上方的属性**）都不许出现 serde rename / skip_serializing_if / flatten（否则 wire 键与字段名分家，V1/V2 的前提失效）', () => {
     const src = readBackend(BACKEND_DTO_REL);
     const offenders: string[] = [];
     for (const name of ['ReleasedSerialItem', 'ReleaseTerminalOut']) {
-      const head = new RegExp(`^\\s*pub\\s+struct\\s+${name}\\s*\\{`, 'm').exec(src);
-      if (!head) throw new Error(`后端 dto.rs 里找不到 struct ${name}`);
-      for (const line of src.slice(head.index + head[0].length).split('\n')) {
-        if (line.trim() === '}') break;
-        // 只看**字段上的**属性行；`#[derive(…)]` 在 `pub struct` 之前，不在本段里。
-        if (/#\[serde\([^)]*(rename|skip_serializing_if)/.test(line)) {
-          offenders.push(`${name}: ${line.trim()}`);
+      for (const line of rustStructRegion(src, name)) {
+        const t = line.trim();
+        // ⚠️ **只判 `#` 开头的行**：doc 注释里常**引用** `#[serde(rename = "…")]` 的文字
+        // （这两个 struct 的注释就在解释「status 字段沿用 PartStatus 的大写形态」），
+        // 那不是属性、不构成对「Rust 字段名 == wire 键」这条前提的破坏。
+        if (t.startsWith('#[') && /#\[serde\([^)]*(rename|skip_serializing_if|flatten)/.test(t)) {
+          offenders.push(`${name}: ${t}`);
         }
       }
     }
-    expect(offenders, '这两个 struct 出现了 serde rename / skip_serializing_if').toEqual([]);
+    expect(offenders, '这两个 struct 出现了 serde rename / skip_serializing_if / flatten').toEqual(
+      [],
+    );
   });
 
-  it('V6：URL —— 后端 nest 前缀 /serials + 子路由 /release-terminal，与前端拼出的路径逐段相同', () => {
+  it('V6：URL 与 HTTP method —— 后端 nest 前缀 /serials + 子路由 POST /release-terminal，与前端拼出的路径与 method 逐段相同', () => {
     // 前端没有任何类型能挡住 URL 打错（同 printTemplates.contract.spec.ts 的同款理由），
     // 而 URL 错了是 404、只在「点一下才发现」时暴露。
     const modules = readBackend(BACKEND_MODULES_REL);
@@ -284,8 +321,52 @@ describe.skipIf(!BACKEND)('V：出参形状 / 判别位大小写真·跨仓对�
     expect(handler, '后端 serial/handler.rs 里找不到 .route("/release-terminal", …)').toContain(
       '.route("/release-terminal"',
     );
+    // ⚠️ **method 也要核**（2026-10-19 补）：只断言路径存在时，后端把 `post(...)` 改成
+    // `get(...)` / `any(...)` 前端照样 405（路径还在、method 变了），而守卫全绿。
+    // 前端这一侧打的是 `api.post`，所以这里逐字核 `post(`。
+    expect(
+      handler,
+      '后端 /release-terminal 不是 POST —— 前端 api.post 会打 405，而只核路径的守卫全绿',
+    ).toContain('.route("/release-terminal", post(');
     // 前端这一侧：域前缀 `/serials` + 子路径 `/release-terminal`，两段都在 `src/api/serial.ts`。
     const src = readFileSync(new URL('../serial.ts', import.meta.url), 'utf8');
     expect(src).toContain("'/serials/release-terminal'");
+  });
+
+  it('V7：WS 汇总事件的 kind 与两个 payload 键 —— 后端 handler.rs 广播的字面量与前端逐字相同', () => {
+    // ⚠️ **为什么必须单独守**：V 组其余各条覆盖的是 HTTP DTO 与 URL，WS 帧走的是**另一条
+    // 通道** —— `api/dashboard.ts` 对帧只做 `JSON.parse` + cast，**没有 Zod 守门** ⇒ 这三个
+    // 跨仓字面量写错是**纯静默**：白名单永不命中，常驻大屏静默停更（dashboard 三 query
+    // 都是 `gcTime: POSITIVE_INFINITY` 且无 `refetchInterval`，没有第二条通道）。
+    const handler = readBackend(BACKEND_HANDLER_REL);
+    expect(handler, '后端 serial/handler.rs 里找不到 WS 广播的 kind 字面量').toContain(
+      '"TERMINAL_SERIALS_RELEASED"',
+    );
+    for (const key of ['assembly_count', 'part_count']) {
+      expect(handler, `后端 serial/handler.rs 的 WS payload 里没有 ${key} 这个键`).toContain(
+        `"${key}":`,
+      );
+    }
+    // 前端这一侧：三个字面量都是**编译期擦除的**（`DashboardEventType` / `DashboardEventPayload`
+    // 没有运行期值），所以读源码文本比对 —— 照 V6 核 URL 的同款做法。事件联合里的 kind 与
+    // payload 的两个键各读一处，白名单那一份也读（它决定了「命中后会不会重取」，而
+    // `useDashboardInvalidation.spec.ts` 的 I1 只断言元素**数**、换掉其中一个仍绿）。
+    const types = readFileSync(new URL('../../types/dashboard.ts', import.meta.url), 'utf8');
+    expect(types, "前端 types/dashboard.ts 的事件联合里没有 'TERMINAL_SERIALS_RELEASED'").toContain(
+      "'TERMINAL_SERIALS_RELEASED'",
+    );
+    for (const key of ['assembly_count', 'part_count']) {
+      expect(types, `前端 types/dashboard.ts 的 payload 里没有 ${key} 这个键`).toContain(
+        `${key}?:`,
+      );
+    }
+    const whitelist = readFileSync(
+      new URL('../../views/dashboard/composables/useDashboardInvalidation.ts', import.meta.url),
+      'utf8',
+    );
+    expect(
+      whitelist,
+      "AFFECTS_DASHBOARD 白名单里没有 'TERMINAL_SERIALS_RELEASED'（事件永不失效）",
+    ).toContain("'TERMINAL_SERIALS_RELEASED'");
   });
 });

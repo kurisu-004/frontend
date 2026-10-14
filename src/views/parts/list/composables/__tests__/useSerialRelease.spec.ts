@@ -11,14 +11,19 @@
 // 只有在这里 mock 一份**缺必填字段的坏响应**、断言它进不了 preview，才能把这个洞补上。
 //
 // 覆盖：
-//   - U1：预览成功 ⇒ previewOpen 变 true，计数原样带出（dry_run 段）；
+//   - U1：预览成功 ⇒ previewOpen 变 true，计数与明细原样带出（dry_run 段）；
 //   - U2：api 返坏响应（缺 assembly_count）⇒ mutationFn 抛 ⇒ 对话框不开 + ElMessage.error；
-//   - U3：released_total === 0 ⇒ 确认按钮 disabled（挂对话框组件断言，EP 走模板桩）；
+//   - U3：released_total === 0 ⇒ 空态上屏 + 确认按钮 disabled（挂对话框组件断言，EP 走模板桩）；
 //   - U4：实跑成功 ⇒ 五个域前缀**各失效一次**（逐个断言 queryKey）；
 //   - U5：实跑失败 ⇒ 同样失效 + ElMessage.error（响应可能在 commit 之后丢失）；
-//   - U6：入口判据是角色 MANAGER（ADMIN 由 hasRole 通配；CLERK 看不到入口）。
-//   - U8：实跑回显 dry_run=true（请求的是实跑）⇒ 报错而不是报成功（P3-3 的回显断言）；
-//   - U9：关对话框的**两条路径**（× 与「取消」）都清掉已消费的明细快照（P3-2）。
+//   - U6：入口判据是角色 MANAGER（ADMIN 由 hasRole 通配；CLERK 看不到入口）；
+//   - U7：取消只关对话框、不发写请求；
+//   - U8：确认入口的**函数级闸** —— 无 preview / 零条可释放 ⇒ 零请求 + warning
+//         （按钮的 `:disabled` 不是唯一闸门）；
+//   - U9：关对话框的**两条路径**（× 与「取消」）都清掉已消费的明细快照；
+//   - U10：实跑回显 dry_run=true（请求的是实跑）⇒ 报错而不是报成功；
+//   - U11：预览回显 dry_run=false（请求的是预览）⇒ 报错 + 对话框不开（与 U10 成对；这条
+//         方向的后果更重 —— 一次本该只读的请求真跑了不可逆释放，管理员却以为只是预览）。
 //
 // 依赖处理：
 // - useSerialRelease 内部调 useQueryClient（需要 app.runWithContext 提供 inject 上下文）；
@@ -287,15 +292,18 @@ describe('useSerialRelease — 一键释放终态序列号（2026-10-19）', () 
   });
 
   it('U4：实跑成功 ⇒ 五个域前缀各失效一次，关对话框 + ElMessage.success', async () => {
-    releaseMock.mockResolvedValue(
-      makeOut({ dry_run: false, assembly_count: 3, part_count: 5, released_total: 8 }),
-    );
+    // ⚠️ 两次请求的回显**必须分开设**：preview 那一次要回显 `dry_run: true`（preview 路径
+    // 带回显断言，回 false 会被当场拒绝、对话框根本不开），实跑那一次才回 false。
+    releaseMock.mockResolvedValue(makeOut());
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
     const serial = app.runWithContext(() => useSerialRelease());
     await serial.onOpenPreview();
     invalidateSpy.mockClear();
 
+    releaseMock.mockResolvedValue(
+      makeOut({ dry_run: false, assembly_count: 3, part_count: 5, released_total: 8 }),
+    );
     await serial.onConfirmRelease();
 
     expect(releaseMock).toHaveBeenCalledTimes(2);
@@ -422,6 +430,28 @@ describe('useSerialRelease — 一键释放终态序列号（2026-10-19）', () 
     expect(ElMessage.error).toHaveBeenCalledWith(expect.stringContaining('dry_run=true'));
     // 走的是既有 onError（失效 + 报错），对话框留在原处供管理员重试
     expect(serial.previewOpen.value).toBe(true);
+    await flushPromises();
+  });
+
+  it('U11：预览回显 dry_run=false（请求的是预览）⇒ 报错 + 对话框不开', async () => {
+    // 与 U10 成对，两个方向的后果**不对称**：apply 回显错位只是「假成功提示」，preview
+    // 回显错位却是**一次本该只读的请求真跑了不可逆释放**，而管理员以为只是预览。后端
+    // `dry_run` 带 `#[serde(default)]`（空 body 即真跑）正是这条路径的入口。把 preview
+    // 那条断言摘掉时本条必须变红。
+    releaseMock.mockResolvedValue(makeOut({ dry_run: false }));
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    const serial = app.runWithContext(() => useSerialRelease());
+    await serial.onOpenPreview();
+
+    expect(ElMessage.success).not.toHaveBeenCalled();
+    expect(ElMessage.error).toHaveBeenCalledTimes(1);
+    expect(ElMessage.error).toHaveBeenCalledWith(expect.stringContaining('dry_run=false'));
+    // 对话框不开：一份「预览」明细若摆上去，管理员点确认就是在对着错误前提做不可逆操作
+    expect(serial.previewOpen.value).toBe(false);
+    expect(serial.preview.value).toBeNull();
+    // 预览失败不触发任何失效（它什么都没写）
+    expect(invalidateSpy).not.toHaveBeenCalled();
     await flushPromises();
   });
 });
