@@ -121,12 +121,11 @@ export type CustomerListResultSchema = z.infer<typeof customerListResultSchema>;
  * 才能同时接受 null 与字段缺失两种形态。
  * 仍走 `listProcesses` 裸调、**不**经 Zod 的视图（RepairStartDialog / ShelfList /
  * OutsourceQuoteList）不受本 schema 变更影响。
- * ⚠️ 两个**间接受约束**的，别按「文件里搜不到 listProcesses 裸调」把它们也划进免疫名单：
- * `ProcessPickerDialog`（报工台的工序选择弹窗，2026-10-20 起走 `useProcessesQuery`）与
- * `OutsourceList`（外协公司一览，经 `useOutsourceCompanyListStore` 的
- * `useProcessesQuery({ category: 'OUTSOURCE', limit: 200 })` —— params 不同 ⇒ 不是同一条
- * queryKey，但 queryFn 里是**同一份** `processListResultSchema.parse`）。本条 schema 的任何
- * 变更同样会让这两处的工序列表恒空。 */
+ * ⚠️ **全部** `useProcessesQuery(...)` 消费方都间接受约束，改本 schema 前别按「这个文件里
+ * 搜不到 listProcesses 裸调」把它们划进免疫名单：那些页面自己没有 api 调用点，拿到的是同一份
+ * `processListResultSchema.parse` 过的数据（params 不同只是换了一条 queryKey，换不来第二份
+ * 解析）。本条刻意**不点名也不设数** —— 消费方清单会随新增页面过期，而过期的清单正是它要防的
+ * 那种错；`rg 'useProcessesQuery\('` 出来的每一处都是。 */
 export const processSchema = z.object({
   id: z.string(),
   version: z.number(),

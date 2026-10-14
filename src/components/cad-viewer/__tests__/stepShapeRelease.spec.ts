@@ -275,4 +275,73 @@ describe('加载失败不留僵尸（源码契约守卫，判位置不判行号�
     // 释放不能盖掉原始错误：失败仍然要抛给调用方。
     expect(catchBody).toContain('OcctLoadError');
   });
+
+  // R8 只守「八步都在 try 内」，不守「报错说的是不是那一步」—— 病灶形态下 R8 全绿而用户
+  // 看到的是 `[parse] 拓扑提取失败`（三角化抛的错）。`StepViewer.vue` 把 `[${stage}] ${message}`
+  // 原样上屏，说错阶段 = 现场排查被带偏一整个阶段，所以这三段文案必须各自落在**它所描述的
+  // 调用之前**。
+  // 断言取「相对位置 + meshShape 之前最后一处 failLabel 是哪句」两条，判位置不判行号；
+  // 把 `stage = 'tessellate'` 那两行挪回 `shapeCache.put()` 之后即红。
+  it('R9：stage / failLabel 的赋值必须落在它所描述的那一步之前（三角化不能说成拓扑提取失败）', () => {
+    const body = loaderBody();
+
+    const failLabels = [...body.matchAll(/failLabel = (.+);/g)].map((m) => ({
+      at: m.index ?? -1,
+      text: m[1],
+    }));
+    expect(failLabels.length, '找不到 failLabel 赋值（四段：解析 / 拓扑 / 三角化 / 组网）').toBe(4);
+
+    const importAt = body.indexOf('kernel.importStep(');
+    const topologyAt = body.indexOf('buildTopology(');
+    const meshAt = body.indexOf('kernel.meshShape(');
+    const putAt = body.indexOf('shapeCache.put(');
+    const groupAt = body.indexOf('buildMeshGroup(');
+    const stageAt = body.indexOf("stage = 'tessellate'");
+
+    // 第 0 段（解析）：初值就是解析文案，且早于第一处 import。
+    expect(failLabels[0].at, '解析文案必须早于 importStep').toBeLessThan(importAt);
+    expect(failLabels[0].text).toBe('`${format} 解析失败`');
+
+    // 第 1 段（解析 → 拓扑）：拓扑文案必须排在 buildTopology 之前。
+    const labelBeforeTopology = failLabels.filter((l) => l.at < topologyAt);
+    const lastBeforeTopology = labelBeforeTopology[labelBeforeTopology.length - 1];
+    expect(lastBeforeTopology.text, 'buildTopology 之前最后一处 failLabel 必须是拓扑文案').toBe(
+      "'拓扑提取失败'",
+    );
+
+    // 第二段（三角化）：stage 与 failLabel 都必须在 meshShape **之前**，否则 meshShape /
+    // wireframe 抛错仍被算成上一段。
+    expect(stageAt, 'tessellate 阶段必须在三角化之前就位').toBeGreaterThan(-1);
+    expect(stageAt).toBeLessThan(meshAt);
+    const labelBeforeMesh = failLabels.filter((l) => l.at < meshAt);
+    const lastBeforeMesh = labelBeforeMesh[labelBeforeMesh.length - 1];
+    expect(
+      lastBeforeMesh.text,
+      'meshShape 之前最后一处 failLabel 必须是三角化文案（病灶形态下这里是拓扑文案）',
+    ).toBe("'三角化失败'");
+
+    // 第三段（组网）：入表之后另有自己的文案，不复用三角化那一句。
+    expect(putAt).toBeGreaterThan(meshAt);
+    const labelBeforeGroup = failLabels.filter((l) => l.at < groupAt);
+    const lastBeforeGroup = labelBeforeGroup[labelBeforeGroup.length - 1];
+    expect(lastBeforeGroup.text, 'buildMeshGroup 之前最后一处 failLabel 应是组网文案').toBe(
+      "'网格组装失败'",
+    );
+  });
+
+  // 进度回调不是加载管线的一步：它的异常若漏进统一 catch，会被套上 failLabel 说成
+  // 「三角化失败」，还顺手 releaseShape 掉一个已经算好的模型（调用方只拿到 reject）。
+  // 故所有进度通知必须走 reportProgress，且那层自己 try/catch。
+  it('R9b：进度通知一律走 reportProgress（回调抛错不得被算成加载失败）', () => {
+    expect(
+      LOADER_CODE.match(/options\.onProgress\?\.\(/g) ?? [],
+      '裸的 options.onProgress?.( 调用必须全部改走 reportProgress',
+    ).toHaveLength(0);
+
+    const helper = regionOf(LOADER_SRC, 'function reportProgress(', '// ---- 顶层入口 ----');
+    expect(helper, 'reportProgress 必须自己 try/catch 住回调').toMatch(/try \{/);
+    expect(helper).toMatch(/catch \(e\)/);
+    // 不是静默吞：控制台要留线索。
+    expect(helper).toContain('console.warn');
+  });
 });

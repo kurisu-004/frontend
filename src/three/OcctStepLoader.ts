@@ -461,6 +461,26 @@ function fitToUnitSphere(group: THREE.Group): void {
   group.updateMatrixWorld(true);
 }
 
+/**
+ * 2026-10-20 新增：进度通知的唯一出口。
+ *
+ * `onProgress` 是**通知通道**、不是加载管线的一步，所以它的异常不得落进
+ * `loadStepFromBytes` 的统一 catch：漏进来的话，一句 UI 回调的 bug 会被算成
+ * 「三角化失败」，而 catch 的语义还会顺手 `releaseShape()` 掉一个其实已经算好的模型
+ * （调用方只拿到 reject，拿不到 LoadedShape，三条释放路径全都够不着那个句柄）。
+ * 异常吞掉后仍打一行 `console.warn`（不是静默，与本仓其它降级分支同款），
+ * 真出问题时控制台留得住线索。
+ */
+function reportProgress(options: LoadOcctOptions, pct: number, stage: OcctLoadStage): void {
+  const cb = options.onProgress;
+  if (cb === undefined) return;
+  try {
+    cb(pct, stage);
+  } catch (e) {
+    console.warn('[occt] onProgress 回调抛错（已忽略，不影响本次加载）:', e);
+  }
+}
+
 // ---- 顶层入口 ----
 
 export async function loadStepFromBytes(
@@ -471,11 +491,11 @@ export async function loadStepFromBytes(
   if (bytes.byteLength > MAX_FILE_SIZE) {
     throw new OcctLoadError(`File too large: ${bytes.byteLength} bytes`, 'parse');
   }
-  options.onProgress?.(5, 'wasm');
+  reportProgress(options, 5, 'wasm');
   const kernel = await getKernel();
-  options.onProgress?.(40, 'parse');
+  reportProgress(options, 40, 'parse');
 
-  // 2026-10-20（review 第 2 轮）：从「拿到句柄」到「返回 LoadedShape」**整段**包在一个 try 里。
+  // 2026-10-20 新增：从「拿到句柄」到「返回 LoadedShape」**整段**包在一个 try 里。
   // 判据是「本函数一旦 reject，句柄就再也没人能清」：调用方拿不到 LoadedShape，
   // `StepViewer` 的三条 releaseCurrentShape() 路径（切模型 / src 清空 / 卸载）全都够不着它。
   // 过去只有三角化那两步自己带 catch，`buildTopology` / `buildStats`（在 try 之外）与
@@ -502,7 +522,16 @@ export async function loadStepFromBytes(
     const topology = buildTopology(kernel, shape);
     const stats = buildStats(kernel, shape);
 
-    options.onProgress?.(60, 'tessellate');
+    // 2026-10-20 纠偏：`stage` / `failLabel` 说的是**抛错那一刻所处的那一步**，所以赋值必须
+    // 排在它所描述的调用**之前**。这两行原先排在 `shapeCache.put()` 后面 ⇒ 三角化（复杂 STEP
+    // 最常见的失败路径）抛错时被报成 `[parse] 拓扑提取失败`，与同一函数里
+    // `onProgress(60, 'tessellate')` 的自述互相矛盾，而 `StepViewer.vue` 会把
+    // `[${stage}] ${message}` 原样显示给用户 —— 现场排查会被带偏一整个阶段。
+    // 守卫见 `__tests__/stepShapeRelease.spec.ts` 的 R9（挪位置即红）。
+    stage = 'tessellate';
+    failLabel = '三角化失败';
+
+    reportProgress(options, 60, 'tessellate');
 
     const linDef = options.linearDeflection ?? 0.1;
     const angDef = options.angularDeflection ?? 0.5;
@@ -519,8 +548,8 @@ export async function loadStepFromBytes(
     // getTopology / getStats）摆给控制台的条目不该是半成品。
     shapeCache.put(shape, topology, stats);
 
-    stage = 'tessellate';
-    failLabel = '三角化 / 建模失败';
+    // 网格已经拿到，剩下的全是前端侧组网与归一化：失败原因与 OCCT 三角化无关，另起一句文案。
+    failLabel = '网格组装失败';
 
     const rootName = topology.type === 'compound' ? 'model' : topology.type;
     const group = buildMeshGroup(faceMesh, edgeData, rootName);
@@ -529,7 +558,7 @@ export async function loadStepFromBytes(
       fitToUnitSphere(group);
     }
 
-    options.onProgress?.(100, 'tessellate');
+    reportProgress(options, 100, 'tessellate');
 
     // 把边线 LineMaterial 暴露出来，供 ViewerCanvas 注册到 SceneManager 维护 resolution
     const edgesChild = group.children.find((c) => c.name === 'edges');
