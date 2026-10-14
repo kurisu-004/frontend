@@ -35,8 +35,8 @@ import {
 // ⚠️ 必须从 Buffer 构造 Uint8Array（不能用 `buf.buffer`：node 的 Buffer 可能落在
 // 8MB 池化 ArrayBuffer 的一段上，`.buffer` 拿到的是**整个池**，字节不是 xlsx）。
 const TEMPLATE = new Uint8Array(readFileSync('templates/delivery_note_fala.xlsx'));
-/** 内置检具模板**两份**（百路达 / 杏南）。两份的占位符 / 行区间 / 列位 / 合并区一致，
- *  差别在列宽、sheet 名与样式覆盖（带样式 cell 数 372 / 363）—— 逐格校验另有同款一条在
+/** 内置检具模板**两份**（百路达 / 杏南）。两份的一致项 / 不一致项以契约文件头那份清单
+ *  为准（deliveryNoteTemplateContract.ts），这里不复述一份；逐格校验另有同款一条在
  *  deliveryNoteTemplate.spec.ts。 */
 const GAUGE_TEMPLATE_FILES = [
   'templates/delivery_note_gauge_bailuda.xlsx',
@@ -127,8 +127,13 @@ function malformed<T>(value: unknown): T {
   return value as T;
 }
 
-/** 合并区列表 → A1 记法数组（写死数字前先看清模板里到底有什么，别靠注释里的清单）。
- *  `merges` 在 hucre 的 Sheet 上是可选的，缺省按「没有合并区」的空清单算。 */
+/** 合并区列表 → A1 记法数组，**按字典序排序**（写死数字前先看清模板里到底有什么，
+ *  别靠注释里的清单）。
+ *
+ *  ⚠️ 排序是必需的：hucre 按 XML 文档序保存 / 回写 `merges`（不排序），客户用 Excel 重存一次
+ *  就可能把 `<mergeCell>` 的顺序改掉 —— 集合没变、顺序变了时按序比会假红。所以两侧都走本函数
+ *  取值，比较的是**集合**而不是顺序。`merges` 在 hucre 的 Sheet 上是可选的，缺省按「没有合并区」
+ *  的空清单算。 */
 function mergeList(
   merges: { startRow: number; startCol: number; endRow: number; endCol: number }[] | undefined,
 ): string[] {
@@ -137,7 +142,7 @@ function mergeList(
     m.startRow === m.endRow && m.startCol === m.endCol
       ? cell(m.startRow, m.startCol)
       : `${cell(m.startRow, m.startCol)}:${cell(m.endRow, m.endCol)}`,
-  );
+  ).sort();
 }
 
 function row(i: number) {
@@ -266,7 +271,7 @@ describe('renderDeliveryNoteWorkbook', () => {
     expect(String(s.rows[2]![6] ?? '')).toBe('');
   });
 
-  it('零残留占位符（模板里 11 个 placeholder 全被替换或清空）', async () => {
+  it('零残留占位符（模板里 23 处 / 14 类 placeholder 全被替换或清空）', async () => {
     const out = await renderDeliveryNoteWorkbook(
       TEMPLATE,
       [{ sheetName: 'S', rows: [row(0)] }],
@@ -446,7 +451,7 @@ describe('renderDeliveryNoteWorkbook（检具版）', () => {
     ]);
   });
 
-  it('零残留占位符（每个 sheet 都扫：6 类 placeholder 共 31 处全被替换或清空）', async () => {
+  it('零残留占位符（每个 sheet 都扫：7 类 placeholder 共 31 处全被替换或清空）', async () => {
     const out = await renderDeliveryNoteWorkbook(
       GAUGE_TEMPLATE,
       [
@@ -467,16 +472,17 @@ describe('renderDeliveryNoteWorkbook（检具版）', () => {
   it.each(GAUGE_TEMPLATE_FILES)('两份内置检具模板的合并区清单一致：%s', async (file) => {
     const { openXlsx } = await import('hucre');
     const tpl = await openXlsx(new Uint8Array(readFileSync(file)));
-    // A1:I1 / G3:H3 / A3:A4 · B3:B4 · C3:C4 · D3:D4 · E3:E4 · F3:F4 / I3:I4
+    // 实测清单（已按字典序排好，与 mergeList 的输出口径一致）：A1:I1 是标题；A..F 与 I 这
+    // 七列是「两行表头」纵向合并；G3:H3 是「检具状态」横向合并（只占 row 3 一行）。
     expect(mergeList(tpl.sheets[0]!.merges)).toEqual([
       'A1:I1',
-      'G3:H3',
       'A3:A4',
       'B3:B4',
       'C3:C4',
       'D3:D4',
       'E3:E4',
       'F3:F4',
+      'G3:H3',
       'I3:I4',
     ]);
   });
@@ -499,7 +505,7 @@ describe('renderDeliveryNoteWorkbook（检具版）', () => {
     },
   );
 
-  it('数据列越出整块清空范围 ⇒ 抛中文错误（守卫在动工作簿之前）', async () => {
+  it('数据列越出整块清空范围 ⇒ 抛中文错误（守卫在写数据行之前：工作簿已打开、一格未改）', async () => {
     // 把清空范围写窄成 A..H：I 列（系统交期）不再被清空 ⇒ 未填满的行会漏出模板原值。
     // 「清空按 dataColumns 走、写入按 columns 走」两者互不参照，所以必须有人验这条。
     // ⚠️ 契约常量是 `as const`，类型是**单例字面量**（`last: 'I'`），故意造错的变体表达不出来
@@ -531,8 +537,9 @@ describe('renderDeliveryNoteWorkbook（检具版）', () => {
       GAUGE_FOOTER,
       G,
     );
-    // 与**模板原件**比而不是写死数字：百路达 / 杏南两份模板的格数本身不同（372 / 363），
-    // 写死会在换模板时假红。`readStyles` 被「优化」掉时两边一起塌成 0 ⇒ 先用
+    // 与**模板原件**比而不是写死数字：百路达 / 杏南两份模板的带样式格子数本身不同（不相等；
+    // 具体值不写在这里 —— 没有断言背书的数字迟早过期），写死会在换模板时假红。
+    // `readStyles` 被「优化」掉时两边一起塌成 0 ⇒ 先用
     // `toBeGreaterThan(0)` 钉住模板侧确实有样式，否则「0 == 0」让这条守卫永远绿。
     const templateStyled = styledCellCount(partOf(GAUGE_TEMPLATE, 'xl/worksheets/sheet1.xml'));
     expect(templateStyled).toBeGreaterThan(0);

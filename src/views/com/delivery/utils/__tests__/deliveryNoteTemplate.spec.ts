@@ -18,7 +18,9 @@ import { GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT } from '../deliveryNoteTemplateCo
 
 const BUILTIN = readFileSync('templates/delivery_note_fala.xlsx');
 
-/** 两份内置检具模板（版式一致、只有列宽与 sheet 名不同）。 */
+/** 两份内置检具模板（百路达 / 杏南）。哪几项一致、哪几项不同以契约文件头那份「一致 /
+ * 不一致」清单为准（deliveryNoteTemplateContract.ts）—— 这里不复述一份，两处各写各的
+ * 迟早对不上。 */
 const GAUGE_BUILTINS = [
   'templates/delivery_note_gauge_bailuda.xlsx',
   'templates/delivery_note_gauge_xingnan.xlsx',
