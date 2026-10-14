@@ -136,7 +136,7 @@ const selectedIdsValue = computed<Set<string>>(() => props.selectedIds.value);
  *  父级的全选 / 已选 / 总计口径一律走 props.batches 的全量，两者不该互相牵动。
  *  **切 tab 不重置**：`el-tab-pane` 是「懒挂载一次、之后不再卸载」，切走再切回来本面板
  *  仍活着，上次的搜索词就在框里。这是有意的局部状态取舍（板级不上抛它），别当漏掉的
- *  reset 补上。 */
+ *  reset 补上（同 `useBarcodeScanner` 文件头的同一条事实）。 */
 const keyword = ref<string>('');
 
 /** 待下发 DTO → 卡片 model（统一适配层，组件零 DTO 依赖）→ 本地关键词过滤。

@@ -32,8 +32,8 @@
      **焦点一旦落在搜索框上，扫码枪的按键不再进缓冲区、一次扫码都不会派发**（改动前本页
      没有文本框，扫库枪永远命中）。用户看到序列号被填进框里、却什么也没发生，典型误判成
      「扫到了但没生效」。因此搜索框挂 `@keyup.enter="onSearchEnter"`：手输序列号回车 =
-     走一遍扫码的匹配与勾选，且**清空关键词 + 让输入框失焦**（这两步是恢复扫码派发的
-     必要动作，只清空不失效焦点，扫码照样静默失效）。详见 onSearchEnter 的注释。 -->
+     走一遍扫码的匹配与勾选，并**让输入框失焦**（失焦是恢复扫码派发的必要动作）。
+     关键词的清空是**有条件的**（只认得中本池某一行时才清），判据见 onSearchEnter。 -->
 <template>
   <div class="candidate-pool">
     <div class="pool-toolbar">
@@ -136,8 +136,8 @@ type PoolCard = BatchCardModel & { __draggable: boolean };
 /** 2026-10-20 新增：搜索关键词。组件局部状态、刻意不上抛 —— 过滤只影响可见集，工具条的
  *  三处计数与勾选集合仍由板级按 items 全量持有。**切 tab 不重置**：el-tab-pane 是
  *  「懒挂载一次、之后不再卸载」，多 tab 都激活过时每个 CandidatePool 实例各留一个自己的
- *  keyword（同一 path 多实例的既有形态，见 useBarcodeScanner 的文件头）。这是有意的
- *  局部状态取舍，别当漏掉的 reset 补上。 */
+ *  keyword（同一 path 多实例的既有形态）。这是有意的局部状态取舍，别当漏掉的 reset
+ *  补上（同 `useBarcodeScanner` 文件头的同一条事实）。 */
 const keyword = ref<string>('');
 
 /** 候选 DTO → 卡片 model → 本地关键词过滤（可见集）。工具条的徽标 / 未上架计数 / 已选数
@@ -254,25 +254,28 @@ function handleScan(code: string): void {
  *  两条路径**只在「未命中要不要提示」上分叉**：
  *   - 扫码枪扫不到 = 手上那把枪对着一个不存在的序列号，提示才有用（notifyMiss: true）；
  *   - 手输半截图号再回车 = 用户自己在拼序列号，「扫不到」是骂人，静默即可（false）。
- *  「尚未上架」守卫两条路径都不豁免：勾上了却拖不动比直接提示更差。 */
-function applyCode(raw: string, options: { notifyMiss: boolean }): void {
+ *  「尚未上架」守卫两条路径都不豁免：勾上了却拖不动比直接提示更差。
+ *
+ *  返回值 = 「框里这句话是否确实指向本池的一行」。回车路径靠它决定要不要清空关键词
+ *  （见 onSearchEnter），所以未命中的那一格必须答 false，不能顺手清掉用户的过滤词。 */
+function applyCode(raw: string, options: { notifyMiss: boolean }): boolean {
   const trimmed = raw.trim();
-  if (!trimmed) return;
+  if (!trimmed) return false;
   const hit = props.items.find((it) => it.part_serial_no === trimmed);
   if (!hit) {
     if (options.notifyMiss) ElMessage.warning(SCAN_MISS_HINT);
-    return;
+    return false;
   }
   // 尚未上架的行没有勾选角标（拖拽侧另有 Sortable filter 兜底），扫码也一并拦住 ——
   // 勾上了却拖不动，是比直接提示更差的结果。
   if (!isCandidateDraggable(hit)) {
     ElMessage.warning(NOT_SHELVED_HINT);
-    return;
+    return true;
   }
   const next = new Set(props.selectedIds);
   next.add(hit.batch_id);
   emit('update:selectedIds', next);
-  // 2026-10-20 新增：命中的行被当前关键词过滤掉了 ⇒ 清空关键词。扫中了却看不见那张卡，
+  // 2026-10-20：命中的行被当前关键词过滤掉了 ⇒ 清空关键词。扫中了却看不见那张卡，
   // 操作员会以为扫码坏了、又按一次；清空后卡片回到可见集，「勾上了却看不见卡」的死角
   // 消失。判据走 cards（可见集）而不是 items（数据全量），动作排在成功提示之前 ——
   // 提示与界面必须同时自洽。
@@ -280,6 +283,7 @@ function applyCode(raw: string, options: { notifyMiss: boolean }): void {
     keyword.value = '';
   }
   ElMessage.success(`已选中：${hit.part_name ?? ''}（批次 ${hit.batch_no}）`);
+  return true;
 }
 
 /** 搜索框 ref —— 回车后要失焦（见 onSearchEnter）。ElInput 经 defineExpose 暴露
@@ -292,18 +296,22 @@ const searchInputRef = ref<InputInstance | null>(null);
  *  （`useBarcodeScanner` 的 isInTextField），焦点落在搜索框上时**一次扫码都不会派发**，
  *  而用户看到的只是序列号被填进了框里 —— 典型的「扫到了但没生效」静默误判。
  *
- *  顺序：取框内内容 → 清空关键词 → 失焦 → 复用扫码的匹配与勾选。
- *   - 清空 + 失焦是**恢复扫码能力的两个必要动作**：清空让卡片回到可见集，失焦让焦点离开
- *     输入框、后续扫码恢复派发。只做前者，扫码仍然静默失效。
+ *  顺序：取框内内容 → 失焦 → 跑一遍匹配与勾选 → **按结果**决定要不要清空关键词。
+ *   - 失焦是**恢复扫码能力的必要动作**：焦点不离开输入框，扫码持续静默失效（只清空
+ *     不失焦不够）。
+ *   - 清空只对「这句话确实指向本池里的一行」成立（applyCode 的返回值）。⚠️ 判据必须
+ *     排在清空**之后**：搜索框承诺的是「序列号 / 图号 / 批次号 / 名称」，而 applyCode
+ *     认的是 `part_serial_no` 等值 —— 用户「按名称过滤出两张卡、顺手回车」是再合理不过
+ *     的一条路，命中不了序列号时若先把关键词清掉，就等于零反馈地抹掉他刚做的过滤
+ *     （卡片弹回全量且没有任何提示）。未命中时关键词原样留着，回车也不提示。
  *   - **刻意不过 activeProcessId 闸门**：那个闸门存在是因为扫码是全局的、N 个 tab 实例会
  *     同时收到；回车是键在**本实例自己的输入框**上派发的，未激活的 tab pane 拿不到焦点、
  *     不可能收到它，所以这里天然只有一个实例会响应，加闸门只会让「万一」那条路静默无反应。
  *   - 未命中静默（notifyMiss: false）：理由见 applyCode 的注释。 */
 function onSearchEnter(): void {
   const raw = keyword.value;
-  keyword.value = '';
   searchInputRef.value?.blur();
-  applyCode(raw, { notifyMiss: false });
+  if (applyCode(raw, { notifyMiss: false })) keyword.value = '';
 }
 
 onMounted(() => {

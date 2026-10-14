@@ -26,11 +26,11 @@
 //
 // **两个导出的主从关系（别把 `matches` 当死代码删掉）**：
 //   - `filterBatchCardsByKeyword`（**生产路径**：三个卡片列的唯一消费方）**委托**
-//     `matchesBatchCardKeyword` —— 判定规则只有一份实现；
-//   - `matchesBatchCardKeyword` 是那条规则的实现基元，需要「单卡判定」的调用方直接用它。
-// 两个导出各写一份归一化（trim / toLowerCase）时，生产路径与单卡判定会悄悄分叉，而
-// 「条码枪尾部空格」「小写序列号」这类退化**只在带空白 / 混合大小写的输入上显形**，其余
-// 用例照绿。
+//     `matchesBatchCardKeyword` —— 归一化（trim / 忽略大小写）只有一份实现；
+//   - `matchesBatchCardKeyword` 是那条规则的实现基元，单独导出使它有单一实现点、并能被
+//     直接单测（四个匹配字段各自命中那条，只有直接喂一张只有单字段不同的卡片才有判定力）。
+// 若两边各写一份归一化，生产路径与单卡判定会悄悄分叉，而「条码枪尾部空格」「小写序列号」
+// 这类退化**只在带空白 / 混合大小写的输入上显形**，其余用例照绿。
 
 import type { BatchCardModel } from '@/types/batchCard';
 

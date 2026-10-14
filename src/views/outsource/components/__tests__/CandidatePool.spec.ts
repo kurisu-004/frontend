@@ -35,21 +35,24 @@
 //     C15 只渲染命中的卡（三处计数口径保持全量）；C16 两条空态分支各说各的话且都在
 //     .pool-cards 之外；C17 搜索行是 .pool-cards 的兄弟节点；C18 扫码命中被关键词过滤掉的
 //     行 ⇒ 关键词自动清空（否则操作员「勾上了却看不见卡」）。
-//   - C19 / C19b / C20 / C21 / C22（2026-10-20 review 第 1 轮）：搜索框回车路径 ——
+//   - C19 / C19b / C20 / C21 / C22（2026-10-20）：搜索框回车路径 ——
 //     全局条码枪对输入框里的按键一律不派发（`useBarcodeScanner` 的 isInTextField），组件
 //     头部新增搜索框后「点过搜索框再扫码」静默失效，故 `@keyup.enter` 把手输内容当一次
-//     扫码提交并清空 + 失焦。C19 手输未命中静默（与扫码枪的 C19b 提示分支对照）；C20 命中
-//     复用扫码的匹配与勾选；C21「尚未上架」守卫两条路径都保留；C22 两条路径的实例隔离。
+//     扫码提交并失焦。C19 手输未命中**保留关键词**且静默（与扫码枪的 C19b 提示分支对照，
+//     也避免按名称/图号过滤后回车把过滤结果抹掉）；C20 命中复用扫码的匹配与勾选、清空
+//     关键词；C21「尚未上架」守卫两条路径都保留；C22 两条路径的实例隔离。
 //
 // 测试策略：
 //   - vi.mock('vue-draggable-plus') 复刻重载判别（照 WorkerColumn.spec.ts 同款），捕获
 //     `{list, options}` 后手工驱动 `options.onStart(evt)`；
 //   - dndSourceTracker 用**真实实现**：onStart 记 / 落点取的读写配对是被测行为的一半；
-//   - EP 组件 stub + vi.mock('element-plus') 把 ElMessage 桩成 no-op。
+//   - EP 组件 stub + vi.mock('element-plus') 把 ElMessage 桩成 no-op；
+//   - mountPool 挂载的实例由 afterEach 统一卸载：扫码枪是模块级单例，残留实例会同时收到
+//     同一次扫码（既干扰「本用例只弹过一次」这类断言，也把 document.body 越堆越脏）。
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { computed, defineComponent, h, nextTick, ref } from 'vue';
-import { mount } from '@vue/test-utils';
+import { mount, type VueWrapper } from '@vue/test-utils';
 import type { OutsourceQueueCandidateData } from '../../composables/outsourceQueueSchema';
 
 const captured = vi.hoisted(() => ({
@@ -180,6 +183,11 @@ const PROCESS_ID = '2000000000001';
 const SHELF_ID = '5000000000001';
 const APPROVAL_COMPANY = '9000000000001';
 
+/** 本 spec 用 mountPool 挂载、并在用例里显式 unmount 的实例集合（见文件尾的 afterEach）。
+ *  扫码枪是**模块级单例**：不卸载的实例会一直留在它的订阅表里，同一次扫码会命中它们 ——
+ *  既让「本用例只弹过一次」这类断言失去判定力，也把 document.body 越堆越脏。 */
+const mountedPools = new Set<VueWrapper>();
+
 function makeCandidate(
   overrides: Partial<OutsourceQueueCandidateData> = {},
 ): OutsourceQueueCandidateData {
@@ -239,7 +247,7 @@ function mountPool(
   activeProcessId: string = PROCESS_ID,
   extraProvide: Record<string, unknown> = {},
 ) {
-  return mount(CandidatePool, {
+  const wrapper = mount(CandidatePool, {
     props: {
       items,
       processName: '外协热处理',
@@ -255,6 +263,8 @@ function mountPool(
       },
     },
   });
+  mountedPools.add(wrapper);
+  return wrapper;
 }
 
 /** 造一个形状与 Sortable 原生 onStart 事件一致的最小载荷。 */
@@ -316,6 +326,15 @@ beforeEach(() => {
   // 扫码枪是模块级单例：缓冲区在每次 Enter 后由 handleKeyDown 自己 resetBuffer
   // 清空，跨用例不会残留（末位字符的 `lastTime` 也不影响判定 —— 超时分支只是把缓冲区
   // 重启成当前字符，后续字符仍在 30ms 窗口内追加）。
+});
+
+afterEach(() => {
+  // 统一收掉本 spec 挂载的实例：漏掉的那几个会继续订阅模块级扫码枪并挂在 document.body
+  // 上。用例里已经显式 unmount 的跳过（重复 unmount 只会刷一条 Vue 的 dev 警告）。
+  for (const wrapper of mountedPools) {
+    if (wrapper.vm?.$?.isUnmounted !== true) wrapper.unmount();
+  }
+  mountedPools.clear();
 });
 
 describe('CandidatePool（外协候选池：拖拽源）', () => {
@@ -690,8 +709,7 @@ describe('CandidatePool（外协候选池：拖拽源）', () => {
     expect(Array.from(selectedIds.value)).toEqual(['3000000000001']);
     expect((search().element as HTMLInputElement).value).toBe('');
     expect(wrapper.findAll('.pool-cards .batch-card')).toHaveLength(2);
-    // 提示与界面必须同时自洽 ⇒ 成功文案照常弹（次数不定：本 spec 里前序用例挂载的实例
-    // 也订阅着模块级扫码枪，同一次扫码会命中它们）
+    // 提示与界面必须同时自洽 ⇒ 成功文案照常弹
     expect(ElMessage.success).toHaveBeenCalledWith(expect.stringContaining('已选中'));
     wrapper.unmount();
   });
@@ -713,12 +731,18 @@ describe('CandidatePool（外协候选池：拖拽源）', () => {
     wrapper.unmount();
   });
 
-  // ── 2026-10-20 review 第 1 轮：搜索框回车路径（「点搜索框后扫码静默失效」的补偿） ─────
-  it('C19：手输不存在的序列号回车 → 静默（不弹 SCAN_MISS_HINT）+ 清空关键词 + 失焦', async () => {
+  // ── 2026-10-20：搜索框回车路径（「点搜索框后扫码静默失效」的补偿） ─────────────────
+  it('C19：手输未命中回车 → 关键词**保留** + 静默（不弹 SCAN_MISS_HINT）+ 失焦', async () => {
+    // 反向验证：把 onSearchEnter 的清空挪回「无条件先清」时本条必须红。
     const { ElMessage } = await import('element-plus');
-    const { wrapper, selectedIds } = mountedParent([makeCandidate()]);
+    const items = [
+      makeCandidate({ batch_id: '3000000000001', part_serial_no: 'SN-0001', part_name: '连杆' }),
+      makeCandidate({ batch_id: '3000000000002', part_serial_no: 'SN-0002', part_name: '齿轮' }),
+    ];
+    const { wrapper, selectedIds } = mountedParent(items);
     const search = () => wrapper.find('.el-input-stub__input');
 
+    // 格一：输入的是一个**不存在的序列号**
     await search().setValue('SN-9999');
     await search().trigger('keyup', { key: 'Enter' });
     await nextTick();
@@ -729,8 +753,23 @@ describe('CandidatePool（外协候选池：拖拽源）', () => {
     expect(selectedIds.value.size).toBe(0);
     // 失焦是恢复扫码派发的必要动作（焦点留在输入框上时条码枪的按键一律不派发）
     expect(blurLog.calls).toBe(1);
-    // 关键词一并清空：回车之后框里留着那个搜不到的值，下一次扫码会继续被它挡着
-    expect((search().element as HTMLInputElement).value).toBe('');
+    // 关键词**保留**：没命中就没理由清掉用户正在用的过滤词
+    expect((search().element as HTMLInputElement).value).toBe('SN-9999');
+
+    // 格二（这条才是真正的回归）：按**名称**过滤出一张卡后顺手回车 —— 搜索框承诺
+    // 「序列号 / 图号 / 批次号 / 名称」，而回车路径只认 part_serial_no 等值。先清关键词
+    // 就等于零反馈地抹掉用户刚做的过滤：卡片弹回全量、连提示都没有。
+    await search().setValue('齿轮');
+    expect(wrapper.findAll('.pool-cards .batch-card')).toHaveLength(1);
+    await search().trigger('keyup', { key: 'Enter' });
+    await nextTick();
+
+    expect(ElMessage.warning).not.toHaveBeenCalled();
+    expect(ElMessage.success).not.toHaveBeenCalled();
+    expect(selectedIds.value.size).toBe(0);
+    expect(blurLog.calls).toBe(2);
+    expect((search().element as HTMLInputElement).value).toBe('齿轮');
+    expect(wrapper.findAll('.pool-cards .batch-card')).toHaveLength(1);
     wrapper.unmount();
   });
 
@@ -781,15 +820,21 @@ describe('CandidatePool（外协候选池：拖拽源）', () => {
   it('C22：回车只清空自己这个实例的关键词（未激活 tab 的输入框拿不到焦点，不需要闸门）', async () => {
     // 非当前 tab 的实例：回车路径刻意不过 activeProcessId 闸门（扫码是全局的才需要闸门，
     // 回车只派发给本实例的输入框）。这里钉住「一个实例的清空不会动另一个实例的关键词」。
-    const first = mountPool([makeCandidate()]);
-    await first.find('.el-input-stub__input').setValue('SN-A');
-    const second = mountPool([makeCandidate()], new Set(), '2000000000999');
-    await second.find('.el-input-stub__input').setValue('SN-B');
+    // 两个实例各自持有一条**能被回车命中**的序列号（命中才清空，未命中按 C19 保留），
+    // 否则这条会退化成「两边都没清」而失去判定力。
+    const first = mountPool([makeCandidate({ part_serial_no: 'SN-0001' })]);
+    await first.find('.el-input-stub__input').setValue('SN-0001');
+    const second = mountPool(
+      [makeCandidate({ part_serial_no: 'SN-0002' })],
+      new Set(),
+      '2000000000999',
+    );
+    await second.find('.el-input-stub__input').setValue('SN-0002');
 
     await second.find('.el-input-stub__input').trigger('keyup', { key: 'Enter' });
     await nextTick();
 
-    expect((first.find('.el-input-stub__input').element as HTMLInputElement).value).toBe('SN-A');
+    expect((first.find('.el-input-stub__input').element as HTMLInputElement).value).toBe('SN-0001');
     expect((second.find('.el-input-stub__input').element as HTMLInputElement).value).toBe('');
     first.unmount();
     second.unmount();

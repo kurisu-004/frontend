@@ -123,8 +123,8 @@ const props = defineProps<{
 
 /** 搜索关键词。组件局部状态、刻意不上抛 —— 过滤只影响本抽屉的可见集，头部徽标与
  *  右键菜单的可选范围都保持 pool.batches 的全量。**切 tab / 换工序都不重置**：组件级
- *  局部状态的有意取舍，别当漏掉的 reset 补上（守卫见本组件 spec 的 D13：投放成功后
- *  不命中关键词时才会清空，那是另一条口径）。 */
+ *  局部状态的有意取舍，别当漏掉的 reset 补上。唯一会清空它的是投放成功后的补偿，
+ *  理由与守卫见 onDragAdd 末尾的注释（本组件 spec 的 D13 / D13b）。 */
 const keyword = ref<string>('');
 
 /** 当前可见卡片 = pool.batches（已是 BatchCardModel[]，无需再过适配层）过关键词。
@@ -209,14 +209,16 @@ async function onDragAdd(evt: DraggableStartEvent) {
   // 给 useQueueMove 之前先自查，守卫在包装里）。缺失时 NaN，由 useQueueMove 拦下。
   const version = Number.parseInt(evt.item.dataset.batchVersion ?? '', 10);
   await moveBatchToPool(batchId, version, fromWorkerId);
-  // 2026-10-20 新增：撤回的批次若不命中当前关键词，它就永远不进 visibleBatches ⇒
-  // Vue 的 keyed diff 从头到尾不知道这个被 Sortable 插进来的外来节点，它会**永久**留在
-  // .pool-cards 里，且参与 from.children[oldIndex] 计数 ⇒ 后续投放失败时按下标放回会错位。
-  // 基线不残留幻影卡靠的正是「投放成功后该批次进入 pool.batches ⇒ keyed diff 接管这个
-  // 节点」这条前提，加了关键词后前提没了，必须显式把卡片交回可见集。与 CandidatePool
-  // 扫码命中后的清空同一条口径（守卫见本组件 spec 的 D13 / D13b）。
-  // 顺带说明判据的实战形态：pool.batches 的回流晚于这一行（父级 props 还没刷新），所以
-  // 「刚投进来的批次本来就在可见集里」这格几乎不会命中，本分支实际上接近「投放成功即清空」。
+  // 2026-10-20：撤回 / 转交成功后，若投进来的批次不命中当前关键词 ⇒ 清空关键词，让它
+  // 一定回到可见集里（否则用户「投完了却找不到刚投的那张卡」）。
+  //
+  // **这是 UX 取舍，不是正确性必需**：Sortable 插进本容器的那份 DOM 节点已由**源侧**
+  // （工人列 / 另一个工序池）的 restoreNodeToSource 在 remove 阶段物理搬回源容器，落点
+  // 侧不留残片（同一套机制在投放**失败**时才是承重的，见 useLazyDraggable 文件头），
+  // query 回流后渲染出来的是 Vue 新挂的一张干净卡。守卫见本组件 spec 的 D13 / D13b。
+  //
+  // 与「切 tab / 换工序都不重置关键词」不矛盾：那条说的是**用户没做任何动作**时不动
+  // 搜索词，本条是一次显式写操作成功后的补偿。
   if (!visibleBatches.value.some((b) => b.batch_id === batchId)) {
     keyword.value = '';
   }
@@ -226,9 +228,11 @@ async function onDragAdd(evt: DraggableStartEvent) {
 <style scoped>
 /* 需求「工序 tab 左侧的工序池显示高度固定为一个屏幕」的高度链落点 ——
    抽屉本身不再滚（overflow: hidden），只有卡片区 .pool-cards 内部滚动，
-   .section-header（工序 code + name + 数量徽标）常驻可见。 */
+   .section-header（工序 code + name + 数量徽标）常驻可见。
+   定位基准刻意落在 .pool-section 而不是这里：.pool-no-match 的 inset:0 要覆盖的是
+   「工序卡 + 搜索框 + 卡片区」这一段（另两处卡片列的空态覆盖层都盖自己的卡片区），
+   挂到抽屉上会把常驻可见的表头与搜索框一起盖进去、插画中心比卡片区中心高一截。 */
 .pool-drawer {
-  position: relative;
   width: 100%;
   height: 100%;
   padding: 12px;
@@ -238,6 +242,7 @@ async function onDragAdd(evt: DraggableStartEvent) {
   overflow: hidden;
 }
 .pool-section {
+  position: relative;
   margin-bottom: 24px;
   flex: 1;
   min-height: 0;
@@ -290,7 +295,8 @@ async function onDragAdd(evt: DraggableStartEvent) {
   font-size: 13px;
   flex-shrink: 0;
 }
-/* 「无匹配」兄弟覆盖层（.pool-empty 那条是 pool 为 null 的分支，两者不同义）。 */
+/* 「无匹配」兄弟覆盖层（.pool-empty 那条是 pool 为 null 的分支，两者不同义）。
+   定位基准 = .pool-section（见上面那条），inset:0 覆盖工序卡 / 搜索框 / 卡片区这一段。 */
 .pool-no-match {
   position: absolute;
   inset: 0;

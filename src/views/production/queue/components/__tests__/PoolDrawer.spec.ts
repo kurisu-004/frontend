@@ -25,12 +25,13 @@
 //   - D7b / D7c（2026-10-06）：Sortable 容器 .pool-cards 内的节点构成 —— 只有卡片根元素
 //     与 v-for 的 2 个空文本锚点，**没有注释节点**（dev 构建保留模板注释，注释同样是
 //     容器直接子节点）；空池时零元素子节点、容器仍是合法投放目标。
-//   - D10 / D11 / D11b / D11c / D12 / D13（2026-10-20）：序列号 / 图号 / 批次号 / 名称的
+//   - D10 / D11 / D11b / D11c / D11d / D12 / D13（2026-10-20）：序列号 / 图号 / 批次号 / 名称的
 //     **本地**过滤 —— D10 只渲染命中的卡（头部徽标仍为全量）；D11 无匹配时渲染「无匹配」
 //     空态而 .pool-cards 容器仍在、零元素子节点；D11b 工序本来就没有候选批次时不弹「无匹配」
 //     （没发生过的搜索不说谎）；D11c 池空 + 输了关键词时弹「无匹配」（用户输过搜索，一言不发
-//     是静默失败）；D12 搜索行是容器的**兄弟节点**；D13 撤回投放的批次不命中当前关键词 ⇒
-//     关键词被清空（否则 Sortable 插进来的节点永远不进 vdom，幻影卡永久残留）。
+//     是静默失败）；D11d「无匹配」覆盖层的定位基准是 .pool-section 而非 .pool-drawer；
+//     D12 搜索行是容器的**兄弟节点**；D13 撤回 / 转交投放成功后、批次不命中当前关键词 ⇒
+//     关键词被清空（一次写操作成功后的可见性补偿）。
 //
 // 测试策略：
 //   - vi.mock('vue-draggable-plus') 捕获 useDraggable 的入参与 options（happy-dom
@@ -38,13 +39,36 @@
 //     库之间唯一的契约面）；
 //   - dndSourceTracker 用真实实现：onStart 记、onAdd 取的配对本身是被测行为的一半；
 //   - EP 组件 stub（el-tag / el-tooltip）+ vi.mock('element-plus') 把 ElMessage
-//     桩成 no-op。
+//     桩成 no-op；
+//   - 样式类断言走**源码契约**（读 PoolDrawer.vue 原文）：vitest 未开 css 处理，SFC 的
+//     scoped 样式不会进 document，getComputedStyle 读不到 —— 照 BatchCard.spec.ts 的 B14 同款。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, nextTick, toRaw } from 'vue';
 import { mount } from '@vue/test-utils';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { BatchCardModel } from '@/types/batchCard';
 import type { ProcessPoolView } from '@/types/productionQueue';
+
+/** 组件源码原文（仅供 D11d 的样式契约断言用；其余断言一律走挂载）。注意用
+ *  `import.meta.url` 字符串而不是 `new URL(...)`：本 spec 跑在 happy-dom 下，裸
+ *  `new URL` 命中的是 happy-dom 的 URL 实现，node 的 fileURLToPath 认不出来。 */
+const POOL_DRAWER_SRC = readFileSync(
+  resolve(dirname(fileURLToPath(import.meta.url)), '../PoolDrawer.vue'),
+  'utf8',
+);
+
+/** 取出 `selector { … }` 这条规则的花括号内原文。取不到（选择器被改名 / 删除）返回空串，
+ *  由用例断言负责报错 —— 刻意不抛，免得选择器拼错时栈里看不到是哪个断言。 */
+function cssRuleBody(src: string, selector: string): string {
+  const at = src.indexOf(`${selector} {`);
+  if (at < 0) return '';
+  const start = at + selector.length + 2;
+  const end = src.indexOf('}', start);
+  return end < 0 ? '' : src.slice(start, end);
+}
 
 const captured = vi.hoisted(() => ({
   calls: [] as { list: unknown; options: Record<string, unknown> }[],
@@ -620,6 +644,32 @@ describe('PoolDrawer（2026-10-03 Sortable 接线）', () => {
     wrapper.unmount();
   });
 
+  it('D11d：「无匹配」覆盖层的定位基准是 .pool-section（不是 .pool-drawer）', async () => {
+    // 覆盖层是 position:absolute + inset:0，解析到**最近的定位祖先**。挂到抽屉上就会
+    // 连 .section-header（工序 code / name / 徽标）与 .section-search（搜索框本身）一起盖
+    // 进去 —— pointer-events:none 不挡交互，只是插画的纵向中心比卡片区中心高一截，与另
+    // 两处卡片列（覆盖自己的卡片区）口径不一。
+    //
+    // 走源码契约而非 getComputedStyle：vitest 未开 css 处理，SFC 的 scoped 样式不进
+    // document，计算样式读到的全是初值（同 BatchCard.spec.ts 的 B14）。
+    const section = cssRuleBody(POOL_DRAWER_SRC, '.pool-section');
+    const drawer = cssRuleBody(POOL_DRAWER_SRC, '.pool-drawer');
+    expect(section).not.toBe('');
+    expect(drawer).not.toBe('');
+    expect(section).toContain('position: relative');
+    // 抽屉上不许再有 position（任何取值都不行）—— 挪回去就是这条红
+    expect(drawer).not.toContain('position');
+
+    // 结构那一半：覆盖层是 .pool-section 的直接子节点、与卡片容器互为兄弟
+    const wrapper = mountDrawer(makePool([makeCard({ serial_no: 'SN-A' })]));
+    await nextTick();
+    await wrapper.find('.el-input-stub__input').setValue('ZZZ-不存在');
+    const overlay = wrapper.find('.pool-no-match').element as HTMLElement;
+    expect(overlay.parentElement?.classList.contains('pool-section')).toBe(true);
+    expect(overlay.parentElement?.classList.contains('pool-cards')).toBe(false);
+    wrapper.unmount();
+  });
+
   it('D12：搜索行是 .pool-cards 的兄弟节点（容器内不许混非可拖子元素）', async () => {
     const wrapper = mountDrawer(makePool([makeCard()]));
     await nextTick();
@@ -635,12 +685,11 @@ describe('PoolDrawer（2026-10-03 Sortable 接线）', () => {
     wrapper.unmount();
   });
 
-  it('D13：撤回投放的批次不命中当前关键词 → 关键词被清空（否则幻影卡永久残留）', async () => {
-    // 本容器同时是源与落点。基线不残留幻影卡靠的是「投放成功后该批次进入 pool.batches ⇒
-    // Vue 的 keyed diff 接管这个被 Sortable 插进来的外来节点」；加了关键词后这条前提没了 ——
-    // 投进来的批次若不命中当前关键词，它永远不进 visibleBatches，Vue 从头到尾不知道这个
-    // DOM 节点（patchKeyedChildren 只遍历 vdom 里的旧节点），节点会永久留在 .pool-cards 里，
-    // 且参与 from.children[oldIndex] 计数 ⇒ 后续回滚按下标放回会错位。
+  it('D13：撤回 / 转交投放的批次不命中当前关键词 → 关键词被清空（一次写操作后的可见性补偿）', async () => {
+    // 这是 **UX 取舍**，不是正确性必需：Sortable 插进落点容器的那份 DOM 节点由**源侧**
+    // （工人列 / 另一个工序池）的 restoreNodeToSource 在 remove 阶段物理搬回，落点侧不留
+    // 残片；query 回流后渲染的是 Vue 新挂的一张干净卡。本用例守的是这条取舍本身 ——
+    // 关键词挡着刚投进来的批次时，把它清掉，用户不必自己再去清一遍搜索框。
     const moveBatchToPool = vi.fn(async () => true);
     const wrapper = mountDrawer(makePool([makeCard({ serial_no: 'SN-A' })]), { moveBatchToPool });
     await nextTick();
@@ -662,9 +711,7 @@ describe('PoolDrawer（2026-10-03 Sortable 接线）', () => {
 
   it('D13b：撤回投放的批次本来就在可见集里 → 关键词保持（判据的反方向）', async () => {
     // D13 钉「投进来的批次不在可见集 ⇒ 清空」，这里钉它的另一侧，把判据钉成双向而不是
-    // 「投放成功就无条件清空」。注意真实链路上 pool.batches 的回流**晚于**这一行
-    // （props 还没刷新就判了），所以实战中这一格基本不会命中 —— 它守的是判据本身，
-    // 不是一条主流交互。
+    // 「投放成功就无条件清空」：命中的那一格不动用户的搜索词。
     const moveBatchToPool = vi.fn(async () => true);
     const target = makeCard({ batch_id: '3000000000009', serial_no: 'SN-B' });
     const wrapper = mountDrawer(makePool([target]), { moveBatchToPool });
