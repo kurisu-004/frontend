@@ -327,8 +327,9 @@ const routes: RouteRecordRaw[] = [
       },
       {
         // 2026-10-16 新增：邮件中心页（`/mail`，页内两个 tab：邮箱设置 / 交期汇总）。
-        // 后端 scheduled_task 域的 mail 子域（`/api/v2/mail/*` 与 `/api/v2/mail-digest/*`，
-        // 全部 MANAGER 独占 —— 权限走菜单 code，不另加 allowRoles）。
+        // 后端 scheduled_task 域的 mail 子域（`/api/v2/cron/mail/*` 与
+        // `/api/v2/cron/mail-digest/*`，全部 MANAGER 独占 —— 权限走菜单 code，不另加
+        // allowRoles）。
         //
         // ⚠️ **一级分组菜单「定时任务」（code `scheduled_task`、path NULL）没有前端路由**
         // —— 它由后端菜单树下发，渲染成 `el-sub-menu`（见 `MenuTreeItem.vue` 的分支判定：

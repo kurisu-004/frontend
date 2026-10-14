@@ -267,9 +267,15 @@ export const useWeComDailyStore = defineStore('wecom-daily', () => {
     { immediate: true, flush: 'sync' },
   );
 
-  /** 重拉配置。`force=true` 时覆盖本地未保存改动（40901 与「刷新」两条路径）。 */
-  async function reloadConfig(force: boolean): Promise<void> {
-    forceHydrate.value = force;
+  /** 重拉配置并**强制覆盖**本地未保存改动。**只有两条路径会走到这里**（40901 冲突后重试、
+   *  用户显式点「刷新」），两条的诉求都是「给我服务端那份」⇒ 不提供「不强制」的开关 ——
+   *  后台 refetch（缓存过期 / 别的写点失效 / 另一个管理员改了）不经过本函数，它由上面 watcher
+   *  的 `dirty` 闸门自己挡掉（守卫见 `__tests__/useWeComDailyStore.spec.ts` 的 H2）。
+   *
+   *  `forceHydrate` 必须跨 `await` 保持为真并在 `finally` 里复位：TanStack 在 fetch 落地时才把
+   *  新 data 推给 watcher，而 watcher 是 `flush: 'sync'` 同步跑的 ⇒ 复位早一步就等于没强制。 */
+  async function reloadConfig(): Promise<void> {
+    forceHydrate.value = true;
     try {
       await configQuery.fetchConfig();
     } finally {
@@ -297,7 +303,7 @@ export const useWeComDailyStore = defineStore('wecom-daily', () => {
    */
   async function refreshAll(): Promise<void> {
     await Promise.all([
-      reloadConfig(true),
+      reloadConfig(),
       metaQuery.fetchMeta(),
       logsQuery.fetchLogs(),
       webhooksQuery.fetchList(),
@@ -327,7 +333,6 @@ export const useWeComDailyStore = defineStore('wecom-daily', () => {
     logsPageSize,
     openGate,
     refreshAll,
-    reloadConfig,
   };
 
   // ============ 切片：preview（预览弹窗）============
@@ -418,7 +423,7 @@ export const useWeComDailyStore = defineStore('wecom-daily', () => {
     const code = e?.code;
     if (code === WECOM_DAILY_ERROR_CODES.VERSION_CONFLICT) {
       ElMessage.warning('配置已被他人修改，请刷新后重试');
-      await reloadConfig(true);
+      await reloadConfig();
       return;
     }
     if (code === WECOM_DAILY_ERROR_CODES.CONFIG_INVALID) {
@@ -531,7 +536,6 @@ export const useWeComDailyStore = defineStore('wecom-daily', () => {
     preview: {
       visible: previewVisible,
       result: previewResult,
-      loading: previewMutation.isPending,
     },
   };
 

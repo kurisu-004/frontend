@@ -158,9 +158,15 @@ export type WeComDailyConfigData = z.infer<typeof weComDailyConfigSchema>;
 // GET /api/v2/cron/wecom-daily/meta
 // ============================================================
 
-/** `defaults` 段：与上面共享字段逐字同构（去掉 id / version / 两个时间戳 /
- *  webhook_configured）。⚠️ `webhook_id` **在 `defaults` 里恒为 null**（默认配置不该替用户
- *  选一条通道），所以它在共享字段里而不在这一段里 —— 后端下发它、前端照收。 */
+/** `defaults` 段（后端 `ConfigDefaultsOut`）：**逐字就是上面那个共享字段对象**，16 个键
+ *  一个不少不少 —— 相对 `ConfigOut` 去掉的只有 `id` / `version` / 两个时间戳 /
+ *  `webhook_configured` 这 5 个行级字段。
+ *
+ *  ⚠️ **`webhook_id` 在 `defaults` 里恒为 `null`**（默认配置不该替用户选一条通道），但**键本身
+ *  恒在**：它与另外 15 个字段走的是同一个 schema 对象。所以这条 schema 是 `.strict()` 的 ——
+ *  后端哪天在 `defaults` 里少下发一个键（哪怕是恒为 `null` 的 `webhook_id`），parse 当场抛，
+ *  频率选项与三段 range 全部退兜底 + 首屏弹一次「元数据加载失败」。
+ *  守卫见 `__tests__/weComDailySchema.spec.ts` 的 M4 组（键集逐字相等 + 少一个键必抛）。 */
 export const weComDailyConfigDefaultsSchema = z.object(weComDailyConfigFields).strict();
 
 export type WeComDailyConfigDefaultsData = z.infer<typeof weComDailyConfigDefaultsSchema>;
@@ -199,8 +205,12 @@ export type WeComDailyMetaData = z.infer<typeof weComDailyMetaSchema>;
 /** 单个工人行（`PreviewOut.worker_rows[]` 一项）。
  *
  *  ⚠️ **条形图不在这一层**：字符条（`█` / `░`）由后端直接渲染进 `chunks[]` 的 markdown 文本，
- *  前端**只展示文本**、不引入任何图表组件（CLAUDE.md「图表」一节）。这一层只给预览弹窗的
- *  数字核对（管理员想知道「条形图右边那个数字是哪来的」）。 */
+ *  前端**只展示文本**、不引入任何图表组件（CLAUDE.md「图表」一节）。
+ *
+ *  ⚠️ **结构化字段：后端下发、当前只守门不展示** —— 预览弹窗只读同级的 `worker_row_total`
+ *  （「工人 N 人」那枚 tag），`worker_rows[]` 的本体全仓没有渲染点（预览按「逐片展示
+ *  `chunks`」的形态呈现，工人明细已是其中一片的正文）。留它在 `.strict()` 的出参里，是为了让
+ *  「后端多发 / 少发一个键」当场红，而不是被 Zod 默认的 strip 静默吞掉。 */
 export const weComDailyWorkerRowSchema = z
   .object({
     worker_name: z.string(),
@@ -209,8 +219,6 @@ export const weComDailyWorkerRowSchema = z
     quantity: z.number(),
   })
   .strict();
-
-export type WeComDailyWorkerRowData = z.infer<typeof weComDailyWorkerRowSchema>;
 
 /** 预览结果（后端 `PreviewOut`，**15 个字段逐字对齐**）。**渲染、不发送、不落流水**。
  *
@@ -559,13 +567,6 @@ export function makeWeComDailyFormSchema(
     //    与输入项的 `:min/:max` 同源 ⇒ 后端改范围时前端不会一边放行一边拦。
   });
 }
-
-/** 默认判据下的表单 schema（meta 未到达时用；到达后 store 改用带 meta 的那一份）。 */
-export const weComDailyFormSchema = makeWeComDailyFormSchema();
-
-/** 表单态 → 校验器的输入（页面组件持有的是同一个对象，但校验前统一拷贝一次，
- *  免得 Zod 的 trim 变换就地改到 store 的态上）。 */
-export type WeComDailyFormInput = z.input<ReturnType<typeof makeWeComDailyFormSchema>>;
 
 /** 把 ZodIssue 列表按字段聚合到字段错误表；同字段多 issue 只取第一条
  *  （照 `views/users/usersSchema.ts` 的同款 helper）。 */

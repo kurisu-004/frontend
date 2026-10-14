@@ -234,6 +234,30 @@ describe('weComDailySchema — MetaOut 键集（6 键，.strict()）', () => {
     expect(weComDailyConfigDefaultsSchema.safeParse(DEFAULTS).success).toBe(true);
     expect(weComDailyConfigDefaultsSchema.safeParse({ ...DEFAULTS, id: 'x' }).success).toBe(false);
   });
+
+  it('M4b：`defaults` 的键集与共享字段**逐字相等**（少一个键也必抛）', () => {
+    // ⚠️ **守卫信号**：把 `webhook_id` 从 `weComDailyConfigFields` 里摘掉时，本用例立刻红。
+    // 后端 `ConfigDefaultsOut` 的 `webhook_id` **恒为 null 但键恒在**（默认配置不该替用户选通道，
+    // 那是「值」的约束，不是「键」的缺省）⇒ 前端 schema 也必须声明它，否则 `.strict()` 只在
+    // 「后端多发」时抛、后端哪天少发一个键时 Zod 默认的 strip 会静默吞掉，频率选项与三段
+    // range 全部退兜底 + 首屏弹一次「元数据加载失败」。
+    const parsed = weComDailyConfigDefaultsSchema.parse(DEFAULTS);
+    expect(Object.keys(parsed).sort()).toEqual(Object.keys(DEFAULTS).sort());
+    expect(Object.keys(parsed)).toHaveLength(16);
+    expect(Object.keys(parsed)).toContain('webhook_id');
+
+    // 行级字段**不在** defaults 里（后端 `ConfigDefaultsOut` 明确不含这 5 个）。
+    for (const rowOnly of ['id', 'version', 'created_at', 'updated_at', 'webhook_configured']) {
+      const { [rowOnly]: _drop, ...rest } = DEFAULTS as Record<string, unknown>;
+      expect(weComDailyConfigDefaultsSchema.safeParse(rest).success, rowOnly).toBe(true);
+    }
+
+    // 少**任意一个**共享键都必抛（逐个走一遍，不只测 webhook_id）。
+    for (const key of Object.keys(DEFAULTS)) {
+      const { [key]: _drop, ...rest } = DEFAULTS as Record<string, unknown>;
+      expect(weComDailyConfigDefaultsSchema.safeParse(rest).success, key).toBe(false);
+    }
+  });
 });
 
 describe('weComDailySchema — PreviewOut 键集（15 键，.strict()）', () => {

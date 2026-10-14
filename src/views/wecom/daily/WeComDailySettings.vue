@@ -113,7 +113,13 @@
           <span class="section-sub">共 {{ store.query.logsTotal }} 条</span>
         </div>
       </template>
-      <WeComLogTable :items="store.query.items" :loading="store.query.logsLoading" />
+      <!-- ⚠️ `upcoming-days` 必须传：日志表的「N 日内」表头由它决定（写死「3日内」在管理员
+           把它改成 7 天之后就是一句假话）。 -->
+      <WeComLogTable
+        :items="store.query.items"
+        :loading="store.query.logsLoading"
+        :upcoming-days="store.query.form.upcoming_days"
+      />
       <div class="pagination">
         <el-pagination
           v-model:current-page="store.query.logsPage"
@@ -128,11 +134,7 @@
       </div>
     </el-card>
 
-    <WeComPreviewDialog
-      v-model="store.dialogs.preview.visible"
-      :result="store.dialogs.preview.result"
-      :loading="store.dialogs.preview.loading"
-    />
+    <WeComPreviewDialog v-model="store.dialogs.preview.visible" :result="store.dialogs.preview.result" />
   </div>
 </template>
 

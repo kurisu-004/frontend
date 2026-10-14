@@ -711,11 +711,11 @@ export const qk = {
   //
   // ⚠️ **2026-10-17：键的命名空间刻意不动**（仍是 `['mail-digest', …]`），尽管同批后端把
   // API 前缀从 `/mail-digest/*` 硬切到了 `/cron/mail-digest/*`。**键 = 功能域标识，
-  // 不要求与 API 前缀一致** —— 这条口径本段原先写反了（原话是「与后端 URL 段逐段对齐，
-  // 便于按 URL 反查键」），照那套论证，下一个读代码的人会把键改回去，而那没有任何功能
-  // 收益、只会让已缓存的 query identity 全部失效。
+  // 不要求与 API 前缀一致** —— 让键去追 URL 没有任何功能收益、只会让已缓存的 query identity
+  // 全部失效。
   //   **仓内先例**：`qk.deliveryNotesList` = `['delivery-notes','list']`，它对应的后端 URL
-  //   是 `/com/delivery/note`；`qk.customersList` = `['customers','list']` 对应 `/com/customer`。
+  //   是 `/com/delivery/note`；`qk.customersList` = `['customers','list']` 对应
+  //   `/com/customers`。
   //   ⚠️ 「按 URL 反查键」这个诉求的真实答案是**在 api 文件的 URL 上写 JSDoc 标明它对应的
   //   qk 键**（`api/mailDigest.ts` 每个端点的 JSDoc 都这么写），不是让键去追 URL。
   //

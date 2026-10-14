@@ -118,7 +118,6 @@ describe('useWeComWebhooksStore — 不变量（闸门 / 切片解包 / $dispose
 
     expect(store.query.webhooks).toHaveLength(2);
     expect(store.query.hasDefault).toBe(true);
-    expect(store.query.empty).toBe(false);
 
     store.dialogs.form.name = '临时';
     expect(store.dialogs.form.name).toBe('临时');
@@ -338,15 +337,17 @@ describe('useWeComWebhooksStore — 动作端点与失效编排', () => {
 });
 
 describe('useWeComWebhooksStore — 派生判据', () => {
-  it('N1：empty / hasDefault 都是从列表派生的（列表空时给 false 而不是 undefined）', async () => {
+  it('N1：hasDefault 从列表派生（列表空时给 false 而不是 undefined）', async () => {
     listWeComWebhooksMock.mockResolvedValue({ items: [] });
     const store = useWeComWebhooksStore();
     store.query.openGate();
     await tick();
 
     expect(store.query.webhooks).toEqual([]);
-    expect(store.query.empty).toBe(true);
     expect(store.query.hasDefault).toBe(false);
+    // ⚠️ 「一个通道都没有」**刻意不**做成 store 派生字段：它的唯一消费方
+    // （`WeComWebhooksTab.vue` 的引导空态）就地读 `webhooks.length === 0`，第二条派生字段
+    // 只会多一处要同步的地方。上面 `webhooks` 为空即该判据成立。
   });
 
   it('N2：refresh() 打一次 refetch', async () => {

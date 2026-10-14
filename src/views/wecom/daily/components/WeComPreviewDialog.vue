@@ -24,6 +24,11 @@
     `String.prototype.length` 是 **UTF-16 码元数**，中文一条占 1（而 UTF-8 占 3 字节）⇒ 用它
     显示「3000 / 4096 字节」的那条其实已经 9000 字节、发不出去。管理员据此判断「要不要调
     `max_chunks`」时会被彻底误导。守卫：同 spec 的字节数用例（用一段中文断言 `> chunk.length`）。
+
+  ⚠️ **刻意没有 loading 态**：壳只在 `preview` 成功的 `onSuccess` 里把 `visible` 置真，而
+    `result` 与 `visible` 是同一次同步赋值 ⇒ 弹窗可见的那一刻结果已经在了。加一个 loading 分支
+    只能覆盖「TanStack 的 `onSuccess` 先于 status 落为 success」那一帧的空档，显示的还是
+    「正在渲染…」这种已经不成立的提示 —— 纯误导，没有可预判的等待时长可挡。
 -->
 <template>
   <el-dialog
@@ -34,8 +39,7 @@
     :close-on-click-modal="false"
     @update:model-value="emit('update:modelValue', $event)"
   >
-    <div v-if="loading" class="preview-loading">正在按当前配置渲染消息…</div>
-    <template v-else-if="result">
+    <template v-if="result">
       <div class="preview-meta">
         <div class="preview-subject">
           <span class="preview-label">标题</span>
@@ -98,12 +102,11 @@ import { useDialogSize } from '@/composables/useDialogSize';
 import { ElMessage } from 'element-plus';
 import type { WeComDailyPreviewData } from '../weComDailySchema';
 
-// 不接收 `props` 变量：模板里三个 prop 各自按名直接用（`modelValue` / `result` / `loading`），
-// 本组件的脚本侧只额外需要一个读 `result` 的函数（模板里不能用 `props`）。
+// 模板里 `modelValue` / `result` 两个 prop 各自按名直接用（脚本侧用不到它们），
+// 只有 `copyAll()` 需要读整份 props 才接了 `props` 这个变量。
 const props = defineProps<{
   modelValue: boolean;
   result: WeComDailyPreviewData | null;
-  loading?: boolean;
 }>();
 
 // emits 用函数类型（同款理由：@typescript-eslint/prefer-function-type）。
@@ -148,12 +151,6 @@ async function copyAll(): Promise<void> {
 </script>
 
 <style lang="scss" scoped>
-.preview-loading {
-  padding: 48px 0;
-  text-align: center;
-  color: var(--text-secondary);
-}
-
 .preview-meta {
   display: flex;
   flex-direction: column;

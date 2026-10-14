@@ -4,7 +4,7 @@
 // （CLAUDE.md「域 schema 与 query hook 同居」），两组用途（形态照
 // `views/mail/digest/mailDigestSchema.ts`）：
 //
-//   1. **守门**：`mailAccountSchema`（`AccountOut`）/ `mailMetaSchema`（`GET /mail/meta`）。
+//   1. **守门**：`mailAccountSchema`（`AccountOut`）/ `mailMetaSchema`（`GET /cron/mail/meta`）。
 //      两条读端点的守门点在 queryFn（`composables/useMailAccountsQuery.ts`）；四条写端点
 //      （建档 / 改档 / 删除 / 设为默认）走 useMutation、**没有 queryFn 承载** ⇒ 守门留在
 //      api 层（CLAUDE.md 为「没有 queryFn 承载的调用」留的口子，同 `api/inspection.ts`
@@ -19,7 +19,7 @@
 //   - **SMTP 预设**：**出参一律 `z.string()`、不守枚举**（见 `mailAccountSchema.preset`
 //     的 doc）；封闭的枚举只留在**入参**侧（`makeMailAccountFormSchema`）。
 //   - **host / port / tls_mode 是出参里的三个键**，值**由后端按预设推导**（不存 DB）。
-//     前端**不在这里另存一份映射** —— 那三值由 `GET /mail/meta` 下发（见 `mailMetaSchema`）。
+//     前端**不在这里另存一份映射** —— 那三值由 `GET /cron/mail/meta` 下发（见 `mailMetaSchema`）。
 //     前端另存一份就是这个域的第二真源：后端加一家邮箱服务时它不会报错，只会静默少一个
 //     选项。
 //
@@ -40,7 +40,7 @@ import { z } from 'zod';
  *  后端 `MailAccountOut::from_row` 对「库里存了未知 preset 字面量」是**刻意降级而不丢行**
  *  的（`preset` 原样回显、`preset_label` / `host` / `tls_mode` 退化为空串、`port` 为 0），
  *  出参拿枚举守它就会把「一行脏数据 / 后端先加一家」放大成**整个列表 parse 抛、页面空白**
- *  —— 恰好是后端那段降级设计要避免的「以为邮箱全没了」。取值域由 `/mail/meta` 下发的选项集
+ *  —— 恰好是后端那段降级设计要避免的「以为邮箱全没了」。取值域由 `/cron/mail/meta` 下发的选项集
  *  在**使用点**校验，不在出参边界。
  *
  *  字面量只出现在这一处：`mailAccountPresetSchema` 由它构造，别处不重抄。 */
@@ -55,7 +55,7 @@ export const mailAccountPresetSchema = z.enum(MAIL_ACCOUNT_PRESET_VALUES, {
 export type MailAccountPresetData = z.infer<typeof mailAccountPresetSchema>;
 
 // ============================================================
-// GET /api/v2/mail/accounts
+// GET /api/v2/cron/mail/accounts
 // ============================================================
 
 /** 单个邮箱账号（后端 `MailAccountOut`，**12 个字段逐字对齐**）。
@@ -109,7 +109,7 @@ export const mailAccountSchema = z
 
 export type MailAccountData = z.infer<typeof mailAccountSchema>;
 
-/** `GET /mail/accounts` 的出参（后端 `MailAccountListOut`）：`{ items: MailAccountOut[] }`。
+/** `GET /cron/mail/accounts` 的出参（后端 `MailAccountListOut`）：`{ items: MailAccountOut[] }`。
  *
  *  ⚠️ **是信封对象、不是裸数组**（后端 `R<MailAccountListOut>` 的 `data` 就是它）：
  *  把它写成 `z.array(...)` 时 queryFn 会在**每一屏**抛 ZodError ⇒ 列表恒空、而两条 warning
@@ -127,10 +127,10 @@ export const mailAccountListSchema = z
 export type MailAccountListData = z.infer<typeof mailAccountListSchema>;
 
 // ============================================================
-// GET /api/v2/mail/meta
+// GET /api/v2/cron/mail/meta
 // ============================================================
 
-/** 预设选项（`GET /mail/meta` 的 `presets[]` 一项）。
+/** 预设选项（`GET /cron/mail/meta` 的 `presets[]` 一项）。
  *
  *  host / port / tls_mode 三件套**由后端下发**，弹窗据此渲染一条只读描述行。写成前端常量
  *  的话，后端改端口（465 → 587）或加一家服务商时就多一份会静默漂移的真源。
@@ -168,7 +168,7 @@ export type MailAccountFormMode = 'create' | 'edit';
 /** 长度上限，**与后端 `service.rs` 的三个 validate_* 逐字同口径**（`.chars().count()`
  *  口径，不是字节数；改了这里必须同步改后端，否则用户在浏览器过了、后端 21704 拒）。
  *
- *  刻意写死：这三个不是「后端下发的范围」类判据（那是 `/mail/meta` 的
+ *  刻意写死：这三个不是「后端下发的范围」类判据（那是 `/cron/mail/meta` 的
  *  `upcoming_days_range` 那种），而是与数据库列宽 / 后端校验常量 1:1 的定值；做成下发字段
  *  只会给后端添一条「忘了更新上限」的路径。
  *

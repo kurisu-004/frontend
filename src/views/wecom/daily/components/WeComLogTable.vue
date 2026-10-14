@@ -31,6 +31,11 @@
   ⚠️ **同理不建「统计日」列** —— `report_date` 恒等于 `sent_at` 的日期部分（后端同一个
   `now_naive()` 调用取值），是纯冗余列。
 
+  ⚠️ **「N 日内」列的表头由壳传入**：这一列数的是 `upcoming_days` 范围内的工单，而
+  `upcoming_days` 是管理员可配的（后端 `meta.upcoming_days_range` 下发 1..60、默认 3）⇒ 表头
+  写死「3日内」在改成 7 天之后就成了一句假话，而它恰好是排查「为什么逾期 / 近期数对不上」时
+  第一眼看的列。取值与回落见 `utils/upcomingDaysLabel.ts`。
+
   失败行标红：`:row-class-name` 给 `status === 'FAILED'` 的行加 `is-failed`，由本页 scoped CSS
   的 `:deep()` 上色（EP 把 row-class-name 加在 `<tr>` 上，scoped 选择器带不上 scopeId，必须
   `:deep`）。
@@ -96,7 +101,11 @@
       </el-table-column>
 
       <el-table-column prop="overdue_count" label="逾期" min-width="80" align="center" />
-      <el-table-column prop="upcoming_count" label="3日内" min-width="80" align="center" />
+      <!-- ⚠️ label 由壳传入（`upcoming_days`），**不许**写死「3日内」：这一列的语义由配置项
+           `upcoming_days` 决定（后端 `meta.upcoming_days_range` 下发 1..60，默认 3），管理员
+           把它改成 7 天之后表头还在说「3日内」—— 而这正是排查「为什么逾期 / 近期数对不上」时
+           第一眼看的列。回落值与后端默认 3 一致（见 `upcomingDaysLabel`）。 -->
+      <el-table-column :label="upcomingLabel" prop="upcoming_count" min-width="80" align="center" />
 
       <el-table-column label="错误信息" min-width="240" show-overflow-tooltip>
         <template #default="{ row }">
@@ -114,19 +123,30 @@
 //
 // 2026-10-17 新建：见文件头。0 业务状态 —— 行集是 prop。
 
+import { computed } from 'vue';
 import type { WeComDailyLogData } from '../weComDailySchema';
 import type { WeComDailyTriggerSource } from '@/types/wecom';
+import { formatNaiveDateTime } from '../../utils/naiveDateTime';
+import { upcomingDaysLabel } from '../utils/upcomingDaysLabel';
 
 // `loading` 走 withDefaults 而不是裸 `loading?: boolean`：EP 的 `v-loading` 指令值类型是
 // `LoadingBinding`（不接受 undefined），可空 prop 直接绑会被 vue-tsc 判 TS2322。
-withDefaults(
+const props = withDefaults(
   defineProps<{
     /** 行集（已解析出 `WeComDailyLogData[]`，queryFn 里 Zod 守门过）。 */
     items: WeComDailyLogData[];
     loading?: boolean;
+    /** 「近期交期」列的天数（壳传 `store.query.form.upcoming_days`）。`el-input-number` 被清空
+     *  时给的是 `undefined`，所以这个 prop 允许非数字，由 `upcomingDaysLabel` 回落。 */
+    upcomingDays?: number | string;
   }>(),
   { loading: false },
 );
+
+/** 「N 日内」列的表头。天数由配置项决定 ⇒ 表头必须跟着配置走，不能写死 3。
+ *  **非数字（`undefined` / `null` / 空串 / 脏值）一律回落成后端默认的 3** —— 表头宁可给一个
+ *  合法值，也不能给用户看一个「日内」而前面没有数字的空标签。 */
+const upcomingLabel = computed(() => upcomingDaysLabel(props.upcomingDays));
 
 /** 触发来源的中文名。字面量与后端 `LogRow.trigger_source` 的两个取值逐字对齐。槽里的 `row`
  *  是 EP 注入的 `any`，所以走函数 + 收窄，不在模板里直接索引映射表。 */
@@ -141,15 +161,6 @@ function triggerLabel(source: unknown): string {
 
 function triggerTagType(source: unknown): 'primary' | 'warning' {
   return source === 'SCHEDULED' ? 'primary' : 'warning';
-}
-
-/** 后端 `sent_at` 是 **naive** timestamp（无时区后缀，Asia/Shanghai 墙钟）。**不能**走
- * `utils/date.ts::formatDateTime` —— 那个函数 `new Date()` 后按 UTC 输出，会把墙钟时间整体平移
- * 8 小时。这里只做字符串切片（照 `usersColumnDefs.ts` 的同款做法）。 */
-function formatNaiveDateTime(raw: string | null): string {
-  if (!raw) return '-';
-  const normalized = raw.replace('T', ' ');
-  return normalized.length >= 16 ? normalized.slice(0, 16) : normalized;
 }
 
 /** 「已发几条 / 本来要发几条」。后端在发完最后一条才把 `chunk_sent` 补齐，中途失败时它停在

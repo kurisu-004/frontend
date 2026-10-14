@@ -55,6 +55,7 @@ vi.mock('@/api/wecomWebhooks', () => ({
 
 import { ElMessage } from 'element-plus';
 import { useWeComDailyStore } from '../composables/useWeComDailyStore';
+import { qk } from '@/composables/queries/keys';
 import { WECOM_DAILY_ERROR_CODES } from '../weComDailyErrorText';
 import type { WeComDailyConfigData, WeComDailyLogData } from '../weComDailySchema';
 
@@ -291,8 +292,11 @@ describe('useWeComDailyStore — hydrate 与 dirty', () => {
     store.query.form.upcoming_days = 30;
     expect(store.query.dirty).toBe(true);
 
+    // ⚠️ 走**真实的后台 refetch 路径**（失效本域配置键），不是 store 的显式重拉 ——
+    // `reloadConfig()` 只服务 40901 与「刷新」两条**强制覆盖**路径（它刻意不再暴露，
+    // 也就没有「不强制」的调用方）。后台 refetch 靠 watcher 自己的 `dirty` 闸门挡。
     fetchWeComDailyConfigMock.mockResolvedValue({ ...CONFIG, version: 4, upcoming_days: 7 });
-    await store.query.reloadConfig(false);
+    await qc.invalidateQueries({ queryKey: qk.wecomDailyConfig() });
     await tick();
 
     expect(store.query.form.upcoming_days).toBe(30);

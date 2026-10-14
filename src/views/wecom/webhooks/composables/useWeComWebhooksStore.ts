@@ -84,8 +84,6 @@ export const useWeComWebhooksStore = defineStore('wecom-webhooks', () => {
    *  true」的唯一索引，推哪条通道由每日总结配置里的 `webhook_id` 决定。所以它既不 gate 任何
    *  写操作、也不进任何请求体。 */
   const hasDefault = computed(() => webhooks.value.some((w) => w.is_default));
-  /** 一个通道都没有（每日总结页据此弹「没有可用的推送通道」告警，本页据此渲染引导空态）。 */
-  const empty = computed(() => webhooks.value.length === 0);
   const listErrorText = computed<string | null>(() => {
     const e = webhooksQuery.error.value;
     return e ? weComWebhookErrorText(e, 'Webhook 列表加载失败') : null;
@@ -311,7 +309,6 @@ export const useWeComWebhooksStore = defineStore('wecom-webhooks', () => {
   const query = {
     webhooks,
     hasDefault,
-    empty,
     loading,
     listErrorText,
     /** 开 enabled 闸门（壳的 onMounted 调）。放在 query 切片里：它是「让这条 query 开跑」的

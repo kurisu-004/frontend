@@ -71,7 +71,14 @@
             <span v-else class="cell-muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column prop="updated_at" label="更新时间" width="180" />
+        <!-- ⚠️ 走 `formatNaiveDateTime` 而不是裸 `prop`：后端 `updated_at` 是 naive 字符串，
+             裸渲染会把秒/小数原样怼进这一格，与同域日志表的切片口径不一致（同一页两张表两种
+             时间格式）。切片函数的取舍见 `views/wecom/utils/naiveDateTime.ts`。 -->
+        <el-table-column label="更新时间" width="180">
+          <template #default="{ row }">
+            <span>{{ formatNaiveDateTime(row.updated_at) }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="280" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="store.dialogs.openEdit(row as WeComWebhookData)">
@@ -141,6 +148,7 @@ import { Refresh } from '@element-plus/icons-vue';
 import WeComWebhookDialog from './WeComWebhookDialog.vue';
 import { useWeComWebhooksStore } from './composables/useWeComWebhooksStore';
 import type { WeComWebhookData, WeComWebhookFormModel } from './weComWebhookSchema';
+import { formatNaiveDateTime } from '../utils/naiveDateTime';
 
 // 不变量 #1：壳 setup 顶部首调 store（$dispose 绑到首个创建它的组件）。
 const store = useWeComWebhooksStore();
