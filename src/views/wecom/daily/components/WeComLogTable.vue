@@ -119,9 +119,9 @@
 // 2026-10-17 新建：见文件头。0 业务状态 —— 行集是 prop。
 
 import { computed } from 'vue';
+import { formatNaiveDateTime } from '@/utils/naiveDateTime';
 import type { WeComDailyLogData } from '../weComDailySchema';
 import type { WeComDailyTriggerSource } from '@/types/wecom';
-import { formatNaiveDateTime } from '../../utils/naiveDateTime';
 import { upcomingDaysLabel } from '../utils/upcomingDaysLabel';
 
 // `loading` 走 withDefaults 而不是裸 `loading?: boolean`：EP 的 `v-loading` 指令值类型是

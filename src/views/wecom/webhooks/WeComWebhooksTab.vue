@@ -79,7 +79,7 @@
         <!-- ⚠️ 走 `formatNaiveDateTime` 而不是裸 `prop`：后端 `updated_at` 是 naive 字符串，
              裸渲染会把秒/小数原样怼进这一格，与同域日志表（本 tab 与「每日总结」tab 各一张表）
              的切片口径不一致（切 tab 时两处时间格式跳变）。切片函数的取舍见
-             `views/wecom/utils/naiveDateTime.ts`。 -->
+             `utils/naiveDateTime.ts`。 -->
         <el-table-column label="更新时间" width="180">
           <template #default="{ row }">
             <span>{{ formatNaiveDateTime(row.updated_at) }}</span>
@@ -150,7 +150,7 @@ import { Refresh } from '@element-plus/icons-vue';
 import WeComWebhookDialog from './WeComWebhookDialog.vue';
 import { useWeComWebhooksStore } from './composables/useWeComWebhooksStore';
 import type { WeComWebhookData, WeComWebhookFormModel } from './weComWebhookSchema';
-import { formatNaiveDateTime } from '../utils/naiveDateTime';
+import { formatNaiveDateTime } from '@/utils/naiveDateTime';
 
 // 不变量 #1：壳 setup 顶部首调 store（$dispose 绑到首个创建它的组件）。
 const store = useWeComWebhooksStore();

@@ -75,6 +75,7 @@
 //
 // 2026-10-13 新建：见文件头。0 业务状态 —— 行集是 prop。
 
+import { formatNaiveDateTime } from '@/utils/naiveDateTime';
 import type { MailDigestLogData } from '../mailDigestSchema';
 import type { MailDigestTriggerSource } from '@/types/mailDigest';
 
@@ -103,15 +104,6 @@ function triggerLabel(source: unknown): string {
 
 function triggerTagType(source: unknown): 'primary' | 'warning' {
   return source === 'SCHEDULED' ? 'primary' : 'warning';
-}
-
-/** 后端 `sent_at` 是 **naive** timestamp（无时区后缀，Asia/Shanghai 墙钟）。
- *  不能走 `utils/date.ts::formatDateTime` —— 那个函数 `new Date()` 后按 UTC 输出，会把
- *  墙钟时间整体平移 8 小时。这里只做字符串切片（照 usersColumnDefs.ts 的同款做法）。 */
-function formatNaiveDateTime(raw: string | null): string {
-  if (!raw) return '-';
-  const normalized = raw.replace('T', ' ');
-  return normalized.length >= 16 ? normalized.slice(0, 16) : normalized;
 }
 
 /** TO + CC 合并成一格显示（CC 非空时补 `（抄送: …）`）。整串进 `title`，

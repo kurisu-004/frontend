@@ -110,11 +110,11 @@ describe('WeComWebhooksTab.vue — 弹窗关闭权与生命周期', () => {
 });
 
 describe('WeComWebhooksTab.vue — 「更新时间」列与同域日志表同一套时间口径', () => {
-  it('D1：走域内共用的 `formatNaiveDateTime`，不裸渲染后端 naive 字符串', () => {
+  it('D1：走跨域共用的 `formatNaiveDateTime`，不裸渲染后端 naive 字符串', () => {
     // ⚠️ **守卫信号**：把这一格退回 `<el-table-column prop="updated_at" …>` 时本用例立刻红。
     // 裸渲染会把秒/小数原样怼进格子，而同域日志表（本 tab 与「每日总结」tab 各一张表）的
     // 「时间」列是切过的 ⇒ 切 tab 时两处时间格式跳变，用户没法一眼判断两处是不是同一次操作。
-    expect(CODE).toMatch(/import \{ formatNaiveDateTime \} from '\.\.\/utils\/naiveDateTime'/);
+    expect(CODE).toMatch(/import \{ formatNaiveDateTime \} from '@\/utils\/naiveDateTime'/);
     expect(CODE).toMatch(/\{\{ formatNaiveDateTime\(row\.updated_at\) \}\}/);
     const tableBlock = CODE.match(/<el-table[\s\S]*?<\/el-table>/)?.[0] ?? '';
     expect(tableBlock).not.toMatch(/prop="updated_at"/);

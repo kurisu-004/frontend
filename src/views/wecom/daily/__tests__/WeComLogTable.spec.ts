@@ -171,12 +171,11 @@ describe('WeComLogTable.vue — 刻意不做的东西', () => {
     expect(CODE).not.toMatch(/ColumnVisibilityPopover|vuedraggable|Sortable/);
   });
 
-  it('N4：naive timestamp 走**域内共用的字符串切片**，不走 utils/date.ts（会整体平移 8 小时）', () => {
-    // 切片函数已提到 `views/wecom/utils/naiveDateTime.ts`（与「Webhook 配置」tab 那张表共用一份：
-    // 一处 `2026-10-17 08:30:00`、另一处 `2026-10-17 08:30` 没法让人判断两处是不是同一次操作）。
-    expect(CODE).toMatch(
-      /import \{ formatNaiveDateTime \} from '\.\.\/\.\.\/utils\/naiveDateTime'/,
-    );
+  it('N4：naive timestamp 走**跨域共用的字符串切片**，不走 utils/date.ts（会整体平移 8 小时）', () => {
+    // 切片函数是 `utils/naiveDateTime.ts` 全仓唯一一份（与「Webhook 配置」tab 那张表、
+    // 账号管理的「最后登录」列共用：一处 `2026-10-17 08:30:00`、另一处 `2026-10-17 08:30`
+    // 没法让人判断两处是不是同一次操作）。
+    expect(CODE).toMatch(/import \{ formatNaiveDateTime \} from '@\/utils\/naiveDateTime'/);
     expect(CODE).not.toMatch(/from '@\/utils\/date'/);
     // `prop` 仍是列的锚（EP 的 row-key / 排序域），但**单元格渲染必须过切片** —— 只留
     // `prop` 不给插槽，EP 就直接渲染原始字符串，秒与小数会原样怼进格子。

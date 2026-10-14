@@ -1,13 +1,13 @@
-// src/views/wecom/utils/__tests__/naiveDateTime.spec.ts
+// src/utils/__tests__/naiveDateTime.spec.ts
 //
-// 2026-10-17 新建：`formatNaiveDateTime` 的口径守卫。两条不变量：
+// 2026-10-21 迁入（原先在 `views/wecom/utils/__tests__/naiveDateTime.spec.ts`）：naive 时间
+// 切片的口径守卫。两条不变量：
 //
 //  1. **不做时区平移**：后端这些列下发的是**不带时区后缀**的 naive 字符串（Asia/Shanghai
 //     墙钟），显示什么就切什么。踩过的坑是走 `utils/date.ts::formatDateTime` —— 那个函数
 //     `new Date()` 后按 UTC 输出，`08:30` 会变成 `00:30`，整整 8 小时。
-//  2. **同域两张表共用一份**：日志表的「时间」列与 Webhook 列表的「更新时间」列渲染的是同一种
-//     字段（两张表分属 `WeComCenter` 的两个 tab）。两种格式（一边带秒一边不带）没法让人判断两处
-//     是不是同一次操作。
+//  2. **四个消费点共用一份**（账号管理「最后登录」/ 邮件发送历史 / 每日总结发送历史 /
+//     Webhook 列表「更新时间」）。格式不同时，切 tab / 切页面时用户没法判断两处是不是同一次操作。
 
 import { describe, expect, it } from 'vitest';
 import { formatNaiveDateTime } from '../naiveDateTime';
