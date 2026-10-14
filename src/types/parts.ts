@@ -326,10 +326,19 @@ export type PartEventType =
    * - `RETURNED_TO_SHELF` 是 **Rust 侧现行**写侧（`prod::scan::service::worker_scan`
    *   的 `event_type: "RETURNED_TO_SHELF"`）。
    * 同一个词今天还有第三重身份：**扫码台的 action 字面量**仍是 `RETURNED`
-   * （`SCAN_EVENT_TYPE_OPTIONS` 与后端 `scan_out.action` 都用它），action 层
-   * 与 event_type 层刻意不同名，不要「统一」成同一个。
+   *  （`SCAN_EVENT_TYPE_OPTIONS` 与后端 `scan_out.action` 都用它），action 层
+   *  与 event_type 层刻意不同名，不要「统一」成同一个。
+   *
+   *  ⚠️ 仓内中文「归还」= 报工台语境下的「放回」，与后端口径一致：后端 `RETURNED_TO_SHELF`
+   *  指的是**工人把批次放回生产架**（顺链推进 / 送检都走它），不是「归还给谁」的语义。
+   *  中文与既有 `RETURNED: '归还'` 逐字一致即属刻意（Python 时代的老文案不能改），
+   *  不是漏译。
    */
   | 'RETURNED_TO_SHELF'
+  /**
+   * ⚠️ 易混③：`SENT_TO_INSPECTION` 与 `INSPECTED` **是两条不同的事件**，必须靠
+   * label 里的主语区分（`PART_EVENT_LABEL` 上有逐条说明），**不能靠 tag**。
+   */
   | 'SENT_TO_INSPECTION'
   | 'TAKEN_FROM_POOL'
   | 'MOVED'
@@ -346,7 +355,8 @@ export type PartEventType =
   | 'SOFT_DELETED'
   | 'TRANSFERRED'
   // 2026-10-17 新增事件类型（后端同批上线）：强制送检。与 `SENT_TO_INSPECTION`
-  //（工人主动送检）tag 同为 warning，中文以「强制」二字区分。
+  //（工人主动送检）tag 不同（那条 primary、这条 warning）、中文也不同（「工人送检」/
+  // 「强制送检」），两处差异都刻意保留。
   | 'FORCED_SENT_TO_INSPECTION';
 
 export const PART_EVENT_LABEL: Record<PartEventType, string> = {
@@ -372,8 +382,26 @@ export const PART_EVENT_LABEL: Record<PartEventType, string> = {
   SPLIT: '批次拆分',
   RECALLED: '召回',
   // ===== 2026-10-17 补齐的 12 条（见 PartEventType 上的同批注释）=====
+  // ⚠️「归还」= 报工台语境下的「放回」（工人把批次放回生产架），后端口径如此；
+  // 与 Python 时代那条 `RETURNED: '归还'` 逐字相同属刻意，不是漏译。
   RETURNED_TO_SHELF: '归还',
-  SENT_TO_INSPECTION: '送检',
+  /**
+   * ⚠️ **为什么这条带主语、上面那条 `INSPECTED` 不带**（review 第 1 轮 MINOR-1）：
+   * 三条「送检」是**三个不同的后端写侧**，其中两条会同框出现在同一条时间线上：
+   *   · `SENT_TO_INSPECTION` —— 工人自己在**报工台**主动送检（`prod::scan::worker_scan`），
+   *     **只有这一支计工人工时**（事件带 `worker_id`）；
+   *   · `INSPECTED` —— 品检员 / 管理员在**待品检页**点送检（`prod::batch::to_inspection_core`），
+   *     `worker_id` 为空、不计工时；
+   *   · `FORCED_SENT_TO_INSPECTION` —— 品检员代工人在同一端点传 `force=true`，也不计工时。
+   * 典型路径：工人报工台送检 → 品检打回（`INSPECTION_FAILED`）→ 回生产 → 品检页再送检，
+   * 于是 `SENT_TO_INSPECTION` 与 `INSPECTED` 在同一条时间线上并排出现。
+   *
+   * 只改 **tag** 错不开：两条都取 `primary`；换成 `warning` 又会与
+   * `FORCED_SENT_TO_INSPECTION` 撞色，等于把问题挪位置。**给中文加主语是唯一能同时
+   * 解掉文案与配色的改法** —— `INSPECTED: '送检'` / `FORCED_SENT_TO_INSPECTION: '强制送检'`
+   * 是既有文案，一个字都不动。
+   */
+  SENT_TO_INSPECTION: '工人送检',
   TAKEN_FROM_POOL: '队列取件',
   MOVED: '队列移动',
   BATCH_PASSED: '品检通过',
@@ -417,6 +445,8 @@ export const PART_EVENT_TAG_TYPE: Record<
   // tag 取色口径：正向推进 = success、主流程动作 = primary / info、
   // 需要人介入的强推 / 接管 = warning、不可逆的负面终态 = danger。
   RETURNED_TO_SHELF: 'info',
+  // ⚠️ 与 `INSPECTED` **同为 primary 是刻意的**：两条靠中文主语区分（「工人送检」vs
+  // 「送检」），不是靠配色。理由见 PART_EVENT_LABEL.SENT_TO_INSPECTION 上的说明。
   SENT_TO_INSPECTION: 'primary',
   TAKEN_FROM_POOL: 'warning',
   MOVED: 'info',

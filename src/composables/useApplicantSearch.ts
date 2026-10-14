@@ -83,8 +83,8 @@ export function useApplicantSearch(opts: UseApplicantSearchOptions): UseApplican
     } catch {
       // 错误由 ElMessage 提示
       // 2026-10-17 修复：必须连 `rootCustomerId` 一起清。原实现只清 applicants，
-      // 而 rootCustomerId 早在 fetch **之前**就被赋成 rootId（L76 早于 try）⇒
-      // 「加载失败」会留下一份「rootCustomerId=X + applicants=[]」的**假权威缓存**：
+      // 而 rootCustomerId 早在 `await searchApplicants(...)` **之前**那一步就被赋成了
+      // rootId ⇒ 「加载失败」会留下一份「rootCustomerId=X + applicants=[]」的**假权威缓存**：
       //   - 下次切到**同一**客户时，`rootCustomerId.value === rootId && length > 0`
       //     这道守卫因 length 为 0 而放行重拉 —— 只是白拉一次；
       //   - 真正有害的是消费方：`submitStagedEntries` 用

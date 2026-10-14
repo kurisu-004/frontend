@@ -507,9 +507,18 @@ function sendToggleLabel(row: SendGateRow): string {
 // ============ 行内送检面板 ============
 /** 展开态与面板内的数量按 batch_id 记：同一个批次反复送检不该重填数量。
  *  key 不存在 = 面板收起（渲染期只读，不在这里建对象）。
- *  `force` 是**这一行的提交模式**（普通 / 强制），由打开面板时那一行的 location 决定
- *  —— 两个模式互斥（见 canSendToInspection / canForceSendToInspection），不需要第二份
- *  状态，也不会出现「面板开着但模式漂了」。 */
+ *  `force` 是**这一行的提交模式**（普通 / 强制），在**打开面板那一刻**按该行的 location
+ *  取一次快照，之后不再随行数据变 —— 两个模式互斥（见 canSendToInspection /
+ *  canForceSendToInspection），所以不需要第二份状态。
+ *
+ *  ⚠️ 但「模式不会漂」只在**渲染判据**这一层成立：按钮的配色 / 文案由 `isForceSend(row)`
+ *  实时按行的**当前** location 算，而提交用的 `form.force` 是上面那份快照。面板开着时若
+ *  后台 `resyncScanTree` 把该行 location 刷成别的值（例：WORKER → PRODUCTION_SHELF），
+ *  折叠按钮会显示「送检 / primary」而确认键仍写「确认强制送检」并仍发 `force: true`。
+ *  **后果仅是文案不一致、无害**，且事件类型也不受影响：后端 `to_inspection_core` 只在
+ *  `location == WORKER` 那一支读 `force`（`PRODUCTION_SHELF` 分支直接放行），事件写
+ *  `FORCED_SENT_TO_INSPECTION` 还是 `INSPECTED` 由服务端自己的 `forced` 判据决定 ——
+ *  这个多出来的 flag 不会被误记成一次强制送检。 */
 const sendForms = reactive<Record<string, { quantity: number | undefined; force: boolean }>>({});
 const sendSubmittingId = ref<string | null>(null);
 
