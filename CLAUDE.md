@@ -93,6 +93,26 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 
 **statistics 域的 schema 归位（2026-10-12）**：`overviewOutSchema` / `workerStatsListOutSchema` / `workerDetailOutSchema` 三条守门 schema 都在 `src/views/statistics/composables/statisticsSchema.ts`，与三个 query hook 同居（`src/composables/queries/schemas.ts` 顶部留了一段**指针注释**说明去向）。**不做 re-export**：再导一层没有任何消费方 —— api 层只用 `import type` 取 `*Data` 派生类型标注返回类型，消费侧的组件直接从域内路径 import；多一个中转出口只会让读代码的人多一次「该 import 哪个路径」的判断，且迁进迁出时多一个要同步的地方。对应用例也一并搬到域内（`views/statistics/composables/__tests__/statisticsSchema.spec.ts`），api 层只留「不 parse」的负向守卫（`src/api/__tests__/statistics.spec.ts`）—— 这两条必须成对存在：缺 api 层那条，把 parse 搬回 api 层是零测试信号；缺 query hook 那条（`useStatisticsWorkersQuery.spec.ts` 的坏响应用例），把 parse 从 queryFn 删掉也是零测试信号。
 
+### mail / wecom：刻意的平行拷贝（2026-10-21 登记）
+
+`views/mail/`（`digest/` 交期汇总定时配置 + 发送历史、`accounts/` 邮箱账号）与 `views/wecom/`（`daily/` 每日总结定时配置 + 发送历史、`webhooks/` 推送通道）是**刻意的平行拷贝**：两侧都是「企业配置表单 + 日志表」这一套形态，store / query hook / 守门 schema / errorText / 列表壳逐段同构。**没有**把「配置表单域」抽象成模板层是有意的（详见下方「不要上提成域模板」）。
+
+- **改任一侧的 store / 守门 schema / errorText / query hook，必须同步看另一侧**。这是本节存在的唯一理由：平行拷贝的形态下，「改一处忘另一处」不产生任何报错，只在两页表现不一致。下面那张表是 review 时区分「刻意分叉」与「忘了改」的判据 —— **表里逐条列出来的才是允许不同的，表里没列的差异按漂移处理**。
+
+| # | 刻意分叉点 | mail 一侧 | wecom 一侧 |
+|---|---|---|---|
+| ① | **失效图** | `qk.mailDigestPrefix` 覆盖 config + meta + logs 三键，保存后一把全刷 | `qk.wecomDailyLogs` **刻意不**挂 `qk.wecomDailyPrefix` 下，两者互不隶属：保存只失效 prefix（config + meta），发送成功与失败都单独失效 logs 那条精确键。理由写在 `composables/queries/keys.ts` 的 wecom-daily 段（保存配置不改变任何一条历史行；翻页不该连带刷 config + meta） |
+| ② | **表单字段集几乎不重叠** | `mailDigestConfigFields` 14 个键，**独有 6 个**：`recipients` / `cc_recipients` / `include_overdue` / `include_upcoming` / `visible_columns` / `sender_account_id` | `weComDailyConfigFields` 16 个键，**独有 8 个**：`webhook_id` / `worker_metric` / `worker_top_n` / `max_chunks` / `include_overview` / `include_delivery` / `include_orders` / `include_workers`。**共有 8 个**：`enabled` / `frequency` / `send_hour` / `send_minute` / `weekday` / `day_of_month` / `upcoming_days` / `subject_template` |
+| ③ | **store 写失败的码分支数** | `useMailDigestStore::handleWriteError` 3 条（40901 强制重拉 + `INVALID_RECIPIENT` / `INVALID_FREQUENCY_COMBO` 字段聚焦）；`useMailAccountsStore::handleWriteError` 0 条（只有「失败也失效」+ 查表文案） | `useWeComDailyStore::handleWriteError` 2 条（40901 + `CONFIG_INVALID`）；`useWeComWebhooksStore::handleWriteError` 1 条（40901） |
+| ④ | **meta 下发的取值范围** | 只有一段：`DEFAULT_UPCOMING_DAYS_RANGE` + store 的 `upcomingDaysRange` | 三段：`DEFAULT_WECOM_DAILY_RANGES` / `WeComDailyRanges` + store 的 `ranges`（`upcoming_days` / `worker_top_n` / `max_chunks`） |
+| ⑤ | **日志行 VO 形态** | `mailDigestLogSchema` 是 `mailDigestSendResultSchema` 的**别名**（日志行与 `/send` 响应同体） | `weComDailyLogSchema` 是**独立 object**（内容口径随配置、快照字段另有其名） |
+
+- **`reloadConfig` 的签名不同是刻意的，不要对齐**：mail 的 `useMailDigestStore::query.reloadConfig(force: boolean)` 在切片上暴露、`force=false` 是它自己 spec 用的「不强制重拉」探针；wecom 的 `useWeComDailyStore::reloadConfig()` 是**私有**、恒 force、刻意不暴露（后台 refetch 由 watcher 自己的 `dirty` 闸门挡，不经过它）。两侧 spec 的 H2 用例因此走了不同触发手段（mail 直调 store 的不强制重拉、wecom 走 `invalidateQueries` 的真实后台 refetch）—— 强行给 wecom 补形参会把那条更强的守卫降级成「测 store 私有路径」。
+- **四个错误码段相邻，挪段要四个一起看**：`MAIL_DIGEST_ERROR_CODES`（21701..21705）/ `MAIL_ACCOUNT_ERROR_CODES`（21704 / 21706..21708）/ `WECOM_DAILY_ERROR_CODES`（21801 / 21802 / 21804 / 21805）/ `WECOM_WEBHOOK_ERROR_CODES`（21803 / 21806..21808）。其中 **21704 与 21804 是两域共用的码**（后端同一个 `BIZ_*_CONFIG_INVALID`），两侧查表顺序不同、措辞必须两边都说得通。
+- **字段错误聚合器四份同款、刻意不收敛**：`toMailDigestFieldErrors` / `toMailAccountFieldErrors` / `toWeComDailyFieldErrors` / `toWeComWebhookFieldErrors` 的循环体逐字相同，但每个的返回类型都绑在**自己那份 schema 的字段并集**（`MailDigestFormField` / `WeComDailyFormField` …）上。抽成 `<T>` 泛型或一个 `utils/` 纯函数都会把这条编译期防线降级成运行时的 `as` 断言 —— 「schema 声明了字段但 FormField 联合里漏了」会从编译期错误变成页面上一个不亮的红字。仓内另有三份同款聚合器（`views/auth/loginSchema.ts` 与 `views/users/usersSchema.ts`、`views/iam/roles/composables/rbacSchema.ts`），同样各持一份。
+- **naive 时间切片只有一份**（2026-10-21 收敛）：四个消费点（账号管理「最后登录」列、交期汇总邮件与每日总结的发送历史「时间」列、Webhook 列表「更新时间」列）统一走 `src/utils/naiveDateTime.ts`。**别再拷一份到域内** —— 它与 `utils/date.ts::formatDateTime` 不是同一个东西（后者按 UTC 输出，会把东八区墙钟平移 8 小时；空值标记也不同，`-` vs `—`）。
+- **不要上提成「配置表单域模板」**：两域的失效图已分叉（①）、表单字段集几乎不重叠（②）、错误分支数与 range 段数都不同（③④）—— 抽出来的公共层只能是一堆泛型与 `as`，把上面几条分叉藏进形参里。真要复用，复用**纯函数**（如 `utils/naiveDateTime.ts`）而不是 store / schema 的形状。
+
 ### 送货单打印模板：两套版式与司机流程（2026-10-18 打印侧接线）
 
 - **模板来源收口成一种**：`TemplateSource` 只剩 `api`（后端按**一级客户**绑定的那份）+ 预留的 `url`。管理员在「模板编辑」页（`/print-templates`，视图 `views/printTemplates/`）上传 / 替换 / 删除；打印对话框打开时按 `note.customer_id`（**它就是一级客户 id**）调 `GET /print-templates/resolve`，命中即取字节（`GET /print-templates/{id}/content`，带鉴权的 axios 端点，后端**没有** `content_url` 字段，别拼相对路径）。**打印页不再有上传入口，也不再逐格校验**。
