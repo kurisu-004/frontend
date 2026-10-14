@@ -68,15 +68,27 @@ const { ElMessage } = await import('element-plus');
 /** 内置送货单模板（逐格校验通过的那一份）的字节。 */
 const BUILTIN = readFileSync('templates/delivery_note_fala.xlsx');
 
+/** 内置检具版模板（百路达）字节 —— 第二套版式，判据见 deliveryNoteTemplateContract.ts。 */
+const BUILTIN_GAUGE = readFileSync('templates/delivery_note_gauge_bailuda.xlsx');
+
 /** 精确长度的 ArrayBuffer（不能用 `BUILTIN.buffer`：那是 node 8MB 池化缓冲的整段）。 */
-function builtinArrayBuffer(): ArrayBuffer {
-  const exact = new Uint8Array(BUILTIN.byteLength);
-  exact.set(BUILTIN);
+function exactBuffer(src: Uint8Array): ArrayBuffer {
+  const exact = new Uint8Array(src.byteLength);
+  exact.set(src);
   return exact.buffer as ArrayBuffer;
+}
+
+function builtinArrayBuffer(): ArrayBuffer {
+  return exactBuffer(BUILTIN);
 }
 
 function builtinFile(name = 'delivery_note_fala.xlsx'): File {
   return new File([builtinArrayBuffer()], name, { type: '' });
+}
+
+/** 检具版模板文件（百路达那份），走磁盘原件。 */
+function gaugeFile(name = 'delivery_note_gauge_bailuda.xlsx'): File {
+  return new File([exactBuffer(BUILTIN_GAUGE)], name, { type: '' });
 }
 
 /** 改坏 C3（列位错位）的模板：走 hucre 真实 round-trip，产出的字节是真 xlsx。 */
@@ -85,9 +97,24 @@ async function brokenTemplateFile(): Promise<File> {
   const wb = await openXlsx(new Uint8Array(BUILTIN));
   wb.sheets[0]!.rows[2]![2] = '{{L2_customer}}';
   const bytes = await saveXlsx(wb);
-  const exact = new Uint8Array(bytes.byteLength);
-  exact.set(bytes);
-  return new File([exact.buffer as ArrayBuffer], 'broken.xlsx', { type: '' });
+  return new File([exactBuffer(bytes)], 'broken.xlsx', { type: '' });
+}
+
+/**
+ * 判不出**任何**一套版式的模板：把探测用的四个锚点格全抹掉（B3 / B5 / F15 / I2），
+ * 走 hucre 真实 round-trip。它仍是一份合法的 xlsx —— 后端只认「是 ZIP」，这就是必须在前端
+ * 拦住的那类文件（拒收理由见 store 的 `uploadChecked`）。
+ */
+async function unrecognizableTemplateFile(): Promise<File> {
+  const { openXlsx, saveXlsx } = await import('hucre');
+  const wb = await openXlsx(new Uint8Array(BUILTIN));
+  const sheet = wb.sheets[0]!;
+  sheet.rows[2]![1] = '';
+  sheet.rows[4]![1] = '';
+  sheet.rows[14]![5] = '';
+  sheet.rows[1]![8] = '';
+  const bytes = await saveXlsx(wb);
+  return new File([exactBuffer(bytes)], 'unknown-layout.xlsx', { type: '' });
 }
 
 /**
@@ -187,6 +214,32 @@ describe('usePrintTemplatesStore 上传前的两道闸（核心判据）', () =>
     expect(uploadMock.mock.calls[0]![0]).toBe('C1');
     expect((uploadMock.mock.calls[0]![1] as File).name).toBe('delivery_note_fala.xlsx');
     expect(store.upload.diffs).toEqual([]);
+    expect(store.upload.busy).toBe(false);
+  });
+
+  it('G5：检具版模板（百路达）⇒ 校验通过、发恰好一次请求（版式不是零件版就不能被拒）', async () => {
+    // ⚠️ 这条守的是「上传闸先探版式、再按该版式逐格校验」：探测结果若是零件版，
+    // 检具模板会在 C5 / I2 上报出几十条差异、被永远拒收（管理员永远传不进检具模板）。
+    const store = usePrintTemplatesStore();
+    const ok = await store.upload.run(gaugeFile(), 'C1');
+
+    expect(ok).toBe(true);
+    expect(uploadMock).toHaveBeenCalledTimes(1);
+    expect(store.upload.diffs).toEqual([]);
+    expect(errorCalls()).toHaveLength(0);
+  });
+
+  it('G6：判不出版式的模板 ⇒ **零请求** + 提示说清「两套版式都不匹配」', async () => {
+    // 后端 `kind` 恒是 `DELIVERY_TEMPLATE`、不带版式信息 ⇒ 「是哪一套版式」只能由前端探测；
+    // 探测不出来就没有「该按哪套判据校验」这回事，只能拒收并把理由说全。
+    const store = usePrintTemplatesStore();
+    const ok = await store.upload.run(await unrecognizableTemplateFile(), 'C1');
+
+    expect(ok).toBe(false);
+    expect(uploadMock).not.toHaveBeenCalled();
+    expect(store.upload.diffs.join('；')).toContain('既不匹配零件版');
+    expect(store.upload.diffs.join('；')).toContain('检具版');
+    expect(String(errorCalls()[0]![0])).toContain('版式');
     expect(store.upload.busy).toBe(false);
   });
 });

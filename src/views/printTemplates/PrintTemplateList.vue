@@ -130,7 +130,7 @@
               下载
             </el-button>
             <el-popconfirm
-              title="确认删除这份模板？删除后该一级客户打印送货单时需要手动选择模板。"
+              title="确认删除这份模板？删除后该一级客户打印送货单时会提示未绑定模板。"
               width="340"
               confirm-button-text="确认删除"
               cancel-button-text="取消"

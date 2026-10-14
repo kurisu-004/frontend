@@ -16,6 +16,11 @@
 // 若先落库，打印对话框打开时会被自动选用 → 导出的送货单在客户签字那页就是废纸。把闸门前移到
 // 入库之前，代价只是用户当场看到差异，收益是库里永远只有「能打印」的模板。
 //
+// ⚠️ **版式（零件版 / 检具版）先探测、再按该版式逐格校验**：后端模板行的 `kind` 恒是
+// `DELIVERY_TEMPLATE`、不带版式信息，所以「这份文件是哪一套版式」只能由前端从模板结构判定
+// （`detectTemplateContract`）。判不出版式就直接拒收 —— 不知道该按哪套判据校验的文件没有
+// 「逐格校验通过」这个概念。
+//
 // ⚠️ **失败也失效**：上传失败与软删失败都刷新本域列表 —— 失败那一刻说明本端副本**已经不等于
 // 真源**（21109 / 21102 / 40901 都是「你看到的不是当前真相」的信号），理由同
 // `useMailAccountsStore::handleWriteError`。
@@ -33,7 +38,10 @@ import {
 } from '@/api/printTemplates';
 import { qk } from '@/composables/queries/keys';
 import { triggerBrowserDownload } from '@/utils/download';
-import { assertTemplateMatches } from '@/views/com/delivery/utils/deliveryNoteTemplate';
+import {
+  assertTemplateMatches,
+  detectTemplateContract,
+} from '@/views/com/delivery/utils/deliveryNoteTemplate';
 import { XLSX_MIME } from '@/views/com/delivery/utils/deliveryNoteTemplateContract';
 import { PRINT_TEMPLATE_ACCEPT_EXT, type PrintTemplateData } from '../printTemplateSchema';
 import { usePrintTemplateListQuery } from './usePrintTemplateListQuery';
@@ -109,8 +117,9 @@ export const usePrintTemplatesStore = defineStore('print-templates', () => {
   /**
    * 上传前的逐格校验结果（**空数组 = 通过 / 还没校验过**）。
    *
-   * 差异原文逐条摆到页面上（`.upload-diffs`），用户据此看出自己改错了哪一格 —— 与打印对话框
-   * 那条提示共用 `assertTemplateMatches` 的输出，措辞自然一致。
+   * 差异原文逐条摆到页面上（`.upload-diffs`），用户据此看出自己改错了哪一格。判不出版式的
+   * 那一支也写进这里（见 `uploadChecked`）：它同样意味着「这份文件不该入库」，走同一条
+   * 可见通道比只弹一条转瞬即逝的 toast 可靠。
    */
   const uploadDiffs = ref<string[]>([]);
   /** 上传 / 校验中的整体 loading（表格与按钮共用一个，避免两个转圈互相盖住）。 */
@@ -162,19 +171,36 @@ export const usePrintTemplatesStore = defineStore('print-templates', () => {
   /**
    * `upload` 的真正实现（**busy 的 finally 由调用方管**，见上面那层）。
    *
-   * ⚠️ 两段 try/catch 是刻意的分界：第二段只包「读字节 + 解 zip + 逐格比对」，第三段的
+   * ⚠️ 两段 try/catch 是刻意的分界：第二段只包「读字节 + 解 zip + 探版式 + 逐格比对」，第三段的
    * 请求失败**不允许**进第二段那个 catch（理由见 `upload` 的 doc）。
+   *
+   * ⚠️ **「上传逐格校验、打印只探测」是两件事**（2026-10-18）：这里（上传闸）是全仓**唯一**
+   * 能在**入库前**拦住坏模板的时机 —— 打印对话框打开时那份模板已经过了这道闸，它只做
+   * `detectTemplateContract` 的锚点探测（O(1) 二选一，判不出就禁导出），不做逐格校验。
+   * 反过来把逐格校验搬到打印页也拦不住任何新东西，只会让「管理员在 Excel 里改了一格」变成
+   * 要联系管理员才能打印。所以「逐条差异」这份清单**必须**留在这里。
    */
   async function uploadChecked(file: File, targetCustomerId: string): Promise<boolean> {
-    // ---- 第二道闸：逐格结构校验。⚠️ 这一段单独一个 try/catch，**只有它**归「模板解析
-    // 失败」—— 见上方 doc 说的「两段失败必须分开归因」。
+    // ---- 第二道闸：先探版式、再按该版式逐格比对。⚠️ 这一段单独一个 try/catch，**只有它**归
+    // 「模板解析失败」—— 见上方 doc 说的「两段失败必须分开归因」。
     let diffs: string[];
     try {
       // ⚠️ 校验本身不能省 —— 后端只认「是 xlsx 且是 ZIP」，一份列位错位的模板在库里是完全
       // 合法的，坏在打印那一刻才发现已经晚了。
       const bytes = new Uint8Array(await file.arrayBuffer());
       const { openXlsx } = await import('hucre');
-      diffs = await assertTemplateMatches(await openXlsx(bytes));
+      const wb = await openXlsx(bytes);
+      // 判不出版式 ⇒ 连「该按哪套逐格判据校验」都不知道，直接拒收（后端 `kind` 恒是
+      // `DELIVERY_TEMPLATE`、不带版式信息，版式只能由前端从模板结构判定）。
+      const contract = detectTemplateContract(wb);
+      if (!contract) {
+        uploadDiffs.value = [
+          '这份模板既不匹配零件版、也不匹配检具版（模板编辑页只支持这两套版式）',
+        ];
+        ElMessage.error('模板版式不认识，已取消上传');
+        return false;
+      }
+      diffs = await assertTemplateMatches(wb, contract);
     } catch (e) {
       uploadDiffs.value = [`模板解析失败：${(e as Error).message}`];
       ElMessage.error('模板解析失败，已取消上传');
@@ -250,8 +276,8 @@ export const usePrintTemplatesStore = defineStore('print-templates', () => {
 
   /** 软删。调用方（壳的 `el-popconfirm`）负责二次确认。
    *
-   *  ⚠️ 删除后**该一级客户就没有模板了**：打印对话框会自动回落到「请手动选择」，这是产品
-   *  拍板的形态（手动上传兜底不撤），提示文案见打印对话框的 `exportHint`。 */
+   *  ⚠️ 删除后**该一级客户就没有模板了**：打印对话框会自动选用失败，按钮禁用并提示去
+   *  「模板编辑」页重新上传（打印页没有别的兜底入口），提示文案见对话框的 `exportHint`。 */
   async function remove(row: PrintTemplateData): Promise<void> {
     deletingRowId.value = row.id;
     try {
