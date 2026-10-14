@@ -853,6 +853,22 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
           applicantSearch.applicants.value = [...applicantSearch.applicants.value, applicant];
         }
       } catch (e) {
+        // ⚠️ **已知缺口，不是「有意设计」**（2026-10-17 登记）：这里只
+        // `console.warn`，**用户零反馈** —— 提交照常成功、工单照常建出来，
+        // 界面上不弹任何提示、该行也不留任何标记。**允许**这么降级的根据就是上面
+        // (b) 那条：后端 `PartBatchCreateItem` 没有 `applicant_id` 字段，
+        // `applicant_name` 是自由文本直落 `t_part`，所以这一行拿不到 id **确实
+        // 不影响建单**；为它中止整批才是真 bug。
+        //
+        // 但**它仍然是缺口**，别把「不影响建单」读成「没问题」：① 生产环境
+        // `console.warn` 等于无人看见；② 将来申请人登记真出故障（get-or-create
+        // 返 4xx / 401 会话过期 / 网络断）时，现场既没有用户可见线索、也没有前端
+        // 埋点能回溯是哪一行哪一次提交漏了 `applicant_id`，只能反查后端日志。
+        // **待补**：一个用户可见的弱提示 + 该行标记位，让用户知道「这行的申请人
+        // 没登记上」。在补上之前，本行与 `console.warn` 的存在只保证「不拖垮整批」。
+        // 行为守卫：`__tests__/usePartBatchManual.spec.ts` 的「幂等端点 reject」
+        // 与「一行失败不牵连同批其它行」两条（前者钉住 warn 确实发出，避免将来有人
+        // 把它删成彻底静默）。
         console.warn(
           `[usePartBatchManual] 申请人「${trimmed}」解析失败，该行 applicant_id 留空（不影响建单）:`,
           e,
