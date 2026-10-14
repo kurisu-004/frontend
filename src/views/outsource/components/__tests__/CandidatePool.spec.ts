@@ -31,16 +31,28 @@
 //   - C14：卡片右键 → 板级 opener 带**区域标签** `'outsource-candidate'` 与候选行上下文
 //     （发送白名单的五条锚只在候选 DTO 上，卡片 model 里没有）；C14b：未 provide opener
 //     时右键不抛错（inject 缺省 noop）。
+//   - C15 / C16 / C17 / C18（2026-10-20）：序列号 / 图号 / 批次号 / 名称的**本地**过滤 ——
+//     C15 只渲染命中的卡（三处计数口径保持全量）；C16 两条空态分支各说各的话且都在
+//     .pool-cards 之外；C17 搜索行是 .pool-cards 的兄弟节点；C18 扫码命中被关键词过滤掉的
+//     行 ⇒ 关键词自动清空（否则操作员「勾上了却看不见卡」）。
+//   - C19 / C19b / C20 / C21 / C22（2026-10-20）：搜索框回车路径 ——
+//     全局条码枪对输入框里的按键一律不派发（`useBarcodeScanner` 的 isInTextField），组件
+//     头部新增搜索框后「点过搜索框再扫码」静默失效，故 `@keyup.enter` 把手输内容当一次
+//     扫码提交并失焦。C19 手输未命中**保留关键词**且静默（与扫码枪的 C19b 提示分支对照，
+//     也避免按名称/图号过滤后回车把过滤结果抹掉）；C20 命中复用扫码的匹配与勾选、清空
+//     关键词；C21「尚未上架」守卫两条路径都保留；C22 两条路径的实例隔离。
 //
 // 测试策略：
 //   - vi.mock('vue-draggable-plus') 复刻重载判别（照 WorkerColumn.spec.ts 同款），捕获
 //     `{list, options}` 后手工驱动 `options.onStart(evt)`；
 //   - dndSourceTracker 用**真实实现**：onStart 记 / 落点取的读写配对是被测行为的一半；
-//   - EP 组件 stub + vi.mock('element-plus') 把 ElMessage 桩成 no-op。
+//   - EP 组件 stub + vi.mock('element-plus') 把 ElMessage 桩成 no-op；
+//   - mountPool 挂载的实例由 afterEach 统一卸载：扫码枪是模块级单例，残留实例会同时收到
+//     同一次扫码（既干扰「本用例只弹过一次」这类断言，也把 document.body 越堆越脏）。
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { computed, defineComponent, h, nextTick, ref } from 'vue';
-import { mount } from '@vue/test-utils';
+import { mount, type VueWrapper } from '@vue/test-utils';
 import type { OutsourceQueueCandidateData } from '../../composables/outsourceQueueSchema';
 
 const captured = vi.hoisted(() => ({
@@ -101,10 +113,16 @@ const ElTooltipStub = defineComponent({
 const ElEmptyStub = defineComponent({
   name: 'ElEmptyStub',
   props: { description: String, imageSize: Number },
+  // description 透出成 data-description：两条空态分支各说各的话，断言要读得到文案本身
+  //（EP 真实 el-empty 把 description 渲染成插画下方的一行字）。
   setup:
-    (_, { slots }) =>
+    (props, { slots }) =>
     () =>
-      h('div', { class: 'el-empty-stub' }, slots.default?.()),
+      h(
+        'div',
+        { class: 'el-empty-stub', 'data-description': props.description ?? '' },
+        slots.default?.(),
+      ),
 });
 const ElCheckboxStub = defineComponent({
   name: 'ElCheckboxStub',
@@ -123,18 +141,52 @@ const ElCheckboxStub = defineComponent({
   },
 });
 
+// 搜索框桩：真 <input>，v-model 走 update:modelValue。prefixIcon / clearable / size
+// 一并声明，避免未声明的 prop 落到 DOM 属性上。
+// blur() 走 expose（EP 真实 el-input 也经 defineExpose 暴露 focus/blur/select/clear），
+// 组件侧的回车路径要真的失焦 —— 焦点不离开输入框时全局条码枪对按键一律不派发，扫码持续
+// 静默失效。调用次数记在 blurLog 里供断言读。
+const blurLog = vi.hoisted(() => ({ calls: 0 }));
+const ElInputStub = defineComponent({
+  name: 'ElInputStub',
+  props: {
+    modelValue: { type: String, default: '' },
+    placeholder: String,
+    size: String,
+    clearable: Boolean,
+    prefixIcon: { type: Object, default: undefined },
+  },
+  emits: ['update:modelValue'],
+  setup(props, { emit, expose }) {
+    expose({ blur: () => { blurLog.calls += 1; } });
+    return () =>
+      h('input', {
+        class: 'el-input-stub__input',
+        value: props.modelValue,
+        placeholder: props.placeholder ?? '',
+        onInput: (evt: Event) => emit('update:modelValue', (evt.target as HTMLInputElement).value),
+      });
+  },
+});
+
 const globalConfig = {
   components: {
     ElTag: ElTagStub,
     ElTooltip: ElTooltipStub,
     ElEmpty: ElEmptyStub,
     ElCheckbox: ElCheckboxStub,
+    ElInput: ElInputStub,
   },
 };
 
 const PROCESS_ID = '2000000000001';
 const SHELF_ID = '5000000000001';
 const APPROVAL_COMPANY = '9000000000001';
+
+/** 本 spec 用 mountPool 挂载、并在用例里显式 unmount 的实例集合（见文件尾的 afterEach）。
+ *  扫码枪是**模块级单例**：不卸载的实例会一直留在它的订阅表里，同一次扫码会命中它们 ——
+ *  既让「本用例只弹过一次」这类断言失去判定力，也把 document.body 越堆越脏。 */
+const mountedPools = new Set<VueWrapper>();
 
 function makeCandidate(
   overrides: Partial<OutsourceQueueCandidateData> = {},
@@ -195,7 +247,7 @@ function mountPool(
   activeProcessId: string = PROCESS_ID,
   extraProvide: Record<string, unknown> = {},
 ) {
-  return mount(CandidatePool, {
+  const wrapper = mount(CandidatePool, {
     props: {
       items,
       processName: '外协热处理',
@@ -211,6 +263,8 @@ function mountPool(
       },
     },
   });
+  mountedPools.add(wrapper);
+  return wrapper;
 }
 
 /** 造一个形状与 Sortable 原生 onStart 事件一致的最小载荷。 */
@@ -268,9 +322,19 @@ beforeEach(() => {
   vi.clearAllMocks();
   captured.calls.length = 0;
   captured.starts.length = 0;
+  blurLog.calls = 0;
   // 扫码枪是模块级单例：缓冲区在每次 Enter 后由 handleKeyDown 自己 resetBuffer
   // 清空，跨用例不会残留（末位字符的 `lastTime` 也不影响判定 —— 超时分支只是把缓冲区
   // 重启成当前字符，后续字符仍在 30ms 窗口内追加）。
+});
+
+afterEach(() => {
+  // 统一收掉本 spec 挂载的实例：漏掉的那几个会继续订阅模块级扫码枪并挂在 document.body
+  // 上。用例里已经显式 unmount 的跳过（重复 unmount 只会刷一条 Vue 的 dev 警告）。
+  for (const wrapper of mountedPools) {
+    if (wrapper.vm?.$?.isUnmounted !== true) wrapper.unmount();
+  }
+  mountedPools.clear();
 });
 
 describe('CandidatePool（外协候选池：拖拽源）', () => {
@@ -516,6 +580,264 @@ describe('CandidatePool（外协候选池：拖拽源）', () => {
       wrapper.find('.pool-cards .batch-card').trigger('contextmenu'),
     ).resolves.not.toThrow();
     wrapper.unmount();
+  });
+
+  // ── 2026-10-20：本地关键词过滤（序列号 / 图号 / 批次号 / 名称） ─────────────────
+  it('C15：输入关键词只渲染命中的卡（四字段各自命中都试；三处计数口径保持全量）', async () => {
+    const wrapper = mountPool([
+      makeCandidate({
+        batch_id: '3000000000001',
+        part_serial_no: 'SN-A',
+        part_drawing_no: 'DRW-1',
+      }),
+      makeCandidate({
+        batch_id: '3000000000002',
+        batch_no: 2048,
+        part_serial_no: 'SN-B',
+        part_drawing_no: 'DRW-2',
+        part_name: '齿轮',
+      }),
+      makeCandidate({
+        batch_id: '3000000000003',
+        batch_no: 4096,
+        part_serial_no: null,
+        part_drawing_no: 'DRW-3',
+        part_name: '轴承',
+      }),
+      makeNotShelved({ batch_id: '3000000000004', part_serial_no: 'SN-D', part_name: '卡板' }),
+    ]);
+    const search = () => wrapper.find('.el-input-stub__input');
+    const renderedIds = () =>
+      wrapper.findAll('.pool-cards .batch-card').map((el) => el.attributes('data-batch-id'));
+
+    expect(renderedIds()).toHaveLength(4);
+    // 过滤前的工具条基线：徽标 4 / 未上架 1 / 已选 0
+    expect(wrapper.find('.el-tag-stub').text()).toBe('4');
+
+    await search().setValue('sn-b');
+    expect(renderedIds()).toEqual(['3000000000002']);
+
+    await search().setValue('DRW-3');
+    expect(renderedIds()).toEqual(['3000000000003']);
+
+    // 批次号：候选 DTO 是数字，卡片 model 上是适配层补过 B 前缀的串
+    await search().setValue('B4096');
+    expect(renderedIds()).toEqual(['3000000000003']);
+
+    await search().setValue('连杆');
+    expect(renderedIds()).toEqual(['3000000000001']);
+
+    // 未上架的行同样可被搜索命中（过滤只管可见，不管可拖 —— is-locked 与 filter 选项不动）
+    await search().setValue('卡板');
+    const locked = wrapper.find('.pool-cards .batch-card');
+    expect(renderedIds()).toEqual(['3000000000004']);
+    expect(locked.classes()).toContain('is-locked');
+
+    // 清空 → 回到全量；工具条三处计数都读 items，不随过滤变
+    await search().setValue('');
+    expect(renderedIds()).toHaveLength(4);
+    expect(wrapper.find('.el-tag-stub').text()).toBe('4');
+    expect(wrapper.text()).toContain('1 个尚未上架');
+    expect(wrapper.text()).toContain('已选 0 件');
+    await search().setValue('SN-B');
+    expect(wrapper.find('.el-tag-stub').text()).toBe('4');
+    expect(wrapper.text()).toContain('1 个尚未上架');
+    wrapper.unmount();
+  });
+
+  it('C16：两条空态分支（无候选 / 无匹配）各说各的话，且都在 .pool-cards 之外', async () => {
+    // 分支一：本来就没有候选 —— 走「该工序暂无可发送候选」
+    const empty = mountPool([]);
+    expect(empty.find('.el-empty-stub').attributes('data-description')).toBe(
+      '该工序暂无可发送候选',
+    );
+    expect(empty.find('.pool-cards').exists()).toBe(true);
+    expect(empty.find('.pool-empty').element.closest('.pool-cards')).toBeNull();
+    empty.unmount();
+
+    // 分支二：有候选但被关键词全部过滤掉 —— 走「无匹配…」，容器仍在（Sortable 实例载体）
+    const wrapper = mountPool([
+      makeCandidate({ batch_id: '3000000000001', part_serial_no: 'SN-A' }),
+      makeCandidate({ batch_id: '3000000000002', part_serial_no: 'SN-B' }),
+    ]);
+    await wrapper.find('.el-input-stub__input').setValue('ZZZ-不存在');
+
+    expect(wrapper.findAll('.pool-cards .batch-card')).toHaveLength(0);
+    const overlay = wrapper.find('.pool-empty');
+    expect(overlay.exists()).toBe(true);
+    expect(overlay.find('.el-empty-stub').attributes('data-description')).toContain('无匹配');
+    const container = wrapper.find('.pool-cards').element as HTMLElement;
+    expect(container.children).toHaveLength(0);
+    expect(overlay.element.closest('.pool-cards')).toBeNull();
+    // 只有一条覆盖层在屏（v-if / v-else-if 两分支互斥）
+    expect(wrapper.findAll('.pool-empty')).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it('C17：搜索行是 .pool-cards 的兄弟节点（容器内不许混非可拖子元素）', async () => {
+    const wrapper = mountPool([makeCandidate()]);
+    const row = wrapper.find('.pool-search');
+    expect(row.exists()).toBe(true);
+    const rowEl = row.element as HTMLElement;
+    const container = wrapper.find('.pool-cards').element as HTMLElement;
+    expect(rowEl.closest('.pool-cards')).toBeNull();
+    expect(container.contains(rowEl)).toBe(false);
+    // 搜索行挂在 .pool-body 之外（工具条已排满 30% 窄栏，搜索独占一行）
+    expect(rowEl.parentElement?.classList.contains('candidate-pool')).toBe(true);
+    expect(rowEl.parentElement?.classList.contains('pool-body')).not.toBe(true);
+    expect(rowEl.closest('.pool-toolbar')).toBeNull();
+    wrapper.unmount();
+  });
+
+  it('C18：扫码命中被关键词过滤掉的行 → 关键词自动清空（勾上了得看得见卡）', async () => {
+    const { ElMessage } = await import('element-plus');
+    const items = [
+      makeCandidate({ batch_id: '3000000000001', part_serial_no: 'SN-0001', part_name: '连杆' }),
+      makeCandidate({ batch_id: '3000000000002', part_serial_no: 'SN-0002', part_name: '齿轮' }),
+    ];
+    const { wrapper, selectedIds } = mountedParent(items);
+    const search = () => wrapper.find('.el-input-stub__input');
+
+    // 关键词把被扫中的那张卡挡掉了
+    await search().setValue('齿轮');
+    expect(wrapper.findAll('.pool-cards .batch-card')).toHaveLength(1);
+
+    fireScan('SN-0001');
+    await nextTick();
+
+    // 命中行仍按全量 items 匹配并勾上（勾选集合是全量口径），同时关键词被清空 ⇒ 卡片回到可见
+    expect(Array.from(selectedIds.value)).toEqual(['3000000000001']);
+    expect((search().element as HTMLInputElement).value).toBe('');
+    expect(wrapper.findAll('.pool-cards .batch-card')).toHaveLength(2);
+    // 提示与界面必须同时自洽 ⇒ 成功文案照常弹
+    expect(ElMessage.success).toHaveBeenCalledWith(expect.stringContaining('已选中'));
+    wrapper.unmount();
+  });
+
+  it('C18b：扫码命中的行本来就在可见集里 → 关键词保持不变（不打断连续扫码）', async () => {
+    const items = [
+      makeCandidate({ batch_id: '3000000000001', part_serial_no: 'SN-0001', part_name: '连杆' }),
+      makeCandidate({ batch_id: '3000000000002', part_serial_no: 'SN-0002', part_name: '齿轮' }),
+    ];
+    const { wrapper, selectedIds } = mountedParent(items);
+    await wrapper.find('.el-input-stub__input').setValue('齿轮');
+
+    fireScan('SN-0002');
+    await nextTick();
+
+    expect(Array.from(selectedIds.value)).toEqual(['3000000000002']);
+    expect((wrapper.find('.el-input-stub__input').element as HTMLInputElement).value).toBe('齿轮');
+    expect(wrapper.findAll('.pool-cards .batch-card')).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  // ── 2026-10-20：搜索框回车路径（「点搜索框后扫码静默失效」的补偿） ─────────────────
+  it('C19：手输未命中回车 → 关键词**保留** + 静默（不弹 SCAN_MISS_HINT）+ 失焦', async () => {
+    // 反向验证：把 onSearchEnter 的清空挪回「无条件先清」时本条必须红。
+    const { ElMessage } = await import('element-plus');
+    const items = [
+      makeCandidate({ batch_id: '3000000000001', part_serial_no: 'SN-0001', part_name: '连杆' }),
+      makeCandidate({ batch_id: '3000000000002', part_serial_no: 'SN-0002', part_name: '齿轮' }),
+    ];
+    const { wrapper, selectedIds } = mountedParent(items);
+    const search = () => wrapper.find('.el-input-stub__input');
+
+    // 格一：输入的是一个**不存在的序列号**
+    await search().setValue('SN-9999');
+    await search().trigger('keyup', { key: 'Enter' });
+    await nextTick();
+
+    // 手输半截图号再回车是正常动作，弹「扫不到」等于骂人 ⇒ 未命中静默
+    expect(ElMessage.warning).not.toHaveBeenCalled();
+    expect(ElMessage.success).not.toHaveBeenCalled();
+    expect(selectedIds.value.size).toBe(0);
+    // 失焦是恢复扫码派发的必要动作（焦点留在输入框上时条码枪的按键一律不派发）
+    expect(blurLog.calls).toBe(1);
+    // 关键词**保留**：没命中就没理由清掉用户正在用的过滤词
+    expect((search().element as HTMLInputElement).value).toBe('SN-9999');
+
+    // 格二（这条才是真正的回归）：按**名称**过滤出一张卡后顺手回车 —— 搜索框承诺
+    // 「序列号 / 图号 / 批次号 / 名称」，而回车路径只认 part_serial_no 等值。先清关键词
+    // 就等于零反馈地抹掉用户刚做的过滤：卡片弹回全量、连提示都没有。
+    await search().setValue('齿轮');
+    expect(wrapper.findAll('.pool-cards .batch-card')).toHaveLength(1);
+    await search().trigger('keyup', { key: 'Enter' });
+    await nextTick();
+
+    expect(ElMessage.warning).not.toHaveBeenCalled();
+    expect(ElMessage.success).not.toHaveBeenCalled();
+    expect(selectedIds.value.size).toBe(0);
+    expect(blurLog.calls).toBe(2);
+    expect((search().element as HTMLInputElement).value).toBe('齿轮');
+    expect(wrapper.findAll('.pool-cards .batch-card')).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it('C19b：扫码枪扫不到仍弹 SCAN_MISS_HINT（两条路径只在「未命中要不要提示」上分叉）', async () => {
+    // C19 的对照：C19 把扫码枪那条路的提示拿掉（notifyMiss 恒 false）时本条必须红。
+    const { ElMessage } = await import('element-plus');
+    const { wrapper } = mountedParent([makeCandidate()]);
+    fireScan('SN-9999');
+    await nextTick();
+    expect(ElMessage.warning).toHaveBeenCalledWith(SCAN_MISS_HINT);
+    wrapper.unmount();
+  });
+
+  it('C20：手输命中回车 → 勾选生效 + 成功提示沿用现有文案（复用扫码的匹配与勾选）', async () => {
+    const { ElMessage } = await import('element-plus');
+    const items = [makeCandidate({ part_serial_no: 'SN-0001', part_name: '连杆', batch_no: 1024 })];
+    const { wrapper, selectedIds } = mountedParent(items);
+    const search = () => wrapper.find('.el-input-stub__input');
+
+    await search().setValue('  SN-0001  ');
+    await search().trigger('keyup', { key: 'Enter' });
+    await nextTick();
+
+    // 匹配与扫码同款（含 trim），勾选集合照常换新 Set 上抛
+    expect(Array.from(selectedIds.value)).toEqual(['3000000000001']);
+    expect(ElMessage.success).toHaveBeenCalledWith(expect.stringContaining('已选中'));
+    expect(ElMessage.warning).not.toHaveBeenCalled();
+    expect(blurLog.calls).toBe(1);
+    expect((search().element as HTMLInputElement).value).toBe('');
+    wrapper.unmount();
+  });
+
+  it('C21：手输尚未上架的批次回车 → 仍弹 NOT_SHELVED_HINT 且不勾选（守卫两条路径都保留）', async () => {
+    // 勾上了却拖不动比直接提示更差，所以「尚未上架」不允许在回车路径上被静默豁免。
+    const { ElMessage } = await import('element-plus');
+    const { wrapper, selectedIds } = mountedParent([makeNotShelved()]);
+    const search = () => wrapper.find('.el-input-stub__input');
+
+    await search().setValue('SN-0009');
+    await search().trigger('keyup', { key: 'Enter' });
+    await nextTick();
+
+    expect(selectedIds.value.size).toBe(0);
+    expect(ElMessage.warning).toHaveBeenCalledWith(NOT_SHELVED_HINT);
+    wrapper.unmount();
+  });
+
+  it('C22：回车只清空自己这个实例的关键词（未激活 tab 的输入框拿不到焦点，不需要闸门）', async () => {
+    // 非当前 tab 的实例：回车路径刻意不过 activeProcessId 闸门（扫码是全局的才需要闸门，
+    // 回车只派发给本实例的输入框）。这里钉住「一个实例的清空不会动另一个实例的关键词」。
+    // 两个实例各自持有一条**能被回车命中**的序列号（命中才清空，未命中按 C19 保留），
+    // 否则这条会退化成「两边都没清」而失去判定力。
+    const first = mountPool([makeCandidate({ part_serial_no: 'SN-0001' })]);
+    await first.find('.el-input-stub__input').setValue('SN-0001');
+    const second = mountPool(
+      [makeCandidate({ part_serial_no: 'SN-0002' })],
+      new Set(),
+      '2000000000999',
+    );
+    await second.find('.el-input-stub__input').setValue('SN-0002');
+
+    await second.find('.el-input-stub__input').trigger('keyup', { key: 'Enter' });
+    await nextTick();
+
+    expect((first.find('.el-input-stub__input').element as HTMLInputElement).value).toBe('SN-0001');
+    expect((second.find('.el-input-stub__input').element as HTMLInputElement).value).toBe('');
+    first.unmount();
+    second.unmount();
   });
 });
 

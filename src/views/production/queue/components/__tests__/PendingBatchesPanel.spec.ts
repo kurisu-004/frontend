@@ -20,13 +20,19 @@
 //   - H5e：canDispatch=false → 直调 onAutoDispatch 早退（零请求 + warning；按钮 v-if
 //     之外的第二道闸，2026-10-15 权限闸）。
 //   - H6：卡片右键 → 注入的 opener 被调一次，第三参区域标签为 'pending'。
+//   - H7 / H8 / H9（2026-10-20）：序列号 / 图号 / 批次号 / 名称的**本地**过滤 ——
+//     H7 只渲染命中的卡（四字段各自命中都试；全选 / 已选 / 「总计 N 件待下发」三项口径刻意
+//     保持全量）；H8 无匹配时渲染「无匹配」空态（与另两处卡片列同款 el-empty）而
+//     `.pending-cards` 容器仍在、零元素子节点（空容器必须仍是合法拖拽源）；H9 搜索行是
+//     容器的**兄弟节点**（混进容器会让 Sortable 的 oldIndex 与可拖项下标错位）。
 //
 // 测试策略：
 //   - vi.mock('vue-draggable-plus') 捕获 useDraggable 的 options，再手动驱动回调
 //     （Sortable 的 _onDragOver / _onMove 由指针坐标驱动，happy-dom 无头环境无法模拟；
 //     options 回调就是组件与 Sortable 之间唯一的契约面）。
 //   - EP 组件 stub：el-checkbox / el-button / el-skeleton / el-empty + el-tooltip
-//     （BatchCard 用）+ el-checkbox（BatchCard 勾选角标用）。
+//     （BatchCard 用）+ el-checkbox（BatchCard 勾选角标用）+ el-input（搜索框用，
+//     桩成一个真 <input>，靠 setValue 驱动 v-model）。
 //   - 组件自身不发请求（batches 走 prop），故无需 QueryClient。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -124,6 +130,29 @@ const ElButtonStub = defineComponent({
   },
 });
 
+/** 搜索框桩：真 <input>，v-model 走 update:modelValue（照仓内其它 spec 的 EP 桩法）。
+ *  prefixIcon / clearable / size 一并声明，避免未声明的 prop 落到 DOM 属性上。 */
+const ElInputStub = defineComponent({
+  name: 'ElInputStub',
+  props: {
+    modelValue: { type: String, default: '' },
+    placeholder: String,
+    size: String,
+    clearable: Boolean,
+    prefixIcon: { type: Object, default: undefined },
+  },
+  emits: ['update:modelValue'],
+  setup(props, { emit }) {
+    return () =>
+      h('input', {
+        class: 'el-input-stub__input',
+        value: props.modelValue,
+        placeholder: props.placeholder ?? '',
+        onInput: (evt: Event) => emit('update:modelValue', (evt.target as HTMLInputElement).value),
+      });
+  },
+});
+
 const ElSkeletonStub = defineComponent({
   name: 'ElSkeletonStub',
   props: { rows: Number, animated: Boolean },
@@ -133,8 +162,15 @@ const ElSkeletonStub = defineComponent({
 const ElEmptyStub = defineComponent({
   name: 'ElEmptyStub',
   props: { description: String, imageSize: Number },
-  setup(_, { slots }) {
-    return () => h('div', { class: 'el-empty-stub' }, slots.default?.());
+  // description 透出成 data-description：两条空态分支各说各的话，断言要读得到文案本身
+  //（EP 真实 el-empty 把 description 渲染成插画下方的一行字）。
+  setup(props, { slots }) {
+    return () =>
+      h(
+        'div',
+        { class: 'el-empty-stub', 'data-description': props.description ?? '' },
+        slots.default?.(),
+      );
   },
 });
 
@@ -145,6 +181,7 @@ const globalConfig = {
     ElButton: ElButtonStub,
     ElSkeleton: ElSkeletonStub,
     ElEmpty: ElEmptyStub,
+    ElInput: ElInputStub,
   },
 };
 
@@ -396,6 +433,117 @@ describe('PendingBatchesPanel（2026-10-02 拖入高亮事件源）', () => {
     await flushPromises();
     expect(wrapper.findAll('.batch-card')).toHaveLength(0);
     expect(wrapper.find('.el-empty-stub').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  // ── 2026-10-20：本地关键词过滤（序列号 / 图号 / 批次号 / 名称） ─────────────────
+  it('H7：输入关键词只渲染命中的卡（四字段各自命中都试；计数口径保持全量）', async () => {
+    const setSelectedIds = vi.fn();
+    const wrapper = mountPanel(
+      [
+        makeDto({
+          batch_id: '3000000000001',
+          serial_no: 'SN-A',
+          name: '连杆',
+          drawing_no: 'DRW-1',
+        }),
+        makeDto({
+          batch_id: '3000000000002',
+          serial_no: 'SN-B',
+          name: '齿轮',
+          drawing_no: 'DRW-2',
+          batch_no: 2048,
+        }),
+        makeDto({
+          batch_id: '3000000000003',
+          serial_no: null,
+          name: '轴承',
+          drawing_no: 'DRW-3',
+          batch_no: 4096,
+        }),
+      ],
+      { setSelectedIds },
+    );
+    await flushPromises();
+    const search = () => wrapper.find('.el-input-stub__input');
+    const renderedIds = () =>
+      wrapper.findAll('.pending-cards .batch-card').map((el) => el.attributes('data-batch-id'));
+
+    expect(renderedIds()).toEqual(['3000000000001', '3000000000002', '3000000000003']);
+
+    // 序列号（小写输入 → 忽略大小写）
+    await search().setValue('sn-b');
+    expect(renderedIds()).toEqual(['3000000000002']);
+
+    // 图号
+    await search().setValue('DRW-3');
+    expect(renderedIds()).toEqual(['3000000000003']);
+
+    // 批次号（卡片上展示的是适配层补了 B 前缀的串）
+    await search().setValue('B2048');
+    expect(renderedIds()).toEqual(['3000000000002']);
+
+    // 名称（第三个候选的 serial_no 是 null，不得抛错也不得被误判成命中）
+    await search().setValue('连杆');
+    expect(renderedIds()).toEqual(['3000000000001']);
+
+    // 清空 → 全量回到 3 张，且计数口径自始至终没跟着过滤走
+    await search().setValue('');
+    expect(renderedIds()).toEqual(['3000000000001', '3000000000002', '3000000000003']);
+    expect(wrapper.text()).toContain('总计 3 件待下发');
+
+    // 全选也仍是全量（否则「搜索后全选」会把看不见的批次一起下发出去）
+    await search().setValue('DRW-3');
+    await wrapper.find('.el-checkbox-stub__input').trigger('change');
+    expect(setSelectedIds).toHaveBeenCalledWith([
+      '3000000000001',
+      '3000000000002',
+      '3000000000003',
+    ]);
+    wrapper.unmount();
+  });
+
+  it('H8：无匹配 → 渲染「无匹配」空态，`.pending-cards` 容器仍在且零子节点', async () => {
+    const wrapper = mountPanel([
+      makeDto({ batch_id: '3000000000001', serial_no: 'SN-A' }),
+      makeDto({ batch_id: '3000000000002', serial_no: 'SN-B' }),
+    ]);
+    await flushPromises();
+    await wrapper.find('.el-input-stub__input').setValue('ZZZ-不存在');
+
+    expect(wrapper.findAll('.pending-cards .batch-card')).toHaveLength(0);
+    const overlay = wrapper.find('.no-match');
+    expect(overlay.exists()).toBe(true);
+    // 空态形态与另两处卡片列统一为 el-empty（文案仍各自不同义）
+    expect(overlay.find('.el-empty-stub').attributes('data-description')).toContain('无匹配');
+    // 容器必须还在：它同时是拖拽源，空容器摘掉会连 Sortable 实例一起没
+    const container = wrapper.find('.pending-cards').element as HTMLElement;
+    expect(container.children).toHaveLength(0);
+    expect(
+      Array.from(container.childNodes).filter((n) => n.nodeType === Node.COMMENT_NODE),
+    ).toHaveLength(0);
+    // 空态覆盖层是容器的兄弟节点，不在容器内部
+    expect(overlay.element.closest('.pending-cards')).toBeNull();
+    // 「本来就没有待下发批次」走 H5c 那条既有分支，两条空态不重叠
+    expect(wrapper.find('.empty-state').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('H9：搜索行是 `.pending-cards` 的兄弟节点（容器内不许混非可拖子元素）', async () => {
+    const wrapper = mountPanel([makeDto()]);
+    await flushPromises();
+    const row = wrapper.find('.search-row');
+    expect(row.exists()).toBe(true);
+    const rowEl = row.element as HTMLElement;
+    const container = wrapper.find('.pending-cards').element as HTMLElement;
+    // 既不在容器内部，也不是容器的后代
+    expect(rowEl.closest('.pending-cards')).toBeNull();
+    expect(container.contains(rowEl)).toBe(false);
+    // 二者是兄弟（同挂在面板根下）
+    expect(rowEl.parentElement?.classList.contains('pending-batches-panel')).toBe(true);
+    expect(container.parentElement).toBe(rowEl.parentElement);
+    // 搜索行本身也不在工具条里（工具条塞不下，搜索独占一行）
+    expect(rowEl.closest('.toolbar')).toBeNull();
     wrapper.unmount();
   });
 });
