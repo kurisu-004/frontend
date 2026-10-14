@@ -234,14 +234,13 @@ export const partSchema = z.object({
    *  `usePartsListStore.spec.ts` 等共用 fixture 的用例变红，fixture 是跨 spec 共享
    *  对象，改动面超出注释订正的合理半径。补齐留待单独一轮。
    *
-   *  这个失守的**症状边界要说清**：`batch_id` 在本 schema 上**当前没有前端读点** ——
-   *  2026-10-21 核实：零件一览域里 `batch_id` 零读点（唯一还在读 union-list 行锚点的
-   *  批量下发 targets 与单件召回两条路径已于 2026-10-10 整块下线，`usePartDispatch` 只剩
-   *  强制完成）。所以缺键与否**不改变运行时行为**，`.optional()` 真正丢掉的是「后端删键
-   *  时报错」这一层契约守门。⚠️ 将来若接回读本键的功能，必须同时把它提成必填 + 可空 ——
-   *  「恒为 null」只在无读点时无害（区别于
-   *  src/views/cnc/composables/pendingProgrammingSchema.ts::pendingProgrammingItemSchema：
-   *  那边的读点是**按钮可用性判据**，缺键会静默让全表下发按钮恒 disabled，是真症状）。
+   *  这个失守的**症状边界要说清**：`batch_id` 在本 schema 上**当前零读点**（零件一览域
+   *  没有消费方读 union-list 行的批次锚点），所以缺键与否**不改变运行时行为** ——
+   *  `.optional()` 真正丢掉的是「后端删键时报错」这一层契约守门。
+   *  ⚠️ **补齐为必填 + 可空不依赖有没有读点**（缺的就是「后端删键时报错」那层：
+   *  后端悄悄删键时应当当场抛）⇒ 留待单独一轮，**不要等接回读点**。
+   *  区别于 src/views/cnc/composables/pendingProgrammingSchema.ts::pendingProgrammingItemSchema：
+   *  那边的读点是**按钮可用性判据**，缺键会静默让全表下发按钮恒 disabled，是真症状。
    *
    *  报工台的 PICK_UP 数据源（`GET /prod/scan/pickable`）**不过本 schema**：它的行单位
    *  是批次、由后端填了批次锚点，走 `@/views/production/scan/composables/scanSchema.ts`

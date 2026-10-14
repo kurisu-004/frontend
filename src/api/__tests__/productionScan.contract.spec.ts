@@ -4,8 +4,8 @@
 // **逐条 URL + query + body 契约守卫** + `scanPartListResultSchema` 的守门有效性回归锁。
 //
 // 契约形态（2026-10-10 定型，**硬切无 alias**）：5 条端点整体落在后端 `prod::scan` 域、
-// URL 前缀 `/api/v2/prod/scan/*`，行 VO 是从 40 字段的 `PartListItem` 收敛来的 17 字段
-// `ScanListItem`（砍掉 23 个恒为占位值的键）⇒ A 组 / L 组按这个形态逐字钉 URL 与 body。
+// URL 前缀 `/api/v2/prod/scan/*`，行 VO 是 17 字段的 `ScanListItem` ⇒ A 组 / L 组按这个
+// 形态逐字钉 URL 与 body。
 // ⚠️ 本文件**不含**「helper 返回值必须过 Zod」那类断言：按 CLAUDE.md 的分层取舍，api 层
 // 已不做守门，守门落在 queryFn / mutationFn（见 E 组与
 // `views/production/scan/composables/__tests__/scanSchema.spec.ts`）。

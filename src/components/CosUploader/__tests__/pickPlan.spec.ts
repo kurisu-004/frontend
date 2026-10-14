@@ -1,8 +1,7 @@
 // src/components/CosUploader/__tests__/pickPlan.spec.ts
 //
 // 2026-09-28 新增：纯函数 planPick / matchesAccept 单测。
-// 2026-10-21 订正：删掉「原 xxx.spec.ts 迁入」的历史路径，改写成本文件当前的归属理由 ——
-// pickPlan.ts 与本 spec 同处组件包内，因为 planPick / matchesAccept 是 CosUploader 的
+// 本 spec 与 pickPlan.ts 同处组件包内：planPick / matchesAccept 是 CosUploader 的
 // 私有逻辑、零跨域消费方（CLAUDE.md 目录归位判据），不属 src/utils/ 那种跨域工具。
 
 import { describe, expect, it } from 'vitest';

@@ -160,7 +160,8 @@ export function usePartCncGroups(partId: Ref<string>): UsePartCncGroupsReturn {
     }
   }
 
-  // 多文件 staging 助手（仿 PartBatchNew.vue:1803-1819）
+  // 多文件 staging 助手：按 uid 去重后把新文件追加进当前列表；matchExt 为真时先按
+  // accept 的扩展名白名单收窄，不中则 warning 并原样返回（不污染当前列表）。
   function fileList(
     current: UploadFile[],
     file: UploadFile,
