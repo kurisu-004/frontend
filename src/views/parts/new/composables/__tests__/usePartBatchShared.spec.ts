@@ -9,7 +9,12 @@ import { describe, expect, it } from 'vitest';
 import { ref as vueRef } from 'vue';
 
 import type { Customer } from '@/api/customer';
-import { findCustomerLabel, resolveRootCustomerId, toMoneyString } from '../usePartBatchShared';
+import {
+  findCustomerLabel,
+  resolveRootCustomerId,
+  runWithConcurrency,
+  toMoneyString,
+} from '../usePartBatchShared';
 
 describe('toMoneyString', () => {
   it('缺价（null / undefined / NaN / ±Infinity）→ undefined，让调用方不发该键', () => {
@@ -167,5 +172,89 @@ describe('findCustomerLabel / resolveRootCustomerId', () => {
     expect(resolveRootCustomerId(ref, null)).toBeNull();
     expect(resolveRootCustomerId(ref, '')).toBeNull();
     expect(resolveRootCustomerId(ref, 'no-such')).toBeNull();
+  });
+});
+
+// ============================================================================
+// 受控并发跑批（2026-10-21 从提交段提到共享模块）
+// ============================================================================
+//
+// 为什么直测这一条：它是 PDF Tab 两个消费方（图纸 / 3D 上传的 runUploadJobs、装配件建单
+// 的 createAssemblyGroups）共用的**唯一**并发闸门，但两个调用方的用例都观测不到它自己 ——
+// 它们各自把 limit 写死在自己的常量里，天然满足「不超发」。「不超发」这件事只有直接对着
+// runWithConcurrency 量在途峰值才测得到。
+describe('runWithConcurrency', () => {
+  it('C1：空 items 立即 resolve，fn 零调用', async () => {
+    let calls = 0;
+    await expect(
+      runWithConcurrency([], 3, async () => {
+        calls += 1;
+      }),
+    ).resolves.toBeUndefined();
+    expect(calls).toBe(0);
+  });
+
+  it('C2：同时在跑的 fn 不超过 limit，且每个 item / 每个下标都恰好跑过一次', async () => {
+    const items = Array.from({ length: 10 }, (_, i) => i);
+    let inFlight = 0;
+    let peak = 0;
+    const byItem: number[] = [];
+    const byIdx: number[] = [];
+
+    await runWithConcurrency(items, 2, async (it, idx) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      byItem.push(it);
+      byIdx.push(idx);
+      // 让出事件循环：不限并发时 10 个会同时进到这里，峰值一下顶到 10
+      await new Promise((r) => setTimeout(r, 0));
+      inFlight -= 1;
+    });
+
+    // 并发钳位：这是本函数存在的**唯一**理由
+    expect(peak).toBeLessThanOrEqual(2);
+    // 也不能钳过头：limit=2 就是要 2 路并行，钳成 1 就是退化成串行
+    expect(peak).toBe(2);
+    // 10 个全跑过，一个不落（钳位不能靠少跑来达成）
+    expect([...byItem].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    // idx 是调用方回填失败清单的排序锚，必须逐项对应、且是连续的 0..n-1
+    expect([...byIdx].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  });
+
+  it('C3：单项抛错照常冒泡给调用方（共享层不吞），其余 item 仍全部被跑过', async () => {
+    const ran: number[] = [];
+    // limit=2 + 8 个 item：worker A 拿 0→2（抛错退出），worker B 从 3 一路接手到 7
+    const promise = runWithConcurrency(
+      Array.from({ length: 8 }, (_, i) => i),
+      2,
+      async (it) => {
+        ran.push(it);
+        if (it === 2) throw new Error('boom');
+      },
+    );
+
+    // ① 异常不被共享层吞掉：吞掉的话调用方会拿到「这一批全部跑完了」的假象，一个失败的
+    //    item 静默消失，而它代表的请求要么没发出去、要么结果不明。
+    await expect(promise).rejects.toThrow('boom');
+    // ② 抛错的 worker 退出后，其余 worker 接手把剩下的 item 跑完 —— doc 承诺的
+    //    「单个 item 抛错不影响其它 item」就是这一条（不靠共享层兜底，靠还有别的 worker）。
+    await new Promise((r) => setTimeout(r, 0));
+    expect([...ran].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+  });
+
+  it('C4：limit=1 时抛错的 item 会把它后面的 item 全部带走 ⇒ 每个 fn 必须自己 try/catch', async () => {
+    const ran: number[] = [];
+    // 单 worker：第 1 个抛错后没人接手，2..4 再也不会被跑到。共享层不提供任何保护，
+    // 两个调用方（上传 job / 装配件建单）各自的失败语义完全不同，只能各自在 fn 里兜。
+    const promise = runWithConcurrency(
+      Array.from({ length: 5 }, (_, i) => i),
+      1,
+      async (it) => {
+        ran.push(it);
+        if (it === 1) throw new Error('boom');
+      },
+    );
+    await expect(promise).rejects.toThrow('boom');
+    expect(ran).toEqual([0, 1]);
   });
 });
