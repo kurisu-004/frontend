@@ -120,8 +120,12 @@ export type CustomerListResultSchema = z.infer<typeof customerListResultSchema>;
  * `.nullable()` 与 `.optional()` 是正交维度（前者放宽类型、后者放宽 required），必须并存
  * 才能同时接受 null 与字段缺失两种形态。
  * 仍走 `listProcesses` 裸调、**不**经 Zod 的视图（RepairStartDialog / ShelfList /
- * OutsourceQuoteList / OutsourceList / ProcessPickerDialog）
- * 不受本 schema 变更影响。 */
+ * OutsourceQuoteList）不受本 schema 变更影响。
+ * ⚠️ **全部** `useProcessesQuery(...)` 消费方都间接受约束，改本 schema 前别按「这个文件里
+ * 搜不到 listProcesses 裸调」把它们划进免疫名单：那些页面自己没有 api 调用点，拿到的是同一份
+ * `processListResultSchema.parse` 过的数据（params 不同只是换了一条 queryKey，换不来第二份
+ * 解析）。本条刻意**不点名也不设数** —— 消费方清单会随新增页面过期，而过期的清单正是它要防的
+ * 那种错；`rg 'useProcessesQuery\('` 出来的每一处都是。 */
 export const processSchema = z.object({
   id: z.string(),
   version: z.number(),

@@ -404,3 +404,4 @@ v2 后端约 40 个事件里，**只有 `SCAN_BANNER` 的 payload 带展示字�
 ## 已知风险
 
 - 依赖 `xlsx@0.18.5` 有原型污染 + ReDoS 高危漏洞（npm 官方无修复版本）。仅用于内部只读 Excel 解析（parser / 视图已统一收口，不执行公式宏），攻击面可控，后续迁 SheetJS CDN 版或 exceljs。
+- `src/three/OcctStepLoader.ts::buildTopology` 递归取子形状（face / wire / edge）时，每个子形状的 wasm 句柄都直接塞进 `TopologyNode.children[].handle`，**全程不释放** —— `releaseShape()` 只释放根句柄。一次复杂 STEP 的面 / 线 / 边量级足以让 wasm arena 迅速膨胀。当前刻意延后：仓内**没有任何释放子句柄的入口**（`shapeCache.forget()` / `shapeCache.reset()` 只按**根句柄**删缓存条目，子句柄从来不是表里的键），所以子句柄一释放，`children[].handle` 就变成悬空数字；而 `inspectLastLoaded()` / `getTopology()` / `getStats()` 三个调试导出（无代码调用方，仅供浏览器控制台排查 OCCT 解析结果）是现场唯一的排查手段，数字悬空后就再也没法拿它们比对。要动 `buildTopology` 的子形状遍历前先读这条。

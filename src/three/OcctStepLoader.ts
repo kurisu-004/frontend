@@ -11,7 +11,8 @@
 //   - Mesh + LineSegments2 组合为 THREE.Group，add 到 scene 即可
 //
 // 注：本文件不依赖任何 vendored 代码。occt-wasm 句柄（ShapeHandle = number）
-//      通过内核的 release() / releaseAll() 释放。
+//      由 `releaseShape()`（切模型 / 卸载时逐个释放）与 `disposeKernel()`（整进程拆解，
+//      内部 releaseAll + delete）两条路释放。
 
 import * as THREE from 'three';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
@@ -64,28 +65,110 @@ const topologyCache = new Map<ShapeHandle, TopologyNode>();
 const statsCache = new Map<ShapeHandle, TopologyStats>();
 let lastLoaded: ShapeHandle | null = null;
 
-/** 拿到已加载文件的最末一层拓扑（浏览器控制台 inspect 用） */
+/**
+ * 2026-10-20 新增：句柄 → 拓扑 / 统计 的模块级缓存的**唯一出入口**。
+ *
+ * 为什么要包一层：这两张 Map 此前只有写入点（`loadStepFromBytes`）与三个只读调试出口，
+ * 没有任何清理路径 —— 每加载一个 STEP/BREP/STL 就多留一份拓扑树和统计，且 occt-wasm 那边
+ * 的形状句柄同样只增不减。把它收成一个对象，`forget()` 才有唯一实现可测（见
+ * `__tests__/stepShapeRelease.spec.ts`：缓存大小不得随加载次数单调增长）。
+ *
+ * 写点只有 `loadStepFromBytes` 一处；`reset()` 只有 `disposeKernel()` 一个调用方。导出整个
+ * 对象是为了让清位逻辑可单测（node 环境无法初始化 wasm，见该 spec 头注释），不是给业务侧
+ * 的第二套 API。
+ */
+export const shapeCache = {
+  /** 记录一次加载产出的句柄与它对应的拓扑 / 统计。 */
+  put(handle: ShapeHandle, topology: TopologyNode, stats: TopologyStats): void {
+    topologyCache.set(handle, topology);
+    statsCache.set(handle, stats);
+    lastLoaded = handle;
+  },
+  /** 单个句柄的拓扑；未缓存（已释放 / 不是本模块产的）时返回 null。 */
+  topologyOf(handle: ShapeHandle): TopologyNode | null {
+    return topologyCache.get(handle) ?? null;
+  },
+  /** 单个句柄的统计；未缓存（已释放 / 不是本模块产的）时返回 null。 */
+  statsOf(handle: ShapeHandle): TopologyStats | null {
+    return statsCache.get(handle) ?? null;
+  },
+  /**
+   * 清掉一个句柄的拓扑 + 统计条目；返回它是否正好是「最近一次加载」那一个。
+   * 清「最近一次」是为了让 `inspectLastLoaded()` 如实回答「现在没有可看的模型」，
+   * 而不是把一个已被释放的句柄继续摆给控制台。
+   */
+  forget(handle: ShapeHandle): boolean {
+    topologyCache.delete(handle);
+    statsCache.delete(handle);
+    if (lastLoaded !== handle) return false;
+    lastLoaded = null;
+    return true;
+  },
+  /** 当前缓存的句柄数（诊断与测试用）。 */
+  size(): number {
+    return topologyCache.size;
+  },
+  /** 清空两张表并复位「最近一次加载」。仅 `disposeKernel()` 用（kernel 都换人了）。 */
+  reset(): void {
+    topologyCache.clear();
+    statsCache.clear();
+    lastLoaded = null;
+  },
+};
+
+/**
+ * 拿到已加载文件的最末一层拓扑。
+ *
+ * ⚠️ **无任何代码调用方，仅供浏览器控制台 inspect**（排查 OCCT 解析结果时在 devtools 里
+ * 手敲）。它与正式清理路径 `releaseShape()` 的区别：释放某个形状后本函数返回 null，而不是
+ * 继续给出一个句柄已失效的对象。
+ */
 export function inspectLastLoaded(): TopologyNode | null {
   if (lastLoaded === null) return null;
   return topologyCache.get(lastLoaded) ?? null;
 }
 
-/** 拿单个句柄的拓扑（缓存） */
+/** 拿单个句柄的拓扑（缓存）。⚠️ 同上：无代码调用方，仅供浏览器控制台 inspect。 */
 export function getTopology(handle: ShapeHandle): TopologyNode | null {
   return topologyCache.get(handle) ?? null;
 }
 
-/** 拿单个句柄的统计（缓存） */
+/** 拿单个句柄的统计（缓存）。⚠️ 同上：无代码调用方，仅供浏览器控制台 inspect。 */
 export function getStats(handle: ShapeHandle): TopologyStats | null {
   return statsCache.get(handle) ?? null;
 }
 
-/** 重置内部状态（测试 / 切场景时用） */
-export function _resetKernelForTest(): void {
+/**
+ * 释放一个已加载形状的 wasm 句柄，并清掉它在两张缓存表里的条目。**生产路径上的正式清理
+ * 入口**，调用方是 `StepViewer.vue`：切模型、src 清空、组件卸载三条路径各调一次。
+ *
+ * 只传 `LoadedShape` 的句柄 + kernel 两个字段就够（三维组的 GPU 资源由 SceneManager 另行
+ * dispose，与本函数无关）。传 null / undefined 时是空操作，调用方不必自己判空。
+ *
+ * `shapeCache.forget` 刻意放在 `kernel.release` **之前、且不在同一个 try 里**：反过来写成
+ * 「先 release 再 forget，forget 塞在 try 内」的话，release 一抛错（内核已被 dispose /
+ * 句柄已失效）就跳过 forget，两张表里留下一条永远拿不掉的僵尸条目。
+ *
+ * 网格数据不受影响：`meshShape` / `wireframe` 早已把顶点拷进普通 Float32Array，释放 OCCT
+ * 句柄不会让已经在屏上的模型消失。
+ */
+export function releaseShape(
+  shape: Pick<LoadedShape, 'rootHandle' | 'kernel'> | null | undefined,
+): void {
+  if (!shape) return;
+  shapeCache.forget(shape.rootHandle);
+  try {
+    shape.kernel.release(shape.rootHandle);
+  } catch {
+    /* 句柄已失效或内核已 dispose：缓存已清掉，这里无需再做什么 */
+  }
+}
+
+/** 重置模块级内核引用与缓存。**只有 `disposeKernel()` 一个调用方**（原先的
+ *  `_resetKernelForTest` 没有任何测试在用，名字与实际用途不符，一并去掉）。 */
+function resetKernelState(): void {
   kernelPromise = null;
-  topologyCache.clear();
-  statsCache.clear();
-  lastLoaded = null;
+  shapeCache.reset();
 }
 
 async function getKernel(): Promise<OcctKernel> {
@@ -378,6 +461,26 @@ function fitToUnitSphere(group: THREE.Group): void {
   group.updateMatrixWorld(true);
 }
 
+/**
+ * 2026-10-20 新增：进度通知的唯一出口。
+ *
+ * `onProgress` 是**通知通道**、不是加载管线的一步，所以它的异常不得落进
+ * `loadStepFromBytes` 的统一 catch：漏进来的话，一句 UI 回调的 bug 会被算成
+ * 「三角化失败」，而 catch 的语义还会顺手 `releaseShape()` 掉一个其实已经算好的模型
+ * （调用方只拿到 reject，拿不到 LoadedShape，三条释放路径全都够不着那个句柄）。
+ * 异常吞掉后仍打一行 `console.warn`（不是静默，与本仓其它降级分支同款），
+ * 真出问题时控制台留得住线索。
+ */
+function reportProgress(options: LoadOcctOptions, pct: number, stage: OcctLoadStage): void {
+  const cb = options.onProgress;
+  if (cb === undefined) return;
+  try {
+    cb(pct, stage);
+  } catch (e) {
+    console.warn('[occt] onProgress 回调抛错（已忽略，不影响本次加载）:', e);
+  }
+}
+
 // ---- 顶层入口 ----
 
 export async function loadStepFromBytes(
@@ -388,12 +491,20 @@ export async function loadStepFromBytes(
   if (bytes.byteLength > MAX_FILE_SIZE) {
     throw new OcctLoadError(`File too large: ${bytes.byteLength} bytes`, 'parse');
   }
-  options.onProgress?.(5, 'wasm');
+  reportProgress(options, 5, 'wasm');
   const kernel = await getKernel();
-  options.onProgress?.(40, 'parse');
+  reportProgress(options, 40, 'parse');
 
-  // 解析
-  let shape: ShapeHandle;
+  // 2026-10-20 新增：从「拿到句柄」到「返回 LoadedShape」**整段**包在一个 try 里。
+  // 判据是「本函数一旦 reject，句柄就再也没人能清」：调用方拿不到 LoadedShape，
+  // `StepViewer` 的三条 releaseCurrentShape() 路径（切模型 / src 清空 / 卸载）全都够不着它。
+  // 过去只有三角化那两步自己带 catch，`buildTopology` / `buildStats`（在 try 之外）与
+  // `buildMeshGroup` / `fitToUnitSphere`（在入表之后）任一抛错都漏同一个口子。
+  // 所以 catch 统一走 releaseShape 的语义（forget + kernel.release，含 put 之后的缓存条目）
+  // 再抛，**不按失败点分叉**：阶段差异只落在 stage 与文案两个变量上。
+  let shape: ShapeHandle | null = null;
+  let stage: OcctLoadStage = 'parse';
+  let failLabel = `${format} 解析失败`;
   try {
     if (format === 'step') {
       // STEP 是文本，TextDecoder 解码；编码常见为 utf-8（ISO 10303-21 默认）
@@ -405,64 +516,74 @@ export async function loadStepFromBytes(
     } else {
       shape = kernel.importStl(bytes);
     }
-  } catch (e) {
-    throw new OcctLoadError(
-      `${format} 解析失败: ${e instanceof Error ? e.message : String(e)}`,
-      'parse',
-      e,
-    );
-  }
 
-  // 拓扑 + 统计
-  const topology = buildTopology(kernel, shape);
-  const stats = buildStats(kernel, shape);
-  topologyCache.set(shape, topology);
-  statsCache.set(shape, stats);
-  lastLoaded = shape;
+    // 拓扑 + 统计（**此处不入表**，入表位置见三角化之后那行）
+    failLabel = '拓扑提取失败';
+    const topology = buildTopology(kernel, shape);
+    const stats = buildStats(kernel, shape);
 
-  options.onProgress?.(60, 'tessellate');
+    // 2026-10-20 纠偏：`stage` / `failLabel` 说的是**抛错那一刻所处的那一步**，所以赋值必须
+    // 排在它所描述的调用**之前**。这两行原先排在 `shapeCache.put()` 后面 ⇒ 三角化（复杂 STEP
+    // 最常见的失败路径）抛错时被报成 `[parse] 拓扑提取失败`，与同一函数里
+    // `onProgress(60, 'tessellate')` 的自述互相矛盾，而 `StepViewer.vue` 会把
+    // `[${stage}] ${message}` 原样显示给用户 —— 现场排查会被带偏一整个阶段。
+    // 守卫见 `__tests__/stepShapeRelease.spec.ts` 的 R9（挪位置即红）。
+    stage = 'tessellate';
+    failLabel = '三角化失败';
 
-  const linDef = options.linearDeflection ?? 0.1;
-  const angDef = options.angularDeflection ?? 0.5;
+    reportProgress(options, 60, 'tessellate');
 
-  // mesh + wireframe
-  let faceMesh: ReturnType<OcctKernel['meshShape']>;
-  let edgeData: ReturnType<OcctKernel['wireframe']>;
-  try {
-    faceMesh = kernel.meshShape(shape, { linearDeflection: linDef, angularDeflection: angDef });
+    const linDef = options.linearDeflection ?? 0.1;
+    const angDef = options.angularDeflection ?? 0.5;
+
     // 用默认 source:'curve'（OCCT 真实拓扑边，face↔face 边界），避免三角化内部网格线
-    edgeData = kernel.wireframe(shape, { deflection: linDef });
+    const faceMesh = kernel.meshShape(shape, {
+      linearDeflection: linDef,
+      angularDeflection: angDef,
+    });
+    const edgeData = kernel.wireframe(shape, { deflection: linDef });
+
+    // 2026-10-20：入表排在三角化**之后**。理由不是「失败路径会留僵尸」（那条现在由统一 catch
+    // 兜底），而是「网格没拿到就不算一个完整模型」—— 调试导出（inspectLastLoaded /
+    // getTopology / getStats）摆给控制台的条目不该是半成品。
+    shapeCache.put(shape, topology, stats);
+
+    // 网格已经拿到，剩下的全是前端侧组网与归一化：失败原因与 OCCT 三角化无关，另起一句文案。
+    failLabel = '网格组装失败';
+
+    const rootName = topology.type === 'compound' ? 'model' : topology.type;
+    const group = buildMeshGroup(faceMesh, edgeData, rootName);
+
+    if (options.fitToUnitSphere !== false) {
+      fitToUnitSphere(group);
+    }
+
+    reportProgress(options, 100, 'tessellate');
+
+    // 把边线 LineMaterial 暴露出来，供 ViewerCanvas 注册到 SceneManager 维护 resolution
+    const edgesChild = group.children.find((c) => c.name === 'edges');
+    const lineMat = (edgesChild as unknown as { material: LineMaterial } | undefined)?.material;
+
+    return {
+      root: group,
+      rootHandle: shape,
+      kernel,
+      topology,
+      stats,
+      triangleCount: faceMesh.triangleCount,
+      rootName,
+      lineMaterial: lineMat,
+    };
   } catch (e) {
+    // 解析就炸的那一支还没有句柄可放（shape 仍是 null），其余一律交还内核 + 清掉入表条目。
+    // releaseShape 内部「forget 在 release 之前、且 release 另带一层 try」，正好是这里要的顺序。
+    if (shape !== null) releaseShape({ rootHandle: shape, kernel });
     throw new OcctLoadError(
-      `三角化失败: ${e instanceof Error ? e.message : String(e)}`,
-      'tessellate',
+      `${failLabel}: ${e instanceof Error ? e.message : String(e)}`,
+      stage,
       e,
     );
   }
-
-  const rootName = topology.type === 'compound' ? 'model' : topology.type;
-  const group = buildMeshGroup(faceMesh, edgeData, rootName);
-
-  if (options.fitToUnitSphere !== false) {
-    fitToUnitSphere(group);
-  }
-
-  options.onProgress?.(100, 'tessellate');
-
-  // 把边线 LineMaterial 暴露出来，供 ViewerCanvas 注册到 SceneManager 维护 resolution
-  const edgesChild = group.children.find((c) => c.name === 'edges');
-  const lineMat = (edgesChild as unknown as { material: LineMaterial } | undefined)?.material;
-
-  return {
-    root: group,
-    rootHandle: shape,
-    kernel,
-    topology,
-    stats,
-    triangleCount: faceMesh.triangleCount,
-    rootName,
-    lineMaterial: lineMat,
-  };
 }
 
 export async function loadStepFromArrayBuffer(
@@ -473,17 +594,32 @@ export async function loadStepFromArrayBuffer(
   return loadStepFromBytes(new Uint8Array(buf), format, options);
 }
 
-// 仅暴露一次 kernel 给模块内部清理使用
+/**
+ * 整进程级内核拆解：释放 kernel 持有的**全部**句柄（`[Symbol.dispose]` 内部走 releaseAll +
+ * delete 原始内核）并清空模块级状态。
+ *
+ * ⚠️ **绝不能挂在任何组件生命周期上**：kernel 是模块级单例，而 `StepViewer` 可以同时挂着多个
+ * 实例 —— 实例数 = 当前**同时存活**的 3D 预览弹窗个数：tagsView 的 keep-alive 让多个路由
+ * 实例同时活着（开两个零件详情标签、各自打开一个 3D 预览即得两个 `StepViewer`；
+ * `PartFilesTabsCard` 内那三个 `FileListCard` 挂载点是 `v-if / v-else-if / v-else` 互斥的，
+ * 同一时刻只挂一个，每个预览弹窗里也只有一个 `StepViewer`），另有 `DrawingPreviewPane`
+ * 这个承载点。一个卸载就拆 kernel 会让其余实例下一次加载拿到已释放的句柄；而且 wasm
+ * 初始化本身不便宜，让它跟着「关一个预览窗口」反复拆建更亏。单个形状的释放走
+ * `releaseShape()`，本函数留给「确认没有任何 `StepViewer` 挂载」的整进程收尾（应用退出、
+ * 集成测试 teardown）。
+ */
 export async function disposeKernel(): Promise<void> {
-  if (kernelPromise) {
-    const k = await kernelPromise;
+  const pending = kernelPromise;
+  if (pending) {
+    kernelPromise = null;
     try {
+      const k = await pending;
       (k as unknown as { [Symbol.dispose]: () => void })[Symbol.dispose]();
     } catch {
-      /* ignore */
+      /* 初始化就失败或已 dispose：下面照样把模块级状态复位 */
     }
   }
-  _resetKernelForTest();
+  resetKernelState();
 }
 
 // 抑制 unused 警告（SHAPE_TYPES_RECURSED 留作未来拓展）
