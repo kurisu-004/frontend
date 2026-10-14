@@ -120,7 +120,6 @@ vi.mock('@/api/iam', () => ({
 // customer 数据，mock 返回空数组够用。
 vi.mock('@/api/customer', () => ({
   listCustomers: vi.fn(async () => ({ items: [], total: 0, limit: 20, offset: 0 })),
-  getCustomer: vi.fn(),
   createCustomer: vi.fn(),
   updateCustomer: vi.fn(),
   softDeleteCustomer: vi.fn(),

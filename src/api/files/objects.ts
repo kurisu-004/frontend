@@ -10,7 +10,7 @@
 // `/api/v2/part-files/*` 硬切为 `/api/v2/files/objects/*`。⚠️ **旧路径
 // `/api/v2/part-files/*` 已 404、无 alias**。
 //
-// 本文件覆盖的 6 个端点：
+// 本文件覆盖的 7 个端点：
 //   - POST /files/objects               multipart 直传（图纸 / 3D 模型 / 装配件总装图统一入口）
 //   - POST /files/objects/confirm       COS 直传后的确认绑定（场景 B，配 `api/files/sts.ts`）
 //   - GET  /files/objects               按 owner_id (+kind) 列文件
@@ -19,8 +19,9 @@
 //   - POST /files/objects/{id}/delete   软删（OCC，body 必带 version）
 //   - GET  /files/objects/{id}/content  原始二进制（blob）—— 降级为「查看原始 PDF」兜底
 //
-// 导出数与端点数不等：另有纯 URL 构造器 `partFileContentPath`（不发请求，只拼
-// `{id}/content` 的路径，未导出）与包着它的 `fetchPartFileContent`，两者不单列。
+// 7 个导出与上面 7 条端点一一对应。唯一不单列的是纯 URL 构造器
+// `partFileContentPath` —— 文件内私有、不导出、不发请求，只拼 `{id}/content` 的路径，
+// 由导出函数 `fetchPartFileContent` 包着。
 //
 // **预览链路的两条路**（2026-10-13）：图纸预览首选 `/preview` 拿 CI 转好的逐页图片直链
 // （`getPartFilePreview`），浏览器不再下载整份 PDF 交给 pdf.js；`/content` 保留为

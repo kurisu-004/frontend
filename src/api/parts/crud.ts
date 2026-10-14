@@ -30,8 +30,8 @@
 // 一律返 `R<PartOut>`（10 字段窄投影），**不是**详情 VO。判据是后端 handler 的
 // 返回类型，不是「前端历史上写成了什么」。这些返回值的消费方一律丢弃（只靠失效链
 // 重拉），但声明必须与后端一致 —— 否则本文件会并存两种互相矛盾的出参类型。
-// 同族的另两处：`api/parts/batch.ts` 批量版的 `submitted[].part` 与
-// `api/productionScan.contract.ts::ScanPickUpResultDto`。
+// 同族的另一处：`api/productionScan.contract.ts::ScanPickUpResultDto`
+// （批量版封装本仓不声明，其契约见 backend-rust `docs/api/batch.md`）。
 // ⚠️ 例外五处**保持** `PartDetailDto`：`getPart` / `createPart` / `updatePart` /
 // `getPartBySerial`（后端真返 `PartDetailOut`），以及 `scanPart`（打的是 v1(Python)
 // 的 `POST /parts/scan`，v2 无此路由，契约不属本次核对范围）。

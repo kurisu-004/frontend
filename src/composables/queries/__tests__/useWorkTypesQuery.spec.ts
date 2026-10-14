@@ -72,7 +72,7 @@ function lastParams(): Record<string, unknown> {
 vi.mock('@/api/workType', () => ({
   listWorkTypes: (params: WorkTypeListParams) => listImpl(params),
   getWorkTypeProcesses: (id: string) => realGetWorkTypeProcessesMock(id),
-  // 这两个纯函数是「读/写形态收口」，已被 src/api/workType.spec.ts 逐字钉死；
+  // 这两个纯函数是「读/写形态收口」，已被 src/api/__tests__/workType.spec.ts 逐字钉死；
   // 本文件 importOriginal 走真实现（与 ShelfList.processMapping.spec.ts 同款理由：
   // 端到端仍用真代码，只桩发请求的函数）。
   toWorkTypeProcessIds: (r: { items: Array<{ process_id: string; sort_order: number }> }) =>

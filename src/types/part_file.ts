@@ -245,8 +245,6 @@ export interface CncPairedFileRef {
 
 /** @deprecated 用 PartFileItem 替代 */
 export type DrawingFileItem = PartFileItem;
-/** @deprecated 用 PartFileItem 替代 */
-export type CncProgramItem = PartFileItem;
 
 // ============================================================
 // 2026-09-16 M3 新增：STS 直传 COS 契约（与 backend-rust files::part_file::dto 对齐）

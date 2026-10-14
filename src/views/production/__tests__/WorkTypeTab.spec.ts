@@ -51,7 +51,7 @@ const updateWorkTypeMock = vi.fn();
 const softDeleteWorkTypeMock = vi.fn();
 
 // importOriginal：toWorkTypeProcessesPayload / toWorkTypeProcessIds 两个纯函数走真实现
-// （已被 src/api/workType.spec.ts 逐字钉死），只桩发请求的四个函数。
+// （已被 src/api/__tests__/workType.spec.ts 逐字钉死），只桩发请求的四个函数。
 vi.mock('@/api/workType', async (importOriginal) => ({
   ...(await importOriginal<typeof WorkTypeModule>()),
   listWorkTypes: (...args: unknown[]) => listWorkTypesMock(...args),

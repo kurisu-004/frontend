@@ -173,7 +173,6 @@ vi.mock('@/stores/auth', () => ({
 
 vi.mock('@/api/process', () => ({
   listProcesses: vi.fn().mockResolvedValue({ items: [], total: 0, limit: 200, offset: 0 }),
-  getProcess: vi.fn(),
   createProcess: vi.fn(),
   updateProcess: vi.fn(),
   softDeleteProcess: vi.fn(),

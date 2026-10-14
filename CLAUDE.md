@@ -325,7 +325,7 @@ v2 后端约 40 个事件里，**只有 `SCAN_BANNER` 的 payload 带展示字�
 
 **为什么必须有这一步**：dashboard 三个 query 是 `gcTime: POSITIVE_INFINITY` + **无 `refetchInterval`**（`staleTime` 只决定「下次取数放不放行」，不产生定时器），WS 又是它们唯一的增量通道 ⇒ 断连期间丢的事件没有任何补偿通道，大屏会**静默停更**。首帧 snapshot 在首次连接下仅作就绪信号，在重连时承担断线期数据补偿 —— 这是同一个分支按「是不是首次连接」分的流，不是两套机制。
 
-守卫：`api/dashboard.spec.ts` 的 C5（首次不派）/ C6（重连派）/ C7（换连接也算重连）。
+守卫：`api/__tests__/dashboard.spec.ts` 的 C5（首次不派）/ C6（重连派）/ C7（换连接也算重连）。
 
 ### 图表
 

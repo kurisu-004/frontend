@@ -77,7 +77,6 @@ function lastParams(): Record<string, unknown> {
 
 vi.mock('@/api/process', () => ({
   listProcesses: (params: ProcessListParams) => listProcessesMockImpl(params),
-  getProcess: vi.fn(),
   createProcess: vi.fn(),
   updateProcess: vi.fn(),
   softDeleteProcess: vi.fn(),

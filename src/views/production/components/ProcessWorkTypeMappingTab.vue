@@ -260,7 +260,7 @@ async function onSave(): Promise<void> {
     return;
   }
   // 2026-10-02：payload 由纯函数生成（读形态 / 写形态两端都收口到
-  // src/api/workType.ts + src/api/workType.spec.ts 逐字断言）。
+  // src/api/workType.ts + src/api/__tests__/workType.spec.ts 逐字断言）。
   // 旧实现内联 `{process_ids: [...]}` —— 后端 SetWorkTypeProcessesRequest 无该键。
   try {
     await saveMutation.mutateAsync({

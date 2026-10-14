@@ -69,7 +69,6 @@ vi.mock('@/api/inspection', () => ({
 // 在 store setup 里就 fetch，不桩会走真实 axios。
 vi.mock('@/api/customer', () => ({
   listCustomers: vi.fn(async () => ({ items: [], total: 0, limit: 20, offset: 0 })),
-  getCustomer: vi.fn(),
   createCustomer: vi.fn(),
   updateCustomer: vi.fn(),
   softDeleteCustomer: vi.fn(),

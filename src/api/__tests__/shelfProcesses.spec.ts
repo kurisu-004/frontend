@@ -46,15 +46,12 @@
 //         （CRUD 那 4 条的 URL 守卫在 `shelves.spec.ts`，本文件不覆盖。）
 //
 // mock 手法沿 dashboard.spec.ts（同一目录）同款：整模块桩掉 `@/api/http`（不 importOriginal），
-// 只保留 `api.get` / `api.post` 两个可断言入口 + `cleanParams`（shelves.ts:3 实际
+// 只保留 `api.get` / `api.post` 两个可断言入口 + `cleanParams`（shelves.ts 实际
 // import 的就这两个）。
-// 2026-10-02 review M-4 订正注释：原注释称「不桩 http.ts 原件是因为它在模块求值期
-// 就 axios.create + 读 localStorage，vitest node 环境没有 localStorage」——**该
-// 理由不成立**：`axios.create`（http.ts:181）在 node 下无害，localStorage 读取全在
-// 拦截器回调内（http.ts:243/254/276/284），仓内 `src/api/__tests__/http.spec.ts`
-// 直接 `import { serializeParams... } from '../http'` 且全绿。真实理由是别的：整模块桩掉
-// 才能对「URL + body」逐字断言（走原件要 mock adapter/拦截器，噪声大且脆弱），
-// 且能顺带证明本文件完全不依赖 http.ts 的任何内部实现。
+// 不桩 http.ts 原件的真实理由：整模块桩掉才能对「URL + body」逐字断言（走原件要 mock
+// adapter/拦截器，噪声大且脆弱），且能顺带证明本文件完全不依赖 http.ts 的任何内部实现。
+// （局部桩不成立不是理由 —— `axios.create` 在 node 下无害、localStorage 读取全在拦截器
+// 回调内，仓内 `src/api/__tests__/http.spec.ts` 直接 import http.ts 且全绿。）
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 

@@ -171,7 +171,7 @@ describe('2026-10-02：批次写端点锚定 prod 域', () => {
   // 2026-10-03：place-on-shelf / release-from-programming 两个后端 DTO 都把 `version`
   //（t_part_batch.version）列为必填且无 `#[serde(default)]`
   // ⇒ 缺字段 422。api 层只做透传，本条钉的是「调用方给了 version 就逐字进 body」。
-  // 断言强度对齐 R2b / R4b：钉全量键集（防多余字段混入）+ 钉 version 形态是 number
+  // 断言强度对齐 R2b：钉全量键集（防多余字段混入）+ 钉 version 形态是 number
   // （后端 i32 无自定义 deserializer，发字符串会 422）+ 负向钉 batch_id 不进 body
   // （已是路径参数）。两条端点同规格，不给「某个字段先炸时给出已守住的假信心」。
   // 召回（recall-to-pending）已不在本文件：2026-10-08 起它归 queue 域
