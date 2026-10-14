@@ -7,6 +7,7 @@
 //     司机下拉**只对零件版**渲染；
 //   - 判不出版式（四个锚点都不中）⇒ 「导出」disabled + 一句提示，**且不列逐格差异**
 //     （逐格校验是「模板编辑」页上传闸的职责，见 PrintPreviewDialog.vue 文件头）；
+//   - **导出时对刚取回的字节复探版式**：管理员在对话框开着时换了绑定 ⇒ 中止导出 + 零产物；
 //   - **单据上没有司机也照样能导出**（指定司机搬去「一键送货」那一步）；
 //   - el-tabs 按收货单位分组，label 带 (N)；
 //   - 行拆分（守恒不通过则「确定」disabled）；
@@ -734,9 +735,11 @@ describe('PrintPreviewDialog 自动选用一级客户绑定的模板', () => {
     }
   });
 
-  it('bound_template_bytes_are_probed：判不出版式（四个锚点都不中）⇒ 导出禁用 + 一句提示 + 不列逐格差异', async () => {
+  it('bound_template_bytes_are_probed：判不出版式（四个锚点都不中）⇒ 导出禁用 + 一句提示 + 不出现任何逐格差异文案', async () => {
     // ⚠️ **不列逐格差异**是这条的一半断言：逐格校验在「模板编辑」页上传闸里做过一次，打印页
     // 再列一遍只会把「判不出版式」讲成「某某格不对」，把用户引去改 Excel 单元格。
+    // 断言打在**文案**上（`.auto-hint` / tooltip 里都没有「期望…」那种逐条差异），而不是某个
+    // 已下线面板的 class —— 那条断言永远不会红。
     const unknown = await unrecognizableTemplateBytes();
     bindTemplate(unknown);
     const w = await mountDialog();
@@ -747,8 +750,6 @@ describe('PrintPreviewDialog 自动选用一级客户绑定的模板', () => {
     expect(w.find('.mock-el-tooltip').attributes('title')).toContain('模板编辑');
     expect(w.text()).not.toContain('该客户绑定模板');
     expect(exportDisabled(w)).toBe(true);
-    // 逐格差异列表整体下线：既没有差异面板，也没有任何「期望…实际为…」文案。
-    expect(w.find('.template-diffs').exists()).toBe(false);
     expect(w.text()).not.toContain('期望');
   });
 
@@ -800,7 +801,8 @@ describe('PrintPreviewDialog 自动选用一级客户绑定的模板', () => {
     expect(
       apiGetMock.mock.calls.filter((c) => String(c[0]).includes('/print-templates/resolve')),
     ).toHaveLength(1);
-    expect(w.text()).toContain('零件版');
+    // ⚠️ 同样等落定：上面 `flush()` 覆盖的是「resolve 已发出」，取字节 + xlsx 解析在它后面。
+    await waitUntil(() => w.text().includes('零件版'), '重开后重新探到版式');
   });
 
   // 换单必须清模板态：详情页可以在对话框**关着**的时候换单（v-if 前后都为真、组件不卸载、
@@ -826,7 +828,9 @@ describe('PrintPreviewDialog 自动选用一级客户绑定的模板', () => {
         ),
       '按新单据的客户重新 resolve',
     );
-    expect(w.text()).toContain('零件版');
+    // ⚠️ **等版式真的落定再断言**：上面只等到 resolve **发出**，后面还有取字节 + 一次完整 xlsx
+    // 解析（2026-10-18 跑变异实测时这条偶发红过一次 —— 机器忙时断言跑在解析前面）。
+    await waitUntil(() => w.text().includes('零件版'), '按新单据重新选到模板');
   });
 
   // 代次守卫守的是「开→关→再开」时两次 resolve 并飞：#1 落地那一刻没有任何东西拦它。
@@ -842,7 +846,12 @@ describe('PrintPreviewDialog 自动选用一级客户绑定的模板', () => {
         // 再读它会让两次都返回「第二个」的名字，用例就变成恒绿。
         const n = (resolveCalls += 1);
         if (n === 1) await firstGate.promise;
-        return { data: boundTemplateOut(BUILTIN_PART.byteLength, n === 1 ? 'slow_first.xlsx' : 'fast_second.xlsx') };
+        return {
+          data: boundTemplateOut(
+            BUILTIN_PART.byteLength,
+            n === 1 ? 'slow_first.xlsx' : 'fast_second.xlsx',
+          ),
+        };
       }
       return defaultGet(url);
     });
@@ -925,5 +934,53 @@ describe('PrintPreviewDialog 检具版模板', () => {
     // 零件版页脚：F15「送货人：李四」、A17「送货日期：…年…月…日」（整串嵌在模板文案里）
     expect(String(wb.sheets[0]!.rows[14]![5])).toContain('李四');
     expect(String(wb.sheets[0]!.rows[16]![0])).toMatch(/送货日期：\s*\d{4}年\d{1,2}月\d{1,2}日/);
+  });
+});
+
+// ============================================================
+// 导出前对「刚取回的字节」复探版式（防管理员在对话框开着时换了绑定）
+// ============================================================
+// 后端「同一客户再次上传 = 替换绑定」，所以 `/{id}/content` 取回的字节可能已经不是打开时那份。
+// 少了这道复探：零件版的 10 行 × A..J 会被写进检具模板的 row 3..12（盖掉两行表头），四个占位符
+// 检具模板里一个都没有 ⇒ 输出留着字面量 `{{delivery_date}}`，**零报错零日志**。
+describe('PrintPreviewDialog 导出前复探版式', () => {
+  it('打开时是零件版、导出前绑定已换成检具版 ⇒ 中止导出 + 提示重开 + 零产物', async () => {
+    withDriverOptions();
+    const w = await mountWithBound(BUILTIN_PART);
+    expect(w.text()).toContain('零件版');
+
+    // 管理员在对话框开着的时候把绑定换成了另一套版式（后端是替换语义，不是新增）。
+    bindTemplate(BUILTIN_GAUGE, 'gauge_bailuda.xlsx');
+
+    await clickExport(w, false);
+    expect(downloads).toHaveLength(0);
+    const msg = (ElMessage.error as unknown as { mock: { calls: string[][] } }).mock.calls
+      .at(-1)![0];
+    expect(msg).toContain('打印模板已更换');
+    expect(msg).toContain('重新打开');
+    // 对话框不关（用户看完提示自己关），导出按钮回到可点。
+    expect(w.emitted('update:modelValue')).toBeUndefined();
+  });
+
+  it('绑定没换 → 复探通过，正常导出（防这道守卫把导出整体堵死）', async () => {
+    // 反向守卫：复探实现成「恒中止」时上面那条照样是绿的，只有这条会红。
+    withDriverOptions();
+    const w = await mountWithBound(BUILTIN_PART);
+    await clickExport(w, true);
+    expect(downloads).toHaveLength(1);
+    const wb = await openDownloaded();
+    expect(String(wb.sheets[0]!.rows[14]![5])).toContain('李四');
+  });
+
+  it('导出前绑定换成了判不出版式的字节 ⇒ 同样中止（判不出就禁导出，与打开时同一条口径）', async () => {
+    withDriverOptions();
+    const w = await mountWithBound(BUILTIN_PART);
+    bindTemplate(await unrecognizableTemplateBytes(), 'mystery.xlsx');
+
+    await clickExport(w, false);
+    expect(downloads).toHaveLength(0);
+    expect(
+      (ElMessage.error as unknown as { mock: { calls: string[][] } }).mock.calls.at(-1)![0],
+    ).toContain('打印模板已更换');
   });
 });

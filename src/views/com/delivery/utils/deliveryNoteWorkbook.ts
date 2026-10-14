@@ -313,9 +313,9 @@ export async function renderDeliveryNoteWorkbook<
   // 开了之后样式挂在 `sheet.cells` 侧表上（不挂在 `rows[y][x]` 的值上）⇒ 数据行一律
   // 走 `setCell` 双写（见它的注释），清空未填满的行也不会踩掉边框。
   //
-  // ⚠️ `PrintPreviewDialog.vue` 里的两处 `openXlsx`（上传时 / 导出前）**故意不开**
-  // readStyles：那里只做「读值做模板契约校验」、不产出文件，省掉一次全量样式解析。
-  // 不要为了「统一」把三处一起改。
+  // ⚠️ `PrintPreviewDialog.vue` 里那两处 `openXlsx`（打开对话框探测版式 / 导出前复探版式）
+  // **故意不开** readStyles：那里只做 `detectTemplateContract` 的锚点探测（O(1) 读 4 格）、
+  // 不产出文件，省掉一次全量样式解析。
   const wb = await openXlsx(templateBytes, { readStyles: true });
   const base = wb.sheets[c.sheetIndex];
   if (!base) throw new Error('模板缺少数据工作表');

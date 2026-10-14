@@ -35,7 +35,8 @@
         </el-select>
 
         <!-- ⚠️ `:limit="1"` 的坑：第二次选**同一个**文件不触发 on-change，必须先 clearFiles()
-             清掉 el-upload 的内部列表（仓内同款注释与实现见打印对话框的 `onExceed`）。 -->
+             清掉 el-upload 的内部列表（同款注释与 `on-file-change` 收尾见
+             `views/parts/list/components/PurchaseOrderImportDialog.vue`）。 -->
         <el-upload
           ref="uploadRef"
           :auto-upload="false"

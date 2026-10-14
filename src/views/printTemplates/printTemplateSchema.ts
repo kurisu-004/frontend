@@ -18,9 +18,9 @@
 //     没跟上，表格那一列恒空）。
 //   - **读侧口径（外层**不** `.strict()`）**：`printTemplateResolveSchema` 的**顶层对象**。
 //     它的失败模式与上面相反：`.strict()` 一旦抛，`PrintPreviewDialog.vue::resolveBoundTemplate`
-//     落进 else 分支 → 一句「自动选用该客户模板失败，请手动选择模板」⇒ **全站客户的自动选型
-//     集体静默失效**，而失败原因既不弹 toast 也不进错误日志。读侧多一个字段是纯增量信息，
-//     strip 掉它零代价。
+//     落进 else 分支 → 一句「自动选用该客户模板失败，请到「模板编辑」页重新上传」
+//     ⇒ **全站客户的自动选用集体静默失效**，而失败原因既不弹 toast 也不进错误日志。读侧多一个
+//     字段是纯增量信息，strip 掉它零代价。
 //   - ⚠️ **嵌套在 resolve 里的那层 `template` 仍是 `.strict()`**（2026-10-16 review 第 2 轮 C-1
 //     把 resolve 出参订正成「嵌套」之后新增的第三层判断）：它与列表行是**同一个 VO**（后端
 //     `PrintTemplateResolveOut.template` 的类型字面就是 `PrintTemplateOut`），所以两份 schema
@@ -126,7 +126,8 @@ export type PrintTemplateListResultData = z.infer<typeof printTemplateListResult
  * ⚠️ **是「一个信封套一行」，不是平铺**（2026-10-16 review 第 2 轮 C-1，本域唯一的阻断项）：
  * 后端 `vo.rs` 里 `PrintTemplateResolveOut { template: PrintTemplateOut, customer_name }`。
  * 前端原先把它写成平铺的 `id` / `customer_id` / … / `content_url`，`parse` 每一屏都抛
- * ⇒ **对每个已绑模板的客户，自动选用 100% 失效、集体退回手动上传**。
+ * ⇒ **对每个已绑模板的客户，自动选用 100% 失效，而打印页没有上传入口可退回** —— 用户只能自己
+ * 去「模板编辑」页把这份模板重传一遍（换句话说：故障现场表现为「这台机器打不出送货单」）。
  * ⇒ 消费方取字段一律走 `hit.template.id` / `hit.template.original_filename`。
  *
  * ⚠️ **`content_url` 这个字段后端从头到尾没有**（`vo.rs` 里查无此名）：前端原先那条

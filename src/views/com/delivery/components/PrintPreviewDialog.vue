@@ -23,6 +23,13 @@
   —— O(1) 读 4 格、判不出版式就是判不出，**不产生任何逐格差异清单**；判不出时给一句提示
   指向「模板编辑」页重新上传。
 
+  ⚠️ **导出时对刚取回的字节再探一次版式**（2026-10-18，见 `onExport`）：后端允许「同一客户再次
+  上传 = 替换绑定」，所以对话框开着的那几分钟里管理员完全可能把这份模板换成另一套版式。导出取的是
+  **新**字节、用的却是**打开时**那份契约 ⇒ 零件版的 10 行 × A..J 会被写进检具模板的 row 3..12
+  （正好盖掉两行表头），而 `fillTemplate` 写的四个占位符检具模板里一个都没有 ⇒ 输出留着字面量
+  `{{delivery_date}}`，**零报错零日志**。所以导出前对刚取回的字节跑一次探测（仍是 O(1) 四格，
+  不是逐格校验），版式对不上或判不出就中止并提示重开对话框。
+
   表头排序 + 行拖拽 + 行拆分 + 列拖拽共存，行拖拽会清掉排序标记（自定义顺序优先）。
 
   交互契约：
@@ -75,7 +82,10 @@ import {
   type PrintRow,
 } from '../utils/deliveryNotePrintRows';
 import { renderDeliveryNoteWorkbook, XLSX_MIME } from '../utils/deliveryNoteWorkbook';
-import { DELIVERY_NOTE_TEMPLATE_CONTRACT } from '../utils/deliveryNoteTemplateContract';
+import {
+  DELIVERY_NOTE_TEMPLATE_CONTRACT,
+  GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT,
+} from '../utils/deliveryNoteTemplateContract';
 import type { DeliveryNoteTemplateContract } from '../utils/deliveryNoteTemplateContract';
 import { fetchPrintTemplateContent, resolvePrintTemplate } from '@/api/printTemplates';
 
@@ -137,17 +147,42 @@ const resolveSeq = ref(0);
 const UNKNOWN_LAYOUT_HINT =
   '这份模板不匹配任何一套版式（零件版 / 检具版），请到「模板编辑」页重新上传';
 
+/** 导出那一刻复探出的版式与打开时那份不是同一套（管理员在对话框开着时换了绑定）。
+ *  措辞指路「关掉重开」而不是「去修模板」—— 模板本身没问题，是本端的快照过期了。 */
+const TEMPLATE_CHANGED_HINT =
+  '该客户的打印模板已更换，请关闭本对话框后重新打开（换模板请到「模板编辑」页上传）';
+
+/** 该单据没有一级客户 ⇒ 连按客户自动选用的入口都没有（后端送货单恒挂在某客户下，这是兜底）。 */
+const NO_CUSTOMER_HINT = '这张送货单没有一级客户，无法按客户自动选用打印模板';
+
 /** 该一级客户未绑定模板的后端业务码（见 `api/printTemplates.ts::resolvePrintTemplate`）。 */
 const TEMPLATE_NOT_BOUND_CODE = 21109;
 
 /** 可导出所需的模板态：字节来源与探测到的版式都在（两者在 resolve 里同时置起）。 */
 const templateOk = computed(() => templateSource.value !== null && templateContract.value !== null);
 
-/** 工具栏上的版式标签（探测不出时为空串）。 */
+/** 未知版式判别位的编译期兜底：走到这里说明契约联合多了一个没接的 `kind`。
+ *  `tsc` 当场红比让人事后看出来便宜（见 `contractLabel`）。 */
+function assertNeverKind(never: never): never {
+  throw new Error(`未接的送货单模板版式：${JSON.stringify(never)}`);
+}
+
+/** 工具栏上的版式标签（探测不出时为空串）。
+ *
+ *  ⚠️ **`switch` + `default: assertNeverKind`**，不要写成 `c.kind === 'gauge' ? '检具版' :
+ *  '零件版'` —— 后者在将来新增第三套版式时会**安静地**显示「零件版」，lint 与 typecheck 全绿。
+ *  `kind` 是判别位，漏一个就是漏一整条链路（sheet 容量 / 页脚实参 / 司机下拉显隐都按它分支）。 */
 const contractLabel = computed(() => {
   const c = templateContract.value;
   if (c === null) return '';
-  return c.kind === 'gauge' ? '检具版' : '零件版';
+  switch (c.kind) {
+    case 'part':
+      return '零件版';
+    case 'gauge':
+      return '检具版';
+    default:
+      return assertNeverKind(c);
+  }
 });
 
 /**
@@ -444,11 +479,19 @@ const exportHint = computed(() => {
   // 完整 xlsx 解析（几百 ms ~ 数秒），是**每次打开都必然经过**的常态，不是边缘情况。
   if (boundResolving.value) return '正在自动选用该客户的绑定模板…';
   if (!templateOk.value) {
+    // ⚠️ **「这张单没有一级客户」要单独一条**：`resolveBoundTemplate` 在这种单据上直接早退、
+    // **不写任何状态** ⇒ 不命中下面任何一条分支，tooltip 会落到最后那句「判不出版式」，把
+    // 「压根没法按客户找模板」说成「模板不合法」（并把用户引去改 Excel）。
+    if (!props.note.customer_id) return NO_CUSTOMER_HINT;
     // ⚠️ 21109（该一级客户没绑模板）要说清「去哪儿解决」：打印页没有上传入口，唯一去处是
     // 「模板编辑」页给这个客户配一份常驻模板。
     if (boundMissing.value) return '该一级客户未绑定打印模板，请到「模板编辑」页为该客户配置';
-    // 另两句失败原因（取字节 / 探测抛错、判不出版式）与工具栏那一行同源，避免两处措辞漂移。
-    return autoHint.value || UNKNOWN_LAYOUT_HINT;
+    // 另两句失败原因（取字节 / 探测抛错、判不出版式）由 resolve 直接写进 `autoHint`，这里原样
+    // 复用，避免两处措辞漂移。
+    if (autoHint.value) return autoHint.value;
+    // 兜底**刻意中性**：走到这里只有「resolve 没给出任何结论」（如关对话框时那次迟到结果被
+    // 代次守卫丢弃）。说「判不出版式」是在给一个还没查完的状态编原因。
+    return '打印模板尚未就绪，请稍后重试；若反复出现请到「模板编辑」页检查该客户的绑定模板';
   }
   if (totalRows.value === 0) return '没有可打印的行项';
   return '';
@@ -464,18 +507,12 @@ function todayParts(): { year: string; month: string; date: string } {
 }
 
 /**
- * 按探测到的版式构造页脚实参。
+ * 导出：取字节 → **对刚取回的字节复探版式** → 落库司机 → 按版式渲染。
  *
- * ⚠️ 两套版式的页脚**不是同一组占位符**（判别联合，见 deliveryNoteWorkbook.ts 的
- * `FooterFor`）：零件版是页脚区的送货人 + 年月日三段，检具版只有表头右侧 I2 的一个送货日期
- * （整段 `YYYY年M月D日`，不是拆开的三段）。配套关系由泛型在编译期兜住，这里只负责挑实参。
+ * ⚠️ **两个动作的顺序是有意的**（2026-10-18）：复探在司机落库**之前**。复探不过是一次
+ * **纯读取**的失败（模板被换绑了），不该已经在服务端留下一条 driver 的 version 变更 ——
+ * 用户什么都没打印成，服务器却记了一次「他确认了送货人」。
  */
-function footerOf(contract: DeliveryNoteTemplateContract) {
-  return contract.kind === 'gauge'
-    ? { kind: 'gauge' as const, deliveryDate: formatChineseDeliveryDate(new Date()) }
-    : { kind: 'part' as const, driverName: driverNameOfExport.value, ...todayParts() };
-}
-
 async function onExport(): Promise<void> {
   if (exportDisabled.value) return;
   const contract = templateContract.value;
@@ -483,12 +520,41 @@ async function onExport(): Promise<void> {
   if (!contract || !src) return;
   exporting.value = true;
   try {
-    // 司机先落库（**仅在用户选过司机时**才发请求，见 persistSelectedDriver）：选了下拉
+    const bytes = await fetchTemplateBytes(src);
+    // ⚠️ **复探的是「刚取回的字节」，不是打开时那份**：后端允许「同一客户再次上传 = 替换
+    // 绑定」，所以这份 `bytes` 可能已经是另一套版式了，而 `contract` 仍是打开时探出的那一份。
+    // 继续渲染的后果见文件头（零件版的 10 行 × A..J 盖在检具模板的两行表头上，四个占位符一个
+    // 都没有，零报错零日志）。判不出（`null`）同样中止 —— 与「判不出版式就禁导出」同一条口径。
+    const { openXlsx } = await import('hucre');
+    const fresh = detectTemplateContract(await openXlsx(bytes));
+    if (fresh === null || fresh.kind !== contract.kind) {
+      ElMessage.error(TEMPLATE_CHANGED_HINT);
+      return;
+    }
+    // 司机落库（**仅在用户选过司机时**才发请求，见 persistSelectedDriver）：选了下拉
     // 就是「这次确认了送货人」。落库失败（409 / 21409 / 网络）时中止，不产出文件 ——
     // 否则会下载出一张页脚写着 A 司机、单据上却是 B 司机的送货单。
     if (!(await persistSelectedDriver())) return;
-    const bytes = await fetchTemplateBytes(src);
-    const out = await renderDeliveryNoteWorkbook(bytes, sheets.value, footerOf(contract), contract);
+    // ⚠️ **按 kind 分支各调一次 `renderDeliveryNoteWorkbook`、各传对应的具体契约常量**：
+    // 页脚实参的类型 `FooterFor<C>` 是按契约反查的判别联合，分支之后 `contract` 已收窄成具体
+    // 成员，页脚就必须是对应那一份的形状 —— 页脚与契约配错，`tsc` 当场红。走一个「返回联合」的
+    // 中转函数会把这条编译期耦合稀释掉（联合的任一成员都传得进去），只剩运行时那道
+    // `assertFooterMatchesContract`。分支里传契约常量（`detectTemplateContract` 返回的正是
+    // 这两个常量本身，不是副本）。
+    const out =
+      contract.kind === 'gauge'
+        ? await renderDeliveryNoteWorkbook(
+            bytes,
+            sheets.value,
+            { kind: 'gauge', deliveryDate: formatChineseDeliveryDate(new Date()) },
+            GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT,
+          )
+        : await renderDeliveryNoteWorkbook(
+            bytes,
+            sheets.value,
+            { driverName: driverNameOfExport.value, ...todayParts() },
+            DELIVERY_NOTE_TEMPLATE_CONTRACT,
+          );
     triggerBrowserDownload(
       // `out` 是 hucre 的 Uint8Array（TS 5.7+ 泛型到 ArrayBufferLike，而
       // BlobPart 要 ArrayBuffer 变体）—— 复制进一个新的 ArrayBuffer 再包，零拷贝
@@ -543,7 +609,7 @@ async function onExport(): Promise<void> {
           :model-value="columnVisibility.currentMap"
           @update:model-value="columnVisibility.update"
           @reset="columnVisibility.showAll"
-          @reset-order="resetOrderToken += 1"
+          @resetOrder="resetOrderToken += 1"
         />
       </span>
 
@@ -605,7 +671,6 @@ async function onExport(): Promise<void> {
         </div>
       </el-tab-pane>
     </el-tabs>
-
 
     <template #footer>
       <span class="footer-hint">共 {{ totalRows }} 条 · {{ sheets.length }} 个 sheet</span>
