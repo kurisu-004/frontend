@@ -10,10 +10,8 @@
 
   设计要点：
    - props.src = null 时不挂载 SceneManager（避免空 canvas）；src 非空时挂载 + 加载。
-   - props.src 变化（典型场景：切换 part / 切换文件）→ 释放旧 model + revoke 旧 blob URL
-     + fetch 新 blob → occt-wasm 解析 → setModel。
-   - onBeforeUnmount：sceneManager.unmount() + cubeGizmo.dispose() + revokeObjectURL，
-     防止 GPU 资源泄漏（CLAUDE.md 强调 WebGL 资源要 dispose）。
+   - props.src 变化（典型场景：切换 part / 切换文件）→ 释放旧 model + 释放旧 wasm 句柄 + revoke 旧 blob URL + fetch 新 blob → occt-wasm 解析 → setModel。
+   - onBeforeUnmount：sceneManager.unmount() + cubeGizmo.dispose() + 释放 wasm 句柄 + revokeObjectURL，防止 GPU 资源泄漏（CLAUDE.md 强调 WebGL 资源要 dispose）。
    - blob URL 由 props 传入，不在内部 fetch —— 父组件已经走 axios + responseType:'blob'
      鉴权拦截。本组件不重复拉数据。
 -->
@@ -33,7 +31,12 @@
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import { SceneManager } from '@/three/SceneManager';
 import { CubeGizmo } from '@/three/CubeGizmo';
-import { loadStepFromBytes, OcctLoadError, type OcctFormat } from '@/three/OcctStepLoader';
+import {
+  loadStepFromBytes,
+  releaseShape,
+  OcctLoadError,
+  type OcctFormat,
+} from '@/three/OcctStepLoader';
 import type { LoadedShape } from '@/three/types';
 import { useStepViewer } from './useStepViewer';
 import { detectOcctFormat } from '@/utils/stepViewerFile';
@@ -122,7 +125,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  // 释放顺序：先 gizmo → 再 sceneManager → 再 revoke blob URL
+  // 释放顺序：先 gizmo → 再 sceneManager → 再 wasm 句柄 → 最后 revoke blob URL
   if (cubeGizmo.value) {
     cubeGizmo.value.dispose();
     cubeGizmo.value = null;
@@ -131,7 +134,7 @@ onBeforeUnmount(() => {
     sceneManager.value.unmount();
     sceneManager.value = null;
   }
-  currentShape.value = null;
+  releaseCurrentShape();
   loaded.value = false;
   loading.value = false;
   if (currentBlob.value) {
@@ -149,6 +152,7 @@ watch(
     if (!sceneManager.value) return;
     if (!newSrc) {
       // src 清空：卸载当前模型，回到空白 canvas
+      releaseCurrentShape();
       loaded.value = false;
       loading.value = false;
       progressPct.value = 0;
@@ -165,9 +169,28 @@ watch(gizmoVisible, (v) => cubeGizmo.value?.setVisible(v));
 
 // ----------------- 加载主流程 -----------------
 
+/**
+ * 2026-10-20 新增：放掉当前持有的形状 —— wasm 句柄 + 加载器里的两张缓存表。
+ *
+ * occt-wasm 的形状句柄是 arena 整数，**不会**随「模型不再显示」自动回收：GPU 侧
+ * SceneManager 会 dispose 网格几何体，wasm 堆里的 TopoDS_Shape 与 JS 侧的拓扑树却一直留着。
+ * 反复切文件 / 反复开关预览面板会让它们只增不减，所以「切模型」「src 清空」「组件卸载」
+ * 三条路径都要走这里（`releaseShape` 内部对 null 是空操作，故本函数不判空）。
+ *
+ * ⚠️ 刻意**不**在这里调 `disposeKernel()`：kernel 是模块级单例，多个 `StepViewer` 实例
+ * （`FileListCard` 每个 3D 文件一个）会同时活着，拆掉内核会让其余实例的句柄全部失效。
+ */
+function releaseCurrentShape(): void {
+  const shape = currentShape.value;
+  currentShape.value = null;
+  releaseShape(shape);
+}
+
 async function loadFromBlobUrl(url: string): Promise<void> {
   const sm = sceneManager.value;
   if (!sm) return;
+  // 先放掉上一份，再拉新的：两份句柄同时活着没有任何好处。
+  releaseCurrentShape();
   loading.value = true;
   loaded.value = false;
   progressPct.value = 0;

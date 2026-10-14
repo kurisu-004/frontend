@@ -11,7 +11,8 @@
 //   - Mesh + LineSegments2 组合为 THREE.Group，add 到 scene 即可
 //
 // 注：本文件不依赖任何 vendored 代码。occt-wasm 句柄（ShapeHandle = number）
-//      通过内核的 release() / releaseAll() 释放。
+//      由 `releaseShape()`（切模型 / 卸载时逐个释放）与 `disposeKernel()`（整进程拆解，
+//      内部 releaseAll + delete）两条路释放。
 
 import * as THREE from 'three';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
@@ -64,28 +65,110 @@ const topologyCache = new Map<ShapeHandle, TopologyNode>();
 const statsCache = new Map<ShapeHandle, TopologyStats>();
 let lastLoaded: ShapeHandle | null = null;
 
-/** 拿到已加载文件的最末一层拓扑（浏览器控制台 inspect 用） */
+/**
+ * 2026-10-20 新增：句柄 → 拓扑 / 统计 的模块级缓存的**唯一出入口**。
+ *
+ * 为什么要包一层：这两张 Map 此前只有写入点（`loadStepFromBytes`）与三个只读调试出口，
+ * 没有任何清理路径 —— 每加载一个 STEP/BREP/STL 就多留一份拓扑树和统计，且 occt-wasm 那边
+ * 的形状句柄同样只增不减。把它收成一个对象，`forget()` 才有唯一实现可测（见
+ * `__tests__/stepShapeRelease.spec.ts`：缓存大小不得随加载次数单调增长）。
+ *
+ * 写点只有 `loadStepFromBytes` 一处；`reset()` 只有 `disposeKernel()` 一个调用方。导出整个
+ * 对象是为了让清位逻辑可单测（node 环境无法初始化 wasm，见该 spec 头注释），不是给业务侧
+ * 的第二套 API。
+ */
+export const shapeCache = {
+  /** 记录一次加载产出的句柄与它对应的拓扑 / 统计。 */
+  put(handle: ShapeHandle, topology: TopologyNode, stats: TopologyStats): void {
+    topologyCache.set(handle, topology);
+    statsCache.set(handle, stats);
+    lastLoaded = handle;
+  },
+  /** 单个句柄的拓扑；未缓存（已释放 / 不是本模块产的）时返回 null。 */
+  topologyOf(handle: ShapeHandle): TopologyNode | null {
+    return topologyCache.get(handle) ?? null;
+  },
+  /** 单个句柄的统计；未缓存（已释放 / 不是本模块产的）时返回 null。 */
+  statsOf(handle: ShapeHandle): TopologyStats | null {
+    return statsCache.get(handle) ?? null;
+  },
+  /**
+   * 清掉一个句柄的拓扑 + 统计条目；返回它是否正好是「最近一次加载」那一个。
+   * 清「最近一次」是为了让 `inspectLastLoaded()` 如实回答「现在没有可看的模型」，
+   * 而不是把一个已被释放的句柄继续摆给控制台。
+   */
+  forget(handle: ShapeHandle): boolean {
+    topologyCache.delete(handle);
+    statsCache.delete(handle);
+    if (lastLoaded !== handle) return false;
+    lastLoaded = null;
+    return true;
+  },
+  /** 当前缓存的句柄数（诊断与测试用）。 */
+  size(): number {
+    return topologyCache.size;
+  },
+  /** 清空两张表并复位「最近一次加载」。仅 `disposeKernel()` 用（kernel 都换人了）。 */
+  reset(): void {
+    topologyCache.clear();
+    statsCache.clear();
+    lastLoaded = null;
+  },
+};
+
+/**
+ * 拿到已加载文件的最末一层拓扑。
+ *
+ * ⚠️ **无任何代码调用方，仅供浏览器控制台 inspect**（排查 OCCT 解析结果时在 devtools 里
+ * 手敲）。它与正式清理路径 `releaseShape()` 的区别：释放某个形状后本函数返回 null，而不是
+ * 继续给出一个句柄已失效的对象。
+ */
 export function inspectLastLoaded(): TopologyNode | null {
   if (lastLoaded === null) return null;
   return topologyCache.get(lastLoaded) ?? null;
 }
 
-/** 拿单个句柄的拓扑（缓存） */
+/** 拿单个句柄的拓扑（缓存）。⚠️ 同上：无代码调用方，仅供浏览器控制台 inspect。 */
 export function getTopology(handle: ShapeHandle): TopologyNode | null {
   return topologyCache.get(handle) ?? null;
 }
 
-/** 拿单个句柄的统计（缓存） */
+/** 拿单个句柄的统计（缓存）。⚠️ 同上：无代码调用方，仅供浏览器控制台 inspect。 */
 export function getStats(handle: ShapeHandle): TopologyStats | null {
   return statsCache.get(handle) ?? null;
 }
 
-/** 重置内部状态（测试 / 切场景时用） */
-export function _resetKernelForTest(): void {
+/**
+ * 释放一个已加载形状的 wasm 句柄，并清掉它在两张缓存表里的条目。**生产路径上的正式清理
+ * 入口**，调用方是 `StepViewer.vue`：切模型、src 清空、组件卸载三条路径各调一次。
+ *
+ * 只传 `LoadedShape` 的句柄 + kernel 两个字段就够（三维组的 GPU 资源由 SceneManager 另行
+ * dispose，与本函数无关）。传 null / undefined 时是空操作，调用方不必自己判空。
+ *
+ * `shapeCache.forget` 刻意放在 `kernel.release` **之前、且不在同一个 try 里**：反过来写成
+ * 「先 release 再 forget，forget 塞在 try 内」的话，release 一抛错（内核已被 dispose /
+ * 句柄已失效）就跳过 forget，两张表里留下一条永远拿不掉的僵尸条目。
+ *
+ * 网格数据不受影响：`meshShape` / `wireframe` 早已把顶点拷进普通 Float32Array，释放 OCCT
+ * 句柄不会让已经在屏上的模型消失。
+ */
+export function releaseShape(
+  shape: Pick<LoadedShape, 'rootHandle' | 'kernel'> | null | undefined,
+): void {
+  if (!shape) return;
+  shapeCache.forget(shape.rootHandle);
+  try {
+    shape.kernel.release(shape.rootHandle);
+  } catch {
+    /* 句柄已失效或内核已 dispose：缓存已清掉，这里无需再做什么 */
+  }
+}
+
+/** 重置模块级内核引用与缓存。**只有 `disposeKernel()` 一个调用方**（原先的
+ *  `_resetKernelForTest` 没有任何测试在用，名字与实际用途不符，一并去掉）。 */
+function resetKernelState(): void {
   kernelPromise = null;
-  topologyCache.clear();
-  statsCache.clear();
-  lastLoaded = null;
+  shapeCache.reset();
 }
 
 async function getKernel(): Promise<OcctKernel> {
@@ -416,9 +499,7 @@ export async function loadStepFromBytes(
   // 拓扑 + 统计
   const topology = buildTopology(kernel, shape);
   const stats = buildStats(kernel, shape);
-  topologyCache.set(shape, topology);
-  statsCache.set(shape, stats);
-  lastLoaded = shape;
+  shapeCache.put(shape, topology, stats);
 
   options.onProgress?.(60, 'tessellate');
 
@@ -473,17 +554,28 @@ export async function loadStepFromArrayBuffer(
   return loadStepFromBytes(new Uint8Array(buf), format, options);
 }
 
-// 仅暴露一次 kernel 给模块内部清理使用
+/**
+ * 整进程级内核拆解：释放 kernel 持有的**全部**句柄（`[Symbol.dispose]` 内部走 releaseAll +
+ * delete 原始内核）并清空模块级状态。
+ *
+ * ⚠️ **绝不能挂在任何组件生命周期上**：kernel 是模块级单例，而 `StepViewer` 可以同时挂着多个
+ * 实例（`FileListCard` 每个 3D 文件一个、`DrawingPreviewPane` 一个），一个卸载就拆 kernel
+ * 会让其余实例下一次加载拿到已释放的句柄；而且 wasm 初始化本身不便宜，让它跟着「关一个预览
+ * 窗口」反复拆建更亏。单个形状的释放走 `releaseShape()`，本函数留给「确认没有任何
+ * `StepViewer` 挂载」的整进程收尾（应用退出、集成测试 teardown）。
+ */
 export async function disposeKernel(): Promise<void> {
-  if (kernelPromise) {
-    const k = await kernelPromise;
+  const pending = kernelPromise;
+  if (pending) {
+    kernelPromise = null;
     try {
+      const k = await pending;
       (k as unknown as { [Symbol.dispose]: () => void })[Symbol.dispose]();
     } catch {
-      /* ignore */
+      /* 初始化就失败或已 dispose：下面照样把模块级状态复位 */
     }
   }
-  _resetKernelForTest();
+  resetKernelState();
 }
 
 // 抑制 unused 警告（SHAPE_TYPES_RECURSED 留作未来拓展）
