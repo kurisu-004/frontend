@@ -19,8 +19,8 @@
 //   - POST /files/objects/{id}/delete   软删（OCC，body 必带 version）
 //   - GET  /files/objects/{id}/content  原始二进制（blob）—— 降级为「查看原始 PDF」兜底
 //
-// 导出数与端点数不等：另有纯 URL 构造器 `getPartFileContentUrl`（不发请求，只拼
-// `{id}/content` 的路径）与包着它的 `fetchPartFileContent`，两者不单列。
+// 导出数与端点数不等：另有纯 URL 构造器 `partFileContentPath`（不发请求，只拼
+// `{id}/content` 的路径，未导出）与包着它的 `fetchPartFileContent`，两者不单列。
 //
 // **预览链路的两条路**（2026-10-13）：图纸预览首选 `/preview` 拿 CI 转好的逐页图片直链
 // （`getPartFilePreview`），浏览器不再下载整份 PDF 交给 pdf.js；`/content` 保留为
@@ -203,40 +203,31 @@ export async function getPartFilePreview(
   return resp.data;
 }
 
-/**
- * `GET /api/v2/files/objects/{id}/content`：返回文件原始二进制（blob）。
+/** `GET /api/v2/files/objects/{id}/content` 的相对路径（**不发请求**，只拼 URL）。
  *
- * **降级定位（2026-10-13）**：图纸预览首选 `/preview` 的 CI 转图直链，本函数不再
- * 是预览主力，而是三处仍要它：
- *   1. 「查看原始 PDF」逃生口 —— 图片模式没有矢量缩放与文字选中，用户要看细节时
- *      退回原始 PDF；
- *   2. `/preview` 端点不支持 / 转码失败时的自动兜底（`isPreviewUnsupportedError`）；
- *   3. 非图纸类文件（3D 模型 STEP/STL、CNC G 代码…）的内嵌预览 —— 它们不参与转图，
- *      blob 路径是唯一形态。
- *
- * 用于内嵌预览（PDF 走 PdfViewer、图片走 el-image）。URL 走相对路径，
- * 与 `api` 实例 baseURL `/api/v2` 拼接，由调用方自行 `axios.get(url, { responseType: 'blob' })`
- * 拉取。这里**只返回 URL 字符串**，避免绑死请求实例 —— FileListCard 需要
- * 既支持 props 注入（外部 axios 实例），也支持默认走 `api`。
- *
- * 端点不带鉴权 header 直接 GET → 由调用方 axios 拦截器注入 Bearer token；
- * 不要把 URL 直接塞进 `<img src>` / `<iframe src>`，那样会绕过鉴权拦截器。
- */
-export function getPartFileContentUrl(fileId: string): string {
+ *  不导出：全仓唯一的消费方是同文件的 `fetchPartFileContent`，而 `/content` 端点不带
+ *  鉴权 header 直接 GET ⇒ 必须走 `api` 实例的拦截器注入 Bearer token，裸 URL 交给
+ *  调用方自行 axios.get 只会绕开它。 */
+function partFileContentPath(fileId: string): string {
   return `/files/objects/${encodeURIComponent(fileId)}/content`;
 }
 
 /**
  * `GET /api/v2/files/objects/{id}/content`：拉文件 blob。
  *
- * 默认实现：走 `api` 实例 + responseType=blob。FileListCard 在 caller 未注入
- * `apiGetPreviewUrl` 时走这条默认路径。
+ * **降级定位**：图纸预览首选 `/preview` 的 CI 转图直链，本函数不再是预览主力，
+ * 而是三处仍要它：
+ *   1. 「查看原始 PDF」逃生口 —— 图片模式没有矢量缩放与文字选中，用户要看细节时
+ *      退回原始 PDF；
+ *   2. `/preview` 端点不支持 / 转码失败时的自动兜底（`isPreviewUnsupportedError`）；
+ *   3. 非图纸类文件（3D 模型 STEP/STL、CNC G 代码…）的内嵌预览 —— 它们不参与转图，
+ *      blob 路径是唯一形态。
  *
- * 预览链路的定位见 `getPartFileContentUrl` 的 doc（三处仍要它：原始 PDF 逃生口 /
- * 转图不可用时的兜底 / 非图纸文件的唯一形态），**不要在图纸预览上再新增直调点**。
+ * 走 `api` 实例 + responseType=blob（FileListCard 在 caller 未注入 `apiGetPreviewUrl`
+ * 时走这条默认路径）。**不要在图纸预览上再新增直调点**。
  */
 export async function fetchPartFileContent(fileId: string): Promise<Blob> {
-  const resp = await api.get<Blob>(getPartFileContentUrl(fileId), {
+  const resp = await api.get<Blob>(partFileContentPath(fileId), {
     responseType: 'blob',
   });
   return resp.data;

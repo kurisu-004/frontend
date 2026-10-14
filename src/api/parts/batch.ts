@@ -1,12 +1,13 @@
-// 后端零件 API 封装 —— 批量 / 批次化端点（批量新建、批次拆分/取消、返修集合读、
-// 批量送检 / 批量品检通过）。
+// 后端零件 API 封装 —— 批量 / 批次化端点（批量新建、批次取消、返修集合读、批次集合读）。
 // 2026-09-15 Phase 5：业务全切 v2，统一走 `api`（baseURL `/api/v2`）。
 // 2026-08-25：从原 1165 行 api/parts.ts 拆分到 ./ 子文件；本文件是 ./batch 子域。
 //
-// 2026-10-02：批次的**写**端点（split / cancel）与返修集合读、批量送检 /
-// 批量品检通过，整体从 part 域迁入 prod 域（`/prod/batches/*`）—— 它们的操作对象是
-// 批次（t_part_batch），不是 part。批次集合读 `GET /parts/{part_id}/batches` 留在
-// part 域（操作对象是「某个 part 的批次集合」）。
+// 2026-10-02：批次的**写**端点（cancel）与返修集合读，整体从 part 域迁入 prod 域
+// （`/prod/batches/*`）—— 它们的操作对象是批次（t_part_batch），不是 part。批次集合读
+// `GET /parts/{part_id}/batches` 留在 part 域（操作对象是「某个 part 的批次集合」）。
+// 品检流转的现行入口是单件版 `toInspection` / `toShip` / `toProcess`
+// （见 ./crud.ts）—— 批量版（`POST /prod/batches/to-inspection` / `to-ship`）在本
+// 文件不声明封装。
 //
 // 跨子域类型引用：PartDetailDto / PartCreatePayload 定义在 ./crud；本文件所有批量响应
 // （DTO / 失败明细）都涉及单件 DTO 与单件创建 payload，因此仅 type-only 导入，
@@ -429,112 +430,4 @@ export interface RepairBatchListResult {
   total: string;
   limit: string;
   offset: string;
-}
-
-// ============ inspection to-XXX 体系批量（2026-08-28 后端路线 B 重构）==============
-
-/** `POST /prod/batches/to-inspection` 入参项（2026-10-02 由 /parts/batch-to-inspection 迁入）。
- *
- * 字段名 / 可选性与后端 `BatchToInspectionItem` 对齐；`batch_id` 必填，雪花 ID 字符串。
- * `part_id` **不再需要** —— 后端 service 按 `batch_id` 反查 `t_part_batch.part_id`。
- * 2026-08-29：新增 `version` 必填，caller OCC 锚 t_part_batch。 */
-export interface BatchToInspectionItem {
-  /** 必填；雪花 ID 字符串（CLAUDE.md §3）。 */
-  batch_id: string;
-  /** 必填；2026-08-29：t_part_batch.version。 */
-  version: number;
-  /** 可选；部分数量。缺省 = 批次全量；小于批次量时后端拆批（源批次原地减量、留在源状态，
-   *  被流转的那部分另立一个数量 = 操作量的新批次，语义见下方 new_batch_id）。 */
-  quantity?: number | null;
-}
-
-export interface BatchToInspectionRequest {
-  /** 1..=200 项；超出后端返回 40001 VALIDATION_ERROR。 */
-  items: BatchToInspectionItem[];
-}
-
-export interface BatchToInspectionFailureFE {
-  /** 雪花 ID 字符串；与请求 items[].batch_id 一一对应。 */
-  batch_id: string;
-  /** 业务错误码（20103 INVALID_TRANSITION / 20109 / 20111 / 20511 / 20512 等）。 */
-  code: number;
-  /** 后端 message 原样透传。 */
-  message: string;
-}
-
-export interface BatchToInspectionOutFE {
-  /** 成功项，与请求 items 同序（后端顺序处理）；失败项落在 failed[]，
-   *  故 submitted.length = items.length - failed.length，**下标不与 items 对齐**。
-   *  注意后端 `ToXxxOut` 只序列化 `part` + `new_batch_id` + `synced_assembly_id`，
-   *  **不含 batch_id**（2026-08-28 修正，见 inspection.md「ToXxxOut 字段」表）——
-   *  响应 → 请求的反查只能靠「位置 + 用 failed[].batch_id 扣除失败项」，不能指望
-   *  submitted[].batch_id。
-   *
-   *  ⚠️ `part` 是 10 字段窄投影 `PartOut`（`api/parts/crud.ts::PartOutDto`），
-   *  **不是** 28 字段的详情 VO —— 后端 `BatchToXxxOut.submitted: Vec<ToXxxOut>`、
-   *  `ToXxxOut.part: PartOut`，单件版（`to-ship` / `to-process` / `to-inspection`）
-   *  与批量版共用同一个 VO 元素类型。 */
-  submitted: Array<{
-    part: PartOutDto;
-    /** 拆批语义（后端 `_split_for_partial_op`）：
-     *  - 整批操作（quantity 缺省 / >= 批次量）→ `null`，未拆批；
-     *  - 部分操作（quantity < 批次量）→ `Some(remainder_id)`，而 remainder **就是入参
-     *    batch_id 本身**：源批次原地减量、状态留在源状态、id 不变；被流转的那 quantity 件
-     *    另立一个**新批次**（数量 = 操作量、状态翻到目标态），其 id 全程不返回。
-     *    前端拿到非 null 应刷新批次列表（会多出一行**数量 = 操作量**的新批次）。 */
-    new_batch_id: string | null;
-    /** 父装配件 id；仅当本 part 的状态翻转触发父 status 同步时有值，否则 `null`。
-     *  消费侧目前只拿它发 WS 广播提示（后端 handler 内部消费），前端不读。 */
-    synced_assembly_id: string | null;
-  }>;
-  failed: BatchToInspectionFailureFE[];
-}
-
-export async function batchToInspection(
-  payload: BatchToInspectionRequest,
-): Promise<BatchToInspectionOutFE> {
-  const resp = await api.post<BatchToInspectionOutFE>('/prod/batches/to-inspection', payload);
-  return resp.data;
-}
-
-/** `POST /prod/batches/to-ship` 入参项（2026-10-02 由 /parts/batch-to-ship 迁入；
- *  与 BatchToInspectionItem 同形）。
- * 2026-08-29：新增 `version` 必填，caller OCC 锚 t_part_batch。 */
-export interface BatchToShipItem {
-  batch_id: string;
-  /** 必填；2026-08-29：t_part_batch.version。 */
-  version: number;
-  quantity?: number | null;
-}
-
-export interface BatchToShipRequest {
-  items: BatchToShipItem[];
-}
-
-export interface BatchToShipFailureFE {
-  batch_id: string;
-  code: number;
-  message: string;
-}
-
-export interface BatchToShipOutFE {
-  /** 与 BatchToInspectionOutFE.submitted 同形同语义（后端 `ToXxxOut` 单 / 批端点共用同一个
-   *  元素类型，`BatchToXxxOut.submitted: Vec<ToXxxOut>`）：
-   *  与请求 items 同序、**不含 batch_id**、失败项不占位；`part` 是 10 字段窄投影
-   *  `PartOut`（不是详情 VO）。 */
-  submitted: Array<{
-    part: PartOutDto;
-    /** 拆批语义与 `BatchToInspectionOutFE.submitted[].new_batch_id` 逐条一致
-     *  （源批次原地减量、remainder 就是入参 batch_id、另立一个数量 = 操作量且 id
-     *  不返回的新批次）。 */
-    new_batch_id: string | null;
-    /** 父装配件 id；语义同 `BatchToInspectionOutFE`，前端不消费。 */
-    synced_assembly_id: string | null;
-  }>;
-  failed: BatchToShipFailureFE[];
-}
-
-export async function batchToShip(payload: BatchToShipRequest): Promise<BatchToShipOutFE> {
-  const resp = await api.post<BatchToShipOutFE>('/prod/batches/to-ship', payload);
-  return resp.data;
 }

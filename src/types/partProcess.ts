@@ -1,10 +1,7 @@
-// 2026-09-11 新增：零件 → 工序流程 (PartProcessFlow) 类型定义。
-// 阶段一（mock）：仅前端 composable + localStorage 持久化；阶段二切真接口后
-// `PartProcessFlow` 字段含义与后端 schema 对齐，`ProcessStep` 字段全部保留。
-//
-// 业务含义：替代「Part 单值 next_process_id」+「工人扫码口头约定」的混乱状态。
-// 每个 Part 维护一个有序工序列表（粗加工 → 精加工 → 品检 → 外协热处理…），
-// 每道工序带预计耗时与备注；后续工人扫码后即可按流程卡点推进。
+// 工序制定链的 UI 类型：单个工序卡（`ProcessStep`）——有序工序列表里的一道，
+// 带预计耗时与备注，工序制定页（ProcessDesignView）拿它渲染 / 拖拽 / 排序。
+// 消费方是 `views/production/composables/useProcessDesignStore.ts`（未保存的草稿与
+// 已保存的链都落这个形态）；落库形态是 `api/processChain.contract.ts` 的 DTO。
 
 import type { ProcessCategory } from './process';
 
@@ -28,23 +25,4 @@ export interface ProcessStep {
   sort_order: number;
   /** 2026-09-12 新增：从 process.color 透传（卡片左侧 4px 竖条），null 时回退到 category 默认色 */
   color?: string | null;
-}
-
-/** 零件 → 工序流程表（mock 阶段 version 始终 0；阶段二对齐后端 schema）。 */
-export interface PartProcessFlow {
-  /** FK → Part.id（雪花 ID 字符串） */
-  part_id: string;
-  /** 乐观锁版本号；mock 阶段始终 0；阶段二与后端 OCC 对齐 */
-  version: number;
-  steps: ProcessStep[];
-  /** ISO 字符串；每次 upsert/reorder/delete 时刷新 */
-  updated_at: string;
-}
-
-/** 摘要：用于右栏 toolbar 展示总耗时 / 含外协提示。 */
-export interface PartProcessSummary {
-  step_count: number;
-  total_minutes: number;
-  /** 流程中任一工序 category === 'OUTSOURCE' 且 requires_approval=true 时为 true */
-  has_outsource_approval: boolean;
 }

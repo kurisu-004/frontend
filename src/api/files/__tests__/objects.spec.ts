@@ -6,8 +6,8 @@
 // - listPartFilesByOwner GET /api/v2/files/objects，owner_id 多态 + limit 上限 500；
 // - getPartFileDownloadUrl GET /api/v2/files/objects/{id}/url，返回 download_url 字段；
 // - deletePartFile POST /api/v2/files/objects/{id}/delete，body 强制 { version }（OCC）；
-// - getPartFileContentUrl 返回相对 URL `/files/objects/{id}/content`（不含鉴权头，让
-//   调用方 axios 走拦截器注入 Bearer token）。
+// - fetchPartFileContent GET /api/v2/files/objects/{id}/content，URL 必须是**相对**
+//   路径（拼 URL 的 partFileContentPath 未导出，只由本文件内部消费）。
 //
 // multipart 直传（uploadFileObject）另见同目录 fileUploadEndpoints.spec.ts；
 // 零件打印 BFF（/parts/*）另见 src/api/parts/__tests__/print.spec.ts。
@@ -33,7 +33,6 @@ import {
   confirmFileObject,
   deletePartFile,
   fetchPartFileContent,
-  getPartFileContentUrl,
   getPartFileDownloadUrl,
   listPartFilesByOwner,
 } from '../objects';
@@ -189,19 +188,6 @@ describe('deletePartFile', () => {
   });
 });
 
-describe('getPartFileContentUrl', () => {
-  it('返回相对路径 `/files/objects/{id}/content`（不含 baseURL，由调用方 axios 拼接）', () => {
-    const url = getPartFileContentUrl('190000000000777');
-    expect(url).toBe('/files/objects/190000000000777/content');
-    // 不能是绝对 URL —— 否则 `<img src>` / `<iframe src>` 会绕开 axios 拦截器丢 Bearer
-    expect(url.startsWith('http')).toBe(false);
-  });
-
-  it('雪花 ID 走 encodeURIComponent', () => {
-    expect(getPartFileContentUrl('id/with/slash')).toBe('/files/objects/id%2Fwith%2Fslash/content');
-  });
-});
-
 describe('fetchPartFileContent', () => {
   it('GET /api/v2/files/objects/{id}/content，responseType=blob', async () => {
     const fakeBlob = new Blob(['pdf-bytes'], { type: 'application/pdf' });
@@ -214,5 +200,16 @@ describe('fetchPartFileContent', () => {
     expect(calledUrl).toBe('/files/objects/190000000000777/content');
     expect((config as Record<string, unknown>).responseType).toBe('blob');
     expect(blob).toBe(fakeBlob);
+  });
+
+  it('URL 恒为相对路径且 id 走 encodeURIComponent（裸 URL 会绕开 axios 拦截器丢 Bearer）', async () => {
+    getCalls.mockResolvedValue({ data: new Blob([]) });
+
+    await fetchPartFileContent('id/with/slash');
+
+    const [calledUrl] = getCalls.mock.calls[0]!;
+    expect(calledUrl).toBe('/files/objects/id%2Fwith%2Fslash/content');
+    // 不能是绝对 URL —— 那样 `<img src>` / `<iframe src>` 会绕开鉴权拦截器
+    expect((calledUrl as string).startsWith('http')).toBe(false);
   });
 });

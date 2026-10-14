@@ -53,13 +53,7 @@ vi.mock('@/api/http', () => ({
   }),
 }));
 
-import {
-  createCustomer,
-  getCustomer,
-  listCustomers,
-  softDeleteCustomer,
-  updateCustomer,
-} from '../customer';
+import { createCustomer, listCustomers, softDeleteCustomer, updateCustomer } from '../customer';
 
 describe('api/customer — api 层不做 parse（负向守卫，2026-10-17）', () => {
   it('A1：listCustomers 拿到缺 customer_path 的坏响应也**原样返回**，不抛 ZodError', async () => {
@@ -114,14 +108,9 @@ describe('api/customer — api 层不做 parse（负向守卫，2026-10-17）', 
     expect(out.offset).toBe(10);
   });
 
-  it('A4：其余 4 个端点的 URL / method 被钉死，且同样不 parse', async () => {
-    httpGetMock.mockReset();
+  it('A4：其余 3 个端点的 URL / method 被钉死，且同样不 parse', async () => {
     httpPostMock.mockReset();
-    httpGetMock.mockResolvedValue({ data: { id: '1' } });
     httpPostMock.mockResolvedValue({ data: { id: '1' } });
-
-    await getCustomer('42');
-    expect(httpGetMock).toHaveBeenCalledWith('/com/customers/42');
 
     await createCustomer({ name: 'X', parent_id: null, serial_prefix: 'X' });
     expect(httpPostMock).toHaveBeenCalledWith('/com/customers', {

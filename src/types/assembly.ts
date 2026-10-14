@@ -3,7 +3,7 @@
 // 与后端 schema/assembly.py 对齐的 TypeScript 类型。
 
 import type { PartListItem } from '@/types/parts';
-import type { DrawingFileItem } from './file';
+import type { DrawingFileItem } from '@/types/part_file';
 // 2026-10-05：创建响应返的是**后端 wire 形态**（`AssemblyOut` / `AssemblyChildOut`），
 // `createAssembly` 拿到 `resp.data` 后**不经过任何 mapper**
 // ⇒ 不能声明成 FE 展示型（`AssemblyItem.unit_price` 是 number、且多 4 个派生字段）。
