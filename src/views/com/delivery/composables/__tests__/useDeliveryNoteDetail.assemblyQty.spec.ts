@@ -206,9 +206,9 @@ describe('详情页零件列表绿底（已打印标签）', () => {
     // 只打了一个子件：那个子件行绿，父行不绿
     usePrintedLabels().markPrinted('NOTE-1', ['400']);
     expect(detail.deliveryLineRowClassName({ row: parent() })).toBe('');
-    expect(detail.deliveryLineRowClassName({ row: detail.treeLineItems.value[0]!.children![0]! })).toBe(
-      'row-printed',
-    );
+    expect(
+      detail.deliveryLineRowClassName({ row: detail.treeLineItems.value[0]!.children![0]! }),
+    ).toBe('row-printed');
 
     // 整套打完（打印父行会把全部子件批次一起标记上）⇒ 父行也绿
     usePrintedLabels().markPrinted('NOTE-1', ['300']);

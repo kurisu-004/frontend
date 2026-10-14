@@ -43,8 +43,8 @@
   >
     <div class="scan-tree-toolbar">
       <span class="muted">
-        扫到条码 <strong>{{ tree?.scanned_serial_no || '—' }}</strong>（{{ hitKindLabel }}）——
-        共 {{ partCount }} 个零件 / {{ batchCount }} 个批次
+        扫到条码 <strong>{{ tree?.scanned_serial_no || '—' }}</strong
+        >（{{ hitKindLabel }}）—— 共 {{ partCount }} 个零件 / {{ batchCount }} 个批次
       </span>
       <el-tag v-if="draft" type="warning" size="small" effect="plain">
         加入草稿 {{ draft.note_no }}（{{ draft.status }}）
@@ -80,9 +80,7 @@
       </el-table-column>
       <el-table-column label="可入单" width="120" align="center">
         <template #default="{ row }">
-          <span v-if="row.node_kind === 'PART'">
-            {{ row.entry_max_quantity }} 件
-          </span>
+          <span v-if="row.node_kind === 'PART'"> {{ row.entry_max_quantity }} 件 </span>
           <el-tooltip
             v-else-if="row.node_kind === 'ASSEMBLY'"
             :content="perSetText(row as ScanTreeRow)"
@@ -101,7 +99,12 @@
       </el-table-column>
       <el-table-column label="占用" min-width="140" show-overflow-tooltip>
         <template #default="{ row }">
-          <el-tag v-if="(row as ScanTreeRow).occupied_by_note_no" type="danger" size="small" effect="plain">
+          <el-tag
+            v-if="(row as ScanTreeRow).occupied_by_note_no"
+            type="danger"
+            size="small"
+            effect="plain"
+          >
             已被 {{ (row as ScanTreeRow).occupied_by_note_no }} 占用
           </el-tag>
           <span v-else-if="row.node_kind === 'BATCH'" class="muted">未占用</span>
@@ -190,7 +193,9 @@
 import { computed, ref, watch } from 'vue';
 import { ORDER_STATUS_LABEL, ORDER_STATUS_TAG_TYPE, type OrderStatus } from '@/types/parts';
 import { useDialogSize } from '@/composables/useDialogSize';
-import DeliveryEntryQuantityDialog, { type DeliveryEntryKind } from './DeliveryEntryQuantityDialog.vue';
+import DeliveryEntryQuantityDialog, {
+  type DeliveryEntryKind,
+} from './DeliveryEntryQuantityDialog.vue';
 import type {
   DeliveryScanAssemblyData,
   DeliveryScanBatchData,
@@ -418,7 +423,9 @@ function onQtySubmit(payload: { kind: DeliveryEntryKind; nodeId: string; quantit
       ? { node_kind: 'ASSEMBLY', node_id: payload.nodeId, sets: payload.quantity }
       : { node_kind: 'PART', node_id: payload.nodeId, quantity: payload.quantity };
   pendingEntries.value = [
-    ...pendingEntries.value.filter((e) => !(e.node_kind === entry.node_kind && e.node_id === entry.node_id)),
+    ...pendingEntries.value.filter(
+      (e) => !(e.node_kind === entry.node_kind && e.node_id === entry.node_id),
+    ),
     entry,
   ];
 }

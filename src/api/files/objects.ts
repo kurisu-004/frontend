@@ -93,10 +93,7 @@ export async function uploadFileObject(
 ): Promise<PartFileItem> {
   const form = new FormData();
   form.append('data', JSON.stringify({ owner_kind: ownerKind, owner_id: ownerId, kind }));
-  form.append(
-    'file',
-    new File([file], file.name, { type: normalizeUploadContentType(file) }),
-  );
+  form.append('file', new File([file], file.name, { type: normalizeUploadContentType(file) }));
   const resp = await api.post<PartFileItem>('/files/objects', form);
   return resp.data;
 }
@@ -137,13 +134,7 @@ export async function confirmFileObject(payload: ConfirmFileIn): Promise<PartFil
  */
 export async function listPartFilesByOwner(
   ownerId: string,
-  kind?:
-    | 'DRAWING'
-    | '3D_MODEL'
-    | 'G_CODE'
-    | 'SETUP_SHEET'
-    | 'ASSEMBLY_MASTER'
-    | 'CAD_2D',
+  kind?: 'DRAWING' | '3D_MODEL' | 'G_CODE' | 'SETUP_SHEET' | 'ASSEMBLY_MASTER' | 'CAD_2D',
 ): Promise<PartFileListResult> {
   const resp = await api.get<PartFileListResult>('/files/objects', {
     params: kind ? { owner_id: ownerId, kind, limit: 500 } : { owner_id: ownerId, limit: 500 },

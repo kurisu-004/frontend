@@ -44,7 +44,11 @@
 
     <!-- 3. 窗口内到期（天数随柱状图窗口天数联动） -->
     <el-card shadow="never" class="kpi-card">
-      <el-statistic :value="windowCount" :title="`${days} 天到期`" :value-style="{ color: 'var(--primary-color)' }">
+      <el-statistic
+        :value="windowCount"
+        :title="`${days} 天到期`"
+        :value-style="{ color: 'var(--primary-color)' }"
+      >
         <template #suffix>件</template>
       </el-statistic>
     </el-card>
@@ -65,7 +69,9 @@
       <el-statistic
         :value="inInspectionCount"
         title="在检"
-        :value-style="{ color: inInspectionCount > 0 ? 'var(--el-color-info)' : 'var(--text-primary)' }"
+        :value-style="{
+          color: inInspectionCount > 0 ? 'var(--el-color-info)' : 'var(--text-primary)',
+        }"
       >
         <template #suffix>件</template>
       </el-statistic>

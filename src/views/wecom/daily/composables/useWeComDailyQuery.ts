@@ -33,11 +33,7 @@
 import { computed, toValue, watch, type MaybeRefOrGetter } from 'vue';
 import { keepPreviousData, useQuery } from '@tanstack/vue-query';
 import { ElMessage } from 'element-plus';
-import {
-  fetchWeComDailyConfig,
-  fetchWeComDailyMeta,
-  listWeComDailyLogs,
-} from '@/api/wecomDaily';
+import { fetchWeComDailyConfig, fetchWeComDailyMeta, listWeComDailyLogs } from '@/api/wecomDaily';
 import { qk } from '@/composables/queries/keys';
 import type { ListWeComDailyLogsParams } from '@/types/wecom';
 import {

@@ -38,7 +38,11 @@
 // 全部雪花 ID 入参为 string（CLAUDE.md 硬约束：JS Number 丢精度）。
 
 import { api } from '@/api/http';
-import type { DeliveryNoteStatus, DeliveryNoteSortDir, DeliveryNoteSortKey } from '@/types/deliveryNote';
+import type {
+  DeliveryNoteStatus,
+  DeliveryNoteSortDir,
+  DeliveryNoteSortKey,
+} from '@/types/deliveryNote';
 import type {
   DeliveryNoteBatchDetailResultData,
   DeliveryNoteDetailData,
@@ -100,10 +104,9 @@ export async function getNote(noteId: string): Promise<DeliveryNoteDetailData> {
  *  （超出或非 i64 后端返 400 / BIZ_INVALID_VALUE 20104）。 */
 export async function batchGetNotes(ids: readonly string[]): Promise<DeliveryNoteDetailData[]> {
   if (ids.length === 0) return [];
-  const resp = await api.get<DeliveryNoteBatchDetailResultData>(
-    '/com/delivery/note/batch-detail',
-    { params: { ids: ids.join(',') } },
-  );
+  const resp = await api.get<DeliveryNoteBatchDetailResultData>('/com/delivery/note/batch-detail', {
+    params: { ids: ids.join(',') },
+  });
   return resp.data.items;
 }
 

@@ -64,7 +64,12 @@
       <el-table v-else :data="store.query.webhooks" row-key="id" class="webhooks-table">
         <el-table-column prop="name" label="名称" min-width="140" show-overflow-tooltip />
         <!-- 恒显示后端下发的掩码。完整地址不出参（见文件头），没有任何可展示的完整值。 -->
-        <el-table-column prop="url_masked" label="Webhook 地址" min-width="260" show-overflow-tooltip />
+        <el-table-column
+          prop="url_masked"
+          label="Webhook 地址"
+          min-width="260"
+          show-overflow-tooltip
+        />
         <el-table-column label="默认" width="80">
           <template #default="{ row }">
             <el-tag v-if="row.is_default" type="primary" size="small">默认</el-tag>
@@ -110,11 +115,7 @@
               @confirm="onDelete(row as WeComWebhookData)"
             >
               <template #reference>
-                <el-button
-                  link
-                  type="danger"
-                  :loading="store.actions.deletingRowId === row.id"
-                >
+                <el-button link type="danger" :loading="store.actions.deletingRowId === row.id">
                   删除
                 </el-button>
               </template>

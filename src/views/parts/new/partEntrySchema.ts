@@ -29,31 +29,18 @@ import type { ZodIssue } from 'zod';
 import { z } from 'zod';
 
 export const partEntrySchema = z.object({
-  drawingNo: z
-    .string()
-    .trim()
-    .min(1, '请输入图号')
-    .max(100, '图号长度不能超过 100 个字符'),
-  name: z
-    .string()
-    .trim()
-    .min(1, '请输入名称')
-    .max(200, '名称长度不能超过 200 个字符'),
+  drawingNo: z.string().trim().min(1, '请输入图号').max(100, '图号长度不能超过 100 个字符'),
+  name: z.string().trim().min(1, '请输入名称').max(200, '名称长度不能超过 200 个字符'),
   // 2026-09-24：cascader 选中后回填 customerId（string）。空值（含 null）走
   // { error: '请选择客户' } 兜底文案，比 zod 默认「Invalid input: expected string」
   // 友好。v4 中 z.string({ error }) 对 invalid_type 也生效；保留 .min(1) 兜底校验。
-  customerId: z
-    .string({ error: '请选择客户' })
-    .min(1, '请选择客户'),
+  customerId: z.string({ error: '请选择客户' }).min(1, '请选择客户'),
   applicantName: z
     .string()
     .trim()
     .min(1, '请选择或输入申请人')
     .max(50, '申请人姓名长度不能超过 50 个字符'),
-  quantity: z
-    .number({ error: '请输入数量' })
-    .int('数量必须为整数')
-    .min(1, '数量至少为 1'),
+  quantity: z.number({ error: '请输入数量' }).int('数量必须为整数').min(1, '数量至少为 1'),
   isUrgent: z.boolean(),
   // 2026-09-24：el-date-picker 清空给空字符串 ''（value-format YYYY-MM-DD 时）；
   // 非空时必须是 YYYY-MM-DD。min(1) 拦截空字符串优先，错误信息更明确。
@@ -65,20 +52,12 @@ export const partEntrySchema = z.object({
     .string({ error: '请选择计划交期' })
     .min(1, '请选择计划交期')
     .regex(/^\d{4}-\d{2}-\d{2}$/, '计划交期格式错误'),
-  orderNo: z
-    .string()
-    .trim()
-    .max(30, '订单号长度不能超过 30 个字符')
-    .nullable(),
+  orderNo: z.string().trim().max(30, '订单号长度不能超过 30 个字符').nullable(),
   systemDeliveryDate: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, '系统交期格式错误')
     .nullable(),
-  note: z
-    .string()
-    .trim()
-    .max(500, '备注长度不能超过 500 个字符')
-    .nullable(),
+  note: z.string().trim().max(500, '备注长度不能超过 500 个字符').nullable(),
 });
 
 export type PartEntryInput = z.infer<typeof partEntrySchema>;

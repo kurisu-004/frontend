@@ -678,8 +678,9 @@ async function onExport(): Promise<void> {
           @update:sort-mode="(m: 'column' | 'custom') => setSortMode(t.groupKey, m)"
         />
         <div class="group-hint">
-          本组 {{ rowsOf(t.groupKey).length }} 条 → Sheet「{{ safeSheetName(tabNameOf(t.groupKey)) }}」（容量
-          {{ sheetCapacity }}/张）
+          本组 {{ rowsOf(t.groupKey).length }} 条 → Sheet「{{
+            safeSheetName(tabNameOf(t.groupKey))
+          }}」（容量 {{ sheetCapacity }}/张）
           <span v-if="sortModeByKey[t.groupKey] === 'custom'" class="muted">（已手动调序）</span>
         </div>
       </el-tab-pane>

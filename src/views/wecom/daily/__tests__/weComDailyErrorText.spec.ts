@@ -50,9 +50,7 @@ describe('weComDailyErrorText — 码值 ↔ 文案逐条钉死', () => {
     expect(WECOM_DAILY_ERROR_CODES.CONFIG_NOT_FOUND).toBe(21805);
     expect(WECOM_DAILY_ERROR_CODES.VERSION_CONFLICT).toBe(40901);
     expect(Object.keys(WECOM_DAILY_ERROR_TEXT).sort()).toEqual(
-      Object.values(WECOM_DAILY_ERROR_CODES)
-        .map(String)
-        .sort(),
+      Object.values(WECOM_DAILY_ERROR_CODES).map(String).sort(),
     );
     for (const [code, text] of Object.entries(WECOM_DAILY_ERROR_TEXT)) {
       expect(text, `码 ${code} 的文案不能为空`).toBeTruthy();
@@ -80,13 +78,18 @@ describe('weComDailyErrorText — 码值 ↔ 文案逐条钉死', () => {
   it('E5：ZodError → 固定漂移文案 + console.error（细节只进 console）', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const zodErr = new ZodError([{ code: 'custom', path: ['chunks'], message: '缺 chunks' }]);
-    expect(weComDailyErrorText(zodErr, 'fallback')).toBe('服务端返回的数据格式不符合预期，请联系管理员');
+    expect(weComDailyErrorText(zodErr, 'fallback')).toBe(
+      '服务端返回的数据格式不符合预期，请联系管理员',
+    );
     expect(spy).toHaveBeenCalled();
     spy.mockRestore();
   });
 
   it('E6：21802 的文案**不替后端猜原因**（只给可执行的下一步，不出现具体原因断言）', () => {
-    const text = weComDailyErrorText(apiError(WECOM_DAILY_ERROR_CODES.SEND_FAILED, '企业微信返回 93000 invalid webhook url'), 'x');
+    const text = weComDailyErrorText(
+      apiError(WECOM_DAILY_ERROR_CODES.SEND_FAILED, '企业微信返回 93000 invalid webhook url'),
+      'x',
+    );
     // 后端那条 message 说的是「地址非法」，而前端文案说的是「去检查通道是否还有效」—— 前端
     // 只给下一步，不复述后端的具体原因（它在 wire 上可能变，而这一步永远有效）。
     expect(text).not.toContain('93000');

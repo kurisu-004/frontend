@@ -34,9 +34,8 @@ vi.mock('@/api/printTemplates', () => ({
 
 const { assertTemplateMatches, colIndexOf, detectTemplateContract, fetchTemplateBytes } =
   await import('../deliveryNoteTemplate');
-const { DELIVERY_NOTE_TEMPLATE_CONTRACT, GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT } = await import(
-  '../deliveryNoteTemplateContract'
-);
+const { DELIVERY_NOTE_TEMPLATE_CONTRACT, GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT } =
+  await import('../deliveryNoteTemplateContract');
 
 beforeEach(() => {
   fetchPrintTemplateContentMock.mockClear();

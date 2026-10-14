@@ -127,11 +127,14 @@ export const useOutsourceCompanyListStore = defineStore('outsource-company-list'
   const { makeTextFilter } = useOutsourceColumnFilters({ search, onSearch });
   const nameFilter: OutsourceTextFilter = makeTextFilter('name_like');
   // 状态列走 EP 原生 `:filters`（两态），`filteredValue` 由 search 派生。
-  const activeBool = makeNativeBoolFilter({ search, onSearch }, {
-    key: 'is_active',
-    trueLabel: '启用',
-    falseLabel: '停用',
-  });
+  const activeBool = makeNativeBoolFilter(
+    { search, onSearch },
+    {
+      key: 'is_active',
+      trueLabel: '启用',
+      falseLabel: '停用',
+    },
+  );
   const activeFilter = activeBool.filter;
 
   /** 工具栏「重置筛选」：同时清「已确认值 + 未确认草稿 + popover 打开态」。
@@ -154,14 +157,13 @@ export const useOutsourceCompanyListStore = defineStore('outsource-company-list'
 
   function restoreState(): void {
     const persisted = restorePersist() as
-      | { search?: Partial<OutsourceCompanySearchState> }
-      | null
-      | undefined;
+      { search?: Partial<OutsourceCompanySearchState> } | null | undefined;
     if (persisted?.search) {
       // lenient 逐字段恢复：旧快照（迁表头前）只有 name_like / is_active，缺字段落回默认。
       search.name_like = persisted.search.name_like ?? search.name_like;
       const restoredActive = persisted.search.is_active;
-      search.is_active = restoredActive === true || restoredActive === false ? restoredActive : undefined;
+      search.is_active =
+        restoredActive === true || restoredActive === false ? restoredActive : undefined;
     }
     // 开闸放行首屏 fetch。
     restored.value = true;
@@ -185,9 +187,9 @@ export const useOutsourceCompanyListStore = defineStore('outsource-company-list'
 
   // ============ 切片：options（工序勾选候选）============
   /** 已映射工序的 code / name（`GET /{id}` 回包提供，勾选项 label 与展示一致）。 */
-  const mappedProcesses = ref<Array<{ process_id: string; process_code: string; process_name: string }>>(
-    [],
-  );
+  const mappedProcesses = ref<
+    Array<{ process_id: string; process_code: string; process_name: string }>
+  >([]);
 
   // 勾选候选全集 = 共享 OUTSOURCE 工序列表 ∪ 回包里的已映射工序，**两条来源取并集**：
   //   - 共享列表（`useProcessesQuery({category:'OUTSOURCE'})`）给「还没映射过这道工序」的
@@ -203,7 +205,10 @@ export const useOutsourceCompanyListStore = defineStore('outsource-company-list'
   /** 对话框「工序能力」勾选项 = 并集后的 `{id, label}` 列表（`outsourceProcesses` 在前，
    *  回包补出来的追加在后，后者带「非外协工序」标注让操作员看得出异常来源）。 */
   const processOptions = computed<{ id: string; label: string }[]>(() => {
-    const opts = outsourceProcesses.value.map((p) => ({ id: p.id, label: `${p.code} — ${p.name}` }));
+    const opts = outsourceProcesses.value.map((p) => ({
+      id: p.id,
+      label: `${p.code} — ${p.name}`,
+    }));
     const known = new Set(opts.map((o) => o.id));
     for (const m of mappedProcesses.value) {
       if (known.has(m.process_id)) continue;
@@ -288,8 +293,11 @@ export const useOutsourceCompanyListStore = defineStore('outsource-company-list'
 
   const updateMutation = useMutation({
     mutationKey: ['outsource', 'companies', 'update'],
-    mutationFn: (vars: { id: string; version: number; payload: Parameters<typeof updateOutsourceCompany>[1] }) =>
-      updateOutsourceCompany(vars.id, vars.payload),
+    mutationFn: (vars: {
+      id: string;
+      version: number;
+      payload: Parameters<typeof updateOutsourceCompany>[1];
+    }) => updateOutsourceCompany(vars.id, vars.payload),
     onSuccess: async () => {
       await invalidateOutsourceCompaniesAll(qc);
       ElMessage.success('已保存');

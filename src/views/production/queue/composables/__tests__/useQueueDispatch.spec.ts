@@ -141,8 +141,7 @@ vi.mock('@/api/productionQueue', async (importOriginal) => ({
     realDispatchBatches(...(args as Parameters<typeof realDispatchBatches>)),
   previewAutoDispatch: (...args: unknown[]) =>
     realPreviewAutoDispatch(...(args as Parameters<typeof realPreviewAutoDispatch>)),
-  fetchPendingBatches: (...args: unknown[]) =>
-    realFetchPendingBatches(...(args as [])),
+  fetchPendingBatches: (...args: unknown[]) => realFetchPendingBatches(...(args as [])),
 }));
 
 import { useQueueDispatch } from '../useQueueDispatch';
@@ -505,7 +504,7 @@ describe('useQueueDispatch — bulk-only dispatch + auto preview 两步', () => 
     expect(d).not.toHaveProperty('bulkDispatchMutation');
   });
 
-it('T11：dispatch 失败 → 报错 toast + 走全套四域失效链（多选保持不动）', async () => {
+  it('T11：dispatch 失败 → 报错 toast + 走全套四域失效链（多选保持不动）', async () => {
     // 回归 guard（2026-10-02）：失败时卡片本来就不会从待下发池消失，onError 里的重拉
     // 是「失败即对账」的兜底。2026-10-08 修正覆盖面：原先 onError 只失效待下发列表域，
     // 但 dispatch 最常见的失败恰是 40901 OCC / 20120 状态不允许 —— 那意味着**别人已经
@@ -534,7 +533,9 @@ it('T11：dispatch 失败 → 报错 toast + 走全套四域失效链（多选�
     realPreviewAutoDispatch.mockRejectedValueOnce(new Error('preview failed'));
 
     const d = testApp.runWithContext(() => useQueueDispatch());
-    await d.autoDispatchMutation.mutateAsync({ batchIds: ['3000000000001'] }).catch(() => undefined);
+    await d.autoDispatchMutation
+      .mutateAsync({ batchIds: ['3000000000001'] })
+      .catch(() => undefined);
 
     expect(ElMessage.error).toHaveBeenCalledWith('preview failed');
     expect(testQueryClient.invalidateQueries).not.toHaveBeenCalled();

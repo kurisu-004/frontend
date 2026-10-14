@@ -25,7 +25,11 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { buildUsersColumnDefs, isAlwaysVisibleColumn, type UsersColumnActions } from '../usersColumnDefs';
+import {
+  buildUsersColumnDefs,
+  isAlwaysVisibleColumn,
+  type UsersColumnActions,
+} from '../usersColumnDefs';
 
 const USER_TABLE_VUE = fileURLToPath(new URL('../components/UserTable.vue', import.meta.url));
 

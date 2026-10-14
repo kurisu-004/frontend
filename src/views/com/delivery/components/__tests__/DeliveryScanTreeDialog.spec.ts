@@ -61,7 +61,10 @@ const stubs = {
     props: ['content', 'disabled'],
     template: '<span class="mock-el-tooltip"><slot /></span>',
   },
-  'el-input-number': { name: 'ElInputNumberStub', template: '<input class="mock-el-input-number" />' },
+  'el-input-number': {
+    name: 'ElInputNumberStub',
+    template: '<input class="mock-el-input-number" />',
+  },
   'el-form': { name: 'ElFormStub', template: '<form><slot /></form>' },
   'el-form-item': { name: 'ElFormItemStub', template: '<div><slot /></div>' },
   'el-button': {
@@ -166,9 +169,7 @@ async function mountDialog(t: DeliveryScanTreeData | null): Promise<VueWrapper> 
 
 /** 某行在「操作」列里的按钮文字数组。 */
 function actionsOf(wrapper: VueWrapper, rowId: string): string[] {
-  return wrapper
-    .findAll(`[data-col="操作"] [data-row-id="${rowId}"] button`)
-    .map((b) => b.text());
+  return wrapper.findAll(`[data-col="操作"] [data-row-id="${rowId}"] button`).map((b) => b.text());
 }
 
 beforeEach(() => {
@@ -208,7 +209,9 @@ describe('DeliveryScanTreeDialog 三层树', () => {
   it('occupied_by_note_no 非空 → 标「已被 DN-xxx 占用」；空 → 「未占用」', async () => {
     const wrapper = await mountDialog(tree());
     expect(wrapper.find('[data-col="占用"] [data-row-id="B1"]').text()).toContain('已被');
-    expect(wrapper.find('[data-col="占用"] [data-row-id="B1"]').text()).toContain('DN-20260101-0002');
+    expect(wrapper.find('[data-col="占用"] [data-row-id="B1"]').text()).toContain(
+      'DN-20260101-0002',
+    );
     expect(wrapper.find('[data-col="占用"] [data-row-id="B2"]').text()).toBe('未占用');
     expect(wrapper.find('[data-col="占用"] [data-row-id="A1"]').text()).toBe('—');
   });

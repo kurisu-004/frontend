@@ -18,7 +18,10 @@ import { ElInput, ElTag } from 'element-plus';
 import ColumnFilterPopover from '@/components/ColumnFilterPopover.vue';
 import type { ColumnDef } from '@/composables/useColumnVisibility';
 import type { OutsourceCompanySchema } from './composables/outsourceListSchema';
-import type { OutsourceTextFilter, OutsourceNativeBoolFilter } from './composables/useOutsourceColumnFilters';
+import type {
+  OutsourceTextFilter,
+  OutsourceNativeBoolFilter,
+} from './composables/useOutsourceColumnFilters';
 
 export interface BuildOutsourceCompanyColumnDefsDeps {
   /** 公司名文本列状态机（表头 popover）。 */
@@ -79,8 +82,7 @@ export function buildOutsourceCompanyColumnDefs(
       columnKey: 'contact_name',
       minWidth: 100,
       align: 'center',
-      cellRender: ({ row }) =>
-        h('span', null, (row as OutsourceCompanySchema).contact_name || '—'),
+      cellRender: ({ row }) => h('span', null, (row as OutsourceCompanySchema).contact_name || '—'),
     },
 
     // 3. 联系电话

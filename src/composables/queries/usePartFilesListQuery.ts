@@ -57,9 +57,7 @@ const EMPTY_RESULT: PartFileListResultSchema = {
  *   - 上传 / 删除成功后 caller 调 `invalidatePartFilesListQuery(qc, ownerId)`
  *     立即让本 owner 列表变 stale，下次访问 refetch。
  */
-export function usePartFilesListQuery(
-  ownerPartId: MaybeRefOrGetter<string | null | undefined>,
-) {
+export function usePartFilesListQuery(ownerPartId: MaybeRefOrGetter<string | null | undefined>) {
   // 2026-09-29：queryKey 走 computed(toValue(ownerPartId) ?? '')，ownerPartId 可以是
   // Ref / ComputedRef / getter；queryFn 从 queryKey[2] 读最新 ownerId（不 snapshot），
   // 保证 reactive 变化时 listPartFilesByOwner 拿到的是新值（沿 useProcessesQuery
@@ -83,10 +81,7 @@ export function usePartFilesListQuery(
 /** 2026-09-29 新增：失效指定 owner 的文件列表（queryKey 前缀 `part-files` 是缓存键不是 URL）。
  *  调用方：PartDetail.vue onFileTabRefresh / 上传 / 删除成功后。
  *  返回 Promise<void> 让 caller 可以 await 失效完成再走后续逻辑。 */
-export function invalidatePartFilesListQuery(
-  qc: QueryClient,
-  ownerId: string,
-): Promise<void> {
+export function invalidatePartFilesListQuery(qc: QueryClient, ownerId: string): Promise<void> {
   return qc.invalidateQueries({ queryKey: qk.partFilesList(ownerId) }).then(() => undefined);
 }
 

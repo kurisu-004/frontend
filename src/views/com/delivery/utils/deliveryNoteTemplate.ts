@@ -41,8 +41,7 @@ import type {
 
 export type TemplateSource =
   /** 后端库里那份（按 id 取字节；文件名走 `templateName` 那侧的展示位）。 */
-  | { kind: 'api'; id: string }
-  | { kind: 'url'; url: string };
+  { kind: 'api'; id: string } | { kind: 'url'; url: string };
 
 /** 取模板字节。 */
 export async function fetchTemplateBytes(src: TemplateSource): Promise<Uint8Array> {
@@ -99,10 +98,7 @@ function diffText(ref: string, expected: string, actual: string, note?: string):
  *   3. row 3..12 的 A 列都是 `{{no}}`（10 格）；
  *   4. F15 含 `{{driver_name}}`；A17 含 `{{year}}` / `{{month}}` / `{{date}}`。
  */
-function assertPartMatches(
-  sheet: Sheet,
-  c: PartDeliveryNoteTemplateContract,
-): string[] {
+function assertPartMatches(sheet: Sheet, c: PartDeliveryNoteTemplateContract): string[] {
   const diffs: string[] = [];
 
   // row 3（0-based 2）的 9 个数据列。no 列单独查（10 行都要有）。
@@ -139,9 +135,7 @@ function assertPartMatches(
   const driverRef = c.footer.driver_name;
   const driverAt = parseRef(driverRef);
   if (!cellText(sheet, driverAt.row, driverAt.col).includes('{{driver_name}}')) {
-    diffs.push(
-      `${driverRef} 应包含 {{driver_name}}（锚文案「${FOOTER_DRIVER_NAME_ANCHOR}」）`,
-    );
+    diffs.push(`${driverRef} 应包含 {{driver_name}}（锚文案「${FOOTER_DRIVER_NAME_ANCHOR}」）`);
   }
   const dateRef = c.footer.year;
   const dateAt = parseRef(dateRef);
@@ -301,7 +295,8 @@ export function detectTemplateContract(wb: Workbook): DeliveryNoteTemplateContra
   if (!sheet) return null;
   const at = (a: { row: number; col: number }): string => cellText(sheet, a.row, a.col);
   if (at(PART_ANCHORS.dataOrderNo) === '{{order_no}}') return DELIVERY_NOTE_TEMPLATE_CONTRACT;
-  if (at(GAUGE_ANCHORS.dataOrderNo) === '{{order_no}}') return GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT;
+  if (at(GAUGE_ANCHORS.dataOrderNo) === '{{order_no}}')
+    return GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT;
   if (at(PART_ANCHORS.driver).includes('{{driver_name}}')) {
     return DELIVERY_NOTE_TEMPLATE_CONTRACT;
   }

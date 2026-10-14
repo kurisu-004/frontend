@@ -169,7 +169,12 @@
         <!-- 转图还在等 vs 已决定看原始 PDF、正在拉 blob，两种情形不能共用一句话。 -->
         <span>{{ wantsOriginalPdf ? '加载原始 PDF…' : '图纸转图中…' }}</span>
       </div>
-      <PdfViewer v-else :key="`pdf-${drawingPreviewFile?.id}`" :url="drawingPreviewBlobUrl" :page="1" />
+      <PdfViewer
+        v-else
+        :key="`pdf-${drawingPreviewFile?.id}`"
+        :url="drawingPreviewBlobUrl"
+        :page="1"
+      />
     </div>
     <div v-else class="loading-tip">
       <el-icon class="is-loading"><Loading /></el-icon>
@@ -447,8 +452,7 @@ function isPdfType(t: string): boolean {
 
 /** 转图轮询：只有 PDF 才有转图；弹窗关着时不轮询。 */
 const preview = usePreviewPolling({
-  fileId: () =>
-    isPdfDrawing.value && drawingPreviewFile.value ? drawingPreviewFile.value.id : '',
+  fileId: () => (isPdfDrawing.value && drawingPreviewFile.value ? drawingPreviewFile.value.id : ''),
   enabled: () => drawingPreviewVisible.value,
 });
 

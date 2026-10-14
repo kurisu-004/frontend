@@ -30,10 +30,7 @@
 
 import type * as HUCRE_MODULE from 'hucre';
 import type { CellValue, Sheet } from 'hucre';
-import {
-  DELIVERY_NOTE_TEMPLATE_CONTRACT,
-  XLSX_MIME,
-} from './deliveryNoteTemplateContract';
+import { DELIVERY_NOTE_TEMPLATE_CONTRACT, XLSX_MIME } from './deliveryNoteTemplateContract';
 import type {
   DeliveryNoteTemplateContract,
   GaugeDeliveryNoteTemplateContract,
@@ -109,7 +106,6 @@ export type FooterFor<C extends DeliveryNoteTemplateContract> =
   C extends GaugeDeliveryNoteTemplateContract ? GaugeFooterSpec : PartFooterSpec;
 
 export type { Workbook as HucreWorkbook } from 'hucre/xlsx';
-
 
 /**
  * 动态 import hucre 把它挤出主 bundle。

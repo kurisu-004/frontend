@@ -475,9 +475,7 @@ describe('onSubmit', () => {
     // owner_kind 与 kind 由 job.target 与 entry.kind 共同决定 —— 本例全是子件
     // （t_part 行）⇒ owner_kind 全为 PART，kind 原样透传（DRAWING / 3D_MODEL）。
     expect(
-      mocks.uploadFileObject.mock.calls
-        .map((c) => [c[0], c[1], c[2], (c[3] as File).name])
-        .sort(),
+      mocks.uploadFileObject.mock.calls.map((c) => [c[0], c[1], c[2], (c[3] as File).name]).sort(),
     ).toEqual([
       ['PART', 'A1-01', '3D_MODEL', 'ASM-1_总装.step'],
       ['PART', 'A1-01', 'DRAWING', 'ASM-1_总装_p1.pdf'],
@@ -601,9 +599,7 @@ describe('上传重试（job 粒度）', () => {
     // 刻意排在分片记录器的断言**之前**：kind 传错时转发层会当场抛断言，被 composable
     // 记成上传失败，于是先炸在这里、报错直接是 kind 的差异（而不是「记录器没被调用」）。
     expect(
-      mocks.uploadFileObject.mock.calls
-        .map((c) => [c[0], c[1], c[2], (c[3] as File).name])
-        .sort(),
+      mocks.uploadFileObject.mock.calls.map((c) => [c[0], c[1], c[2], (c[3] as File).name]).sort(),
     ).toEqual([
       ['ASSEMBLY', 'A1', 'ASSEMBLY_MASTER', 'ASM-1_总装_p1.pdf'],
       ['PART', 'A1-01', 'DRAWING', 'ASM-1_总装_p2.pdf'],
@@ -1701,9 +1697,7 @@ describe('装配件逐页分发', () => {
     // 的断言之前：kind 传错时转发层会当场抛断言并被 composable 记成上传失败，先炸在
     // 这里，报错直接是 kind 的差异。
     expect(
-      mocks.uploadFileObject.mock.calls
-        .map((c) => [c[0], c[1], c[2], (c[3] as File).name])
-        .sort(),
+      mocks.uploadFileObject.mock.calls.map((c) => [c[0], c[1], c[2], (c[3] as File).name]).sort(),
     ).toEqual([
       ['ASSEMBLY', 'A1', 'ASSEMBLY_MASTER', 'ASM-1_总装_p1.pdf'],
       ['PART', 'A1-01', 'DRAWING', 'ASM-1_总装_p2.pdf'],

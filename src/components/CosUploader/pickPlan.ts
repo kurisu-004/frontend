@@ -78,7 +78,10 @@ export function planPick(
   const valid: File[] = [];
   for (const f of pool) {
     if (opts.maxSizeMB !== undefined && f.size > opts.maxSizeMB * 1024 * 1024) {
-      result.rejectedBySize.push({ file: f, reason: `文件「${f.name}」超过 ${opts.maxSizeMB}MB 限制` });
+      result.rejectedBySize.push({
+        file: f,
+        reason: `文件「${f.name}」超过 ${opts.maxSizeMB}MB 限制`,
+      });
       continue;
     }
     if (opts.accept && !matchesAccept(f, opts.accept)) {

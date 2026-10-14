@@ -31,7 +31,10 @@ const SRC = readFileSync(new URL('../WeComCenter.vue', import.meta.url), 'utf8')
  * 副作用（刻意接受）：本 spec 不检查注释内容是否正确 —— 那是 review 的事，不是测试的事。
  */
 function stripComments(src: string): string {
-  return src.replace(/<!--[\s\S]*?-->/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  return src
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
 }
 
 const CODE = stripComments(SRC);

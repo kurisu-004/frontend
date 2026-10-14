@@ -79,17 +79,12 @@
         <template #default="{ row }">
           <!-- ⚠️ 槽里的 `row` 是 EP 注入的 `DefaultRow`，要传给带类型的函数得收窄一次
                （照 `MailLogTable.vue` 里 `row as MailDigestLogData` 的同款做法）。 -->
-          <span
-            v-if="row.chunk_count === 0"
-            class="muted"
-            title="发送前准备失败，未进入分片渲染"
+          <span v-if="row.chunk_count === 0" class="muted" title="发送前准备失败，未进入分片渲染"
             >—</span
           >
-          <span
-            v-else-if="row.chunk_sent < row.chunk_count"
-            class="error-text"
-            >{{ chunkText(row as WeComDailyLogData) }}</span
-          >
+          <span v-else-if="row.chunk_sent < row.chunk_count" class="error-text">{{
+            chunkText(row as WeComDailyLogData)
+          }}</span>
           <span v-else>{{ chunkText(row as WeComDailyLogData) }}</span>
         </template>
       </el-table-column>

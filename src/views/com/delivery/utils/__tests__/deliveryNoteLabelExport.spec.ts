@@ -108,25 +108,14 @@ describe('exportPartRowsLabels 导出与标记', () => {
     expect(downloads).toHaveLength(1);
     expect(downloads[0]!.filename).toBe('DN-001-标签.xlsx');
     const sheet = await sheetOf();
-    expect(sheet.rows[0]).toEqual([
-      '客户',
-      '订单号',
-      '申请人',
-      '名称',
-      '图号',
-      '数量',
-      '单位',
-    ]);
+    expect(sheet.rows[0]).toEqual(['客户', '订单号', '申请人', '名称', '图号', '数量', '单位']);
     expect(sheet.rows[1]).toEqual(['法拉', 'SO-1', '张三', '铝电解电容', 'D-1', 3, '件']);
     expect(ElMessage.success).toHaveBeenCalledWith('已导出标签');
   });
 
   it('markPrinted 收到**整行** batch_ids（同零件多批次折叠成一行也要全标）', async () => {
     const rows = buildPartTreeRows(
-      [
-        li({ id: '10', part_id: 'P1', quantity: 3 }),
-        li({ id: '11', part_id: 'P1', quantity: 4 }),
-      ],
+      [li({ id: '10', part_id: 'P1', quantity: 3 }), li({ id: '11', part_id: 'P1', quantity: 4 })],
       () => false,
     );
     expect(rows).toHaveLength(1);

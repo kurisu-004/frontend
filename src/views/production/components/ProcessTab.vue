@@ -97,12 +97,9 @@
       <!-- 2026-09-29 新增：CNC 工序列（固定在颜色列之前；is_cnc=true 绿色 tag） -->
       <el-table-column label="CNC" width="80" align="center">
         <template #default="{ row }">
-          <el-tag
-            v-if="(row as Process).is_cnc"
-            type="success"
-            size="small"
-            effect="dark"
-          >CNC</el-tag>
+          <el-tag v-if="(row as Process).is_cnc" type="success" size="small" effect="dark"
+            >CNC</el-tag
+          >
           <span v-else class="muted">—</span>
         </template>
       </el-table-column>
@@ -249,9 +246,7 @@ const queryParams = computed(() => ({
 // 把 queryParams computed 直接传进去；queryKey 走 computed(toValue(params))，
 // search.code_like / search.category 任一变化 → queryKey 变化 → useQuery
 // 自动 refetch（无需外置 watcher）；queryFn 从 queryKey[2] 读最新 params。
-const { data: queryData, isFetching, refetch: refetchProcesses } = useProcessesQuery(
-  queryParams,
-);
+const { data: queryData, isFetching, refetch: refetchProcesses } = useProcessesQuery(queryParams);
 const rows = computed<Process[]>(() => (queryData.value?.items ?? []) as Process[]);
 const loading = computed<boolean>(() => isFetching.value);
 const saving = ref(false);

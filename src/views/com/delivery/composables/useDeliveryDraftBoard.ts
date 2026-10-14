@@ -106,7 +106,9 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
   const drafts = ref<Record<string, DeliveryNoteItemData>>({});
   /** 每个草稿的完整 line_items（按 note_id 存），el-table 数据源。 */
   const draftDetails = reactive<Record<string, DeliveryNoteLineItemData[]>>({});
-  const draftsLoading = computed<boolean>(() => draftsQuery.isFetching.value || detailQuery.isFetching.value);
+  const draftsLoading = computed<boolean>(
+    () => draftsQuery.isFetching.value || detailQuery.isFetching.value,
+  );
   const draftsCount: ComputedRef<number> = computed(() => Object.keys(drafts.value).length);
 
   // 列表头回流 → drafts Map（含「后端未严格按 status 过滤」的防御性本地过滤）。

@@ -29,8 +29,7 @@ export type UnionListRowType = 'ALL' | 'PART' | 'PART_FLAT' | 'ASSEMBLY';
  *  - include_assemblies 已废弃（合并逻辑下沉到 com 域，part 域仅查本体）。
  *  Omit 排除两者后重新声明 row_type 必填，保证类型显式、字段语义清晰。
  *  其余字段（statuses / keyword / 时间区间 / 多选 holder 等）原样沿用。 */
-export interface UnionListParams
-  extends Omit<ListPartsParams, 'row_type' | 'include_assemblies'> {
+export interface UnionListParams extends Omit<ListPartsParams, 'row_type' | 'include_assemblies'> {
   row_type: UnionListRowType;
 }
 

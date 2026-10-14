@@ -126,7 +126,9 @@ describe('转图等待期不能说成「加载原始 PDF…」', () => {
   // 条件里显式排除 wantsOriginalPdf。按分支而非按三元核对。
   it('PartDrawingPreviewDialog.vue：转图等待是独立分支，且条件排除 wantsOriginalPdf', () => {
     const tpl = oneLine(
-      stripComments(templateOf('src/views/production/scan/components/PartDrawingPreviewDialog.vue')),
+      stripComments(
+        templateOf('src/views/production/scan/components/PartDrawingPreviewDialog.vue'),
+      ),
     );
     const at = tpl.indexOf('!wantsOriginalPdf"');
     expect(at, '找不到「转图等待」那个 v-else-if 分支').toBeGreaterThan(-1);
@@ -138,7 +140,9 @@ describe('转图等待期不能说成「加载原始 PDF…」', () => {
   // OutsourceQuotePdfPreview 是「受控 props」形态：它自己不知道 caller 在不在转图，
   // 判据由 caller 给的 busyHint 决定。两条都要钉：子组件认这个 prop、caller 真的传了。
   it('OutsourceQuotePdfPreview.vue：转图等待由 busyHint 决定，且排在「无可预览内容」之前', () => {
-    const tpl = stripComments(templateOf('src/views/outsource/components/OutsourceQuotePdfPreview.vue'));
+    const tpl = stripComments(
+      templateOf('src/views/outsource/components/OutsourceQuotePdfPreview.vue'),
+    );
     const busyIdx = tpl.indexOf('v-else-if="busyHint"');
     const emptyIdx = tpl.indexOf('无可预览内容');
     expect(busyIdx, '子组件没有 busyHint 分支').toBeGreaterThan(-1);
@@ -186,9 +190,9 @@ describe('blob URL 只经一个 revoke-then-assign 的入口', () => {
   // watch），任何一处直接赋值都会把上一个 object URL 悬空。
   it('AssemblyChildrenTable.vue：所有 blob 赋值都在 setBlobUrl 内，且它先 revoke', () => {
     const code = stripComments(srcOf('src/views/assemblies/components/AssemblyChildrenTable.vue'));
-    const helper = new RegExp(
-      'function setBlobUrl\\([^)]*\\): void \\{([\\s\\S]*?)\\n\\}',
-    ).exec(code)?.[1];
+    const helper = new RegExp('function setBlobUrl\\([^)]*\\): void \\{([\\s\\S]*?)\\n\\}').exec(
+      code,
+    )?.[1];
     expect(helper, '找不到 setBlobUrl 助手函数').toBeDefined();
     expect(helper, 'setBlobUrl 必须先 revoke 前一个').toContain('URL.revokeObjectURL');
     expect(helper).toContain('drawingPreviewBlobUrl.value = next');
@@ -218,10 +222,7 @@ describe('blob URL 只经一个 revoke-then-assign 的入口', () => {
     ['src/components/FileListCard.vue', 'previewBlobUrl'],
     ['src/views/dashboard/components/PartPreviewDialog.vue', 'previewBlob'],
     ['src/views/production/components/DrawingPreviewPane.vue', 'selectedPreviewBlob'],
-    [
-      'src/views/production/scan/components/PartDrawingPreviewDialog.vue',
-      'previewBlobUrl',
-    ],
+    ['src/views/production/scan/components/PartDrawingPreviewDialog.vue', 'previewBlobUrl'],
   ] as const) {
     it(`${rel}：挂上新的 ${field} 之前必先 revoke 前一个`, () => {
       const lines = stripComments(srcOf(rel)).split('\n');

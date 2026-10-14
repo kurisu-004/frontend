@@ -29,10 +29,7 @@ import { useListStatePersist } from '@/composables/useListFilterPersist';
 import { buildOutsourceSentPartColumnDefs } from '../outsourceSentPartColumnDefs';
 import { useColumnVisibility } from '@/composables/useColumnVisibility';
 import type { OutsourceSentPartItemSchema } from './outsourceListSchema';
-import {
-  makeNativeBoolFilter,
-  useOutsourceColumnFilters,
-} from './useOutsourceColumnFilters';
+import { makeNativeBoolFilter, useOutsourceColumnFilters } from './useOutsourceColumnFilters';
 import {
   invalidateOutsourceSentPartsAll,
   useOutsourceSentPartsQuery,
@@ -123,9 +120,7 @@ export function useOutsourceSentPartsPage(companyId: string) {
   });
   const { fetchList } = listQuery;
 
-  const items = computed<OutsourceSentPartItemSchema[]>(
-    () => listQuery.data.value?.items ?? [],
-  );
+  const items = computed<OutsourceSentPartItemSchema[]>(() => listQuery.data.value?.items ?? []);
   const total = computed<number>(() => Number(listQuery.data.value?.total ?? 0));
   const loading = listQuery.isFetching;
   // 2026-10-09：页头公司名改读信封（原先要额外发一次 GET /{id}）。
@@ -173,11 +168,14 @@ export function useOutsourceSentPartsPage(companyId: string) {
   const processFilter = makeTextFilter('process_id');
   const sentDateFilter = makeDateRangeFilter('sent_from', 'sent_to');
   const receivedDateFilter = makeDateRangeFilter('received_from', 'received_to');
-  const billedBool = makeNativeBoolFilter({ search, onSearch }, {
-    key: 'is_billed',
-    trueLabel: '已对账',
-    falseLabel: '未对账',
-  });
+  const billedBool = makeNativeBoolFilter(
+    { search, onSearch },
+    {
+      key: 'is_billed',
+      trueLabel: '已对账',
+      falseLabel: '未对账',
+    },
+  );
   const billedFilter = billedBool.filter;
 
   /** 工具栏「重置筛选」：清已确认值 + 未确认草稿 + popover 打开态。**保留**排序与每页条数。 */
@@ -231,9 +229,8 @@ export function useOutsourceSentPartsPage(companyId: string) {
       sortBy.value = SENT_PART_SORT_KEY_SET.has(persisted.sortBy as OutsourceSentPartSortKey)
         ? (persisted.sortBy as OutsourceSentPartSortKey)
         : 'SENT_AT';
-      sortDir.value = persisted.sortDir === 'ASC' || persisted.sortDir === 'DESC'
-        ? persisted.sortDir
-        : 'DESC';
+      sortDir.value =
+        persisted.sortDir === 'ASC' || persisted.sortDir === 'DESC' ? persisted.sortDir : 'DESC';
     }
     restored.value = true;
   }
@@ -288,8 +285,11 @@ export function useOutsourceSentPartsPage(companyId: string) {
   // ============ 切片：mutations（行内保存）============
   const reconcileMutation = useMutation({
     mutationKey: ['outsource', 'sent-parts', 'reconcile-update'],
-    mutationFn: (vars: { shipmentId: string; version: number; payload: Parameters<typeof reconcileUpdateShipment>[1] }) =>
-      reconcileUpdateShipment(vars.shipmentId, vars.payload),
+    mutationFn: (vars: {
+      shipmentId: string;
+      version: number;
+      payload: Parameters<typeof reconcileUpdateShipment>[1];
+    }) => reconcileUpdateShipment(vars.shipmentId, vars.payload),
     onSuccess: async () => {
       // 一律前缀全失效拿后端权威值，不在 mutation 回调里复述「哪几个字段会变」。
       await invalidateOutsourceSentPartsAll(queryClient);
@@ -457,7 +457,16 @@ const SORT_KEY_TO_PROP: Record<OutsourceSentPartSortKey, string> = {
   SENT_AT: 'sent_at',
   RECEIVED_AT: 'received_at',
 };
-const SENT_PART_SORT_KEY_SET = new Set<OutsourceSentPartSortKey>(['PRICE', 'SENT_AT', 'RECEIVED_AT']);
+const SENT_PART_SORT_KEY_SET = new Set<OutsourceSentPartSortKey>([
+  'PRICE',
+  'SENT_AT',
+  'RECEIVED_AT',
+]);
 
 /** Enter / Esc 键的黑名单：这些容器里的按键属于 popper / 下拉 / 日期 picker / 对话框。 */
-const ENTER_BLACKLIST = ['.el-popper.is-light', '.el-select-dropdown', '.el-date-picker', '.el-dialog'];
+const ENTER_BLACKLIST = [
+  '.el-popper.is-light',
+  '.el-select-dropdown',
+  '.el-date-picker',
+  '.el-dialog',
+];

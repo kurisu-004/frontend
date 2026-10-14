@@ -165,7 +165,10 @@ describe('useDashboardUpcoming — 交期分桶 query（2026-10-07）', () => {
     // 挂起新键的响应，模拟慢网络
     let release: (v: unknown) => void = () => {};
     fetchUpcomingMock.mockImplementationOnce(
-      () => new Promise((resolve) => { release = resolve; }),
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
     );
     days.value = 30;
     await nextTick();
@@ -186,7 +189,10 @@ describe('useDashboardUpcoming — 交期分桶 query（2026-10-07）', () => {
     vi.useFakeTimers();
     let release2: (v: unknown) => void = () => {};
     fetchUpcomingMock.mockImplementationOnce(
-      () => new Promise((resolve) => { release2 = resolve; }),
+      () =>
+        new Promise((resolve) => {
+          release2 = resolve;
+        }),
     );
     void comp.query.refetch();
     await vi.advanceTimersByTimeAsync(0);

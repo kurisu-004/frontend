@@ -45,16 +45,15 @@ function inSetup<T>(fn: () => T): T {
   return app.runWithContext(fn);
 }
 
-const {
-  getDeliveryScanTree,
-  submitDeliveryEntries,
-  getNote,
-  submitNote,
-} = await import('@/api/com/deliveryNote');
+const { getDeliveryScanTree, submitDeliveryEntries, getNote, submitNote } =
+  await import('@/api/com/deliveryNote');
 import { useDeliveryScanSubmission } from '../composables/useDeliveryScanSubmission';
 import { ApiError } from '@/api/http';
 import type { DeliveryScanTreeData } from '../composables/deliveryScanTreeSchema';
-import type { DeliveryNoteDetailData, DeliveryNoteItemData } from '../composables/deliveryNoteSchema';
+import type {
+  DeliveryNoteDetailData,
+  DeliveryNoteItemData,
+} from '../composables/deliveryNoteSchema';
 
 const baseOpts = () => ({
   writeDraftFromScan: vi.fn(),

@@ -59,9 +59,7 @@
             报工 {{ result.overview_batch_count }} 批 / {{ result.overview_quantity }} 件
           </el-tag>
           <el-tag size="small" effect="plain">出货 {{ result.note_count }} 单</el-tag>
-          <el-tag size="small" effect="plain">
-            工人 {{ result.worker_row_total }} 人
-          </el-tag>
+          <el-tag size="small" effect="plain"> 工人 {{ result.worker_row_total }} 人 </el-tag>
         </div>
         <div v-if="result.sections.length > 0" class="preview-sections">
           生效节：{{ result.sections.join(' / ') }}
@@ -70,7 +68,9 @@
 
       <div class="chunks-toolbar">
         <el-button size="small" @click="copyAll">复制全部</el-button>
-        <span class="chunks-hint">消息不截断：超长会拆成多条按顺序发出。下面的字符条就是群里会看到的样子。</span>
+        <span class="chunks-hint"
+          >消息不截断：超长会拆成多条按顺序发出。下面的字符条就是群里会看到的样子。</span
+        >
       </div>
 
       <!-- ⚠️ 逐条渲染（不许 join）：见文件头「必须逐条渲染」那一段。 -->

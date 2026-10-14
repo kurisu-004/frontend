@@ -232,11 +232,7 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions): UsePartsListQ
   // 2026-09-27 前后端字段对齐：移除 search.nextProcessIds（原下一道工序筛选随
   // 「下一道工序」列一并删除），tableKey 减少一维。
   const tableKey = computed(() =>
-    [
-      search.locations.join(','),
-      search.holderIds.join(','),
-      search.rowType,
-    ].join('|'),
+    [search.locations.join(','), search.holderIds.join(','), search.rowType].join('|'),
   );
 
   type SortOrder = 'ascending' | 'descending';
@@ -513,7 +509,9 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions): UsePartsListQ
         )
       : [];
     search.statuses =
-      persistedStatuses.length > 0 ? persistedStatuses : initialPartsSearch(opts.isCncProgrammer).statuses;
+      persistedStatuses.length > 0
+        ? persistedStatuses
+        : initialPartsSearch(opts.isCncProgrammer).statuses;
     search.isUrgent = persisted.search.isUrgent ?? search.isUrgent;
     search.customerId = persisted.search.customerId ?? search.customerId;
     search.requestDateFrom = persisted.search.requestDateFrom ?? search.requestDateFrom;

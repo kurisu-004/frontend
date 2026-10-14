@@ -225,8 +225,18 @@ describe('useDeliveryDraftBoard 已打印标签绿底', () => {
         ...DRAFT_HEAD,
         part_count: 2,
         line_items: [
-          lineItem({ id: '911000000000000001', part_id: 'PA', assembly_id: 'A1', assembly_name: '总装' }),
-          lineItem({ id: '911000000000000002', part_id: 'PB', assembly_id: 'A1', assembly_name: '总装' }),
+          lineItem({
+            id: '911000000000000001',
+            part_id: 'PA',
+            assembly_id: 'A1',
+            assembly_name: '总装',
+          }),
+          lineItem({
+            id: '911000000000000002',
+            part_id: 'PB',
+            assembly_id: 'A1',
+            assembly_name: '总装',
+          }),
         ],
       },
     ]);

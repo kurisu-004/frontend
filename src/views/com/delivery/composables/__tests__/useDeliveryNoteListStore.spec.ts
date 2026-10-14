@@ -162,9 +162,9 @@ describe('useDeliveryNoteListStore', () => {
     await settle();
     expect(store.query.search).toBe('DN-9');
     expect(store.query.page).toBe(1);
-    expect((apiGetMock.mock.calls.at(-1)![1] as { params: { keyword: string } }).params.keyword).toBe(
-      'DN-9',
-    );
+    expect(
+      (apiGetMock.mock.calls.at(-1)![1] as { params: { keyword: string } }).params.keyword,
+    ).toBe('DN-9');
   });
 
   it('restoreState 把生效态同步回输入态（输入框不留白）', () => {

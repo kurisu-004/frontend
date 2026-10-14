@@ -90,7 +90,13 @@ export function useOutsourceQuoteForm(): UseOutsourceQuoteFormReturn {
   const createFieldErrors = ref<OutsourceQuoteFieldErrors>({});
 
   function openCreate(): void {
-    Object.assign(createForm, { part_id: '', outsource_company_id: '', process_id: '', price: '', note: '' });
+    Object.assign(createForm, {
+      part_id: '',
+      outsource_company_id: '',
+      process_id: '',
+      price: '',
+      note: '',
+    });
     createFieldErrors.value = {};
     showCreate.value = true;
   }

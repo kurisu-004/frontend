@@ -38,7 +38,9 @@ describe('WeComScheduleSection.vue — 配套字段的显隐由 meta 的 needs_*
   });
 
   it('S2：flags 优先读 meta 下发的选项、读不到才回落内置兜底表', () => {
-    expect(CODE).toMatch(/frequencyOptions\.find\(\(f\) => f\.value === props\.modelValue\.frequency\)/);
+    expect(CODE).toMatch(
+      /frequencyOptions\.find\(\(f\) => f\.value === props\.modelValue\.frequency\)/,
+    );
     expect(CODE).toMatch(/DEFAULT_WECOM_DAILY_FREQUENCY_FLAGS\[props\.modelValue\.frequency\]/);
   });
 
@@ -48,7 +50,9 @@ describe('WeComScheduleSection.vue — 配套字段的显隐由 meta 的 needs_*
   });
 
   it('S4：星期候选是 ISO 1=周一 … 7=周日（**不是** JS 的 0=周日）', () => {
-    expect(CODE).toMatch(/WEEKDAY_OPTIONS = \[[\s\S]*?value: 1, label: '周一'[\s\S]*?value: 7, label: '周日'/);
+    expect(CODE).toMatch(
+      /WEEKDAY_OPTIONS = \[[\s\S]*?value: 1, label: '周一'[\s\S]*?value: 7, label: '周日'/,
+    );
   });
 
   it('S5：时/分用两个 el-select 而不是 el-time-picker（wire 形态就是两个独立数字字段）', () => {
@@ -64,12 +68,18 @@ describe('WeComScheduleSection.vue — 切频率时按判据归一', () => {
     expect(fn).toMatch(/send_hour: judge\.needs_time \? props\.modelValue\.send_hour : null/);
     expect(fn).toMatch(/send_minute: judge\.needs_time \? props\.modelValue\.send_minute : null/);
     expect(fn).toMatch(/weekday: judge\.needs_weekday \? props\.modelValue\.weekday : null/);
-    expect(fn).toMatch(/day_of_month: judge\.needs_day_of_month \? props\.modelValue\.day_of_month : null/);
+    expect(fn).toMatch(
+      /day_of_month: judge\.needs_day_of_month \? props\.modelValue\.day_of_month : null/,
+    );
   });
 
-  it('N2：el-select 清空给出 `\'\'` ⇒ 归一成 null（免得把空串塞上 wire）', () => {
-    expect(CODE).toMatch(/function toNullableInt[\s\S]*?if \(v === '' \|\| v === null \|\| v === undefined\) return null;/);
-    expect(CODE).toMatch(/function toNullableString[\s\S]*?if \(v === '' \|\| v === null \|\| v === undefined\) return null;/);
+  it("N2：el-select 清空给出 `''` ⇒ 归一成 null（免得把空串塞上 wire）", () => {
+    expect(CODE).toMatch(
+      /function toNullableInt[\s\S]*?if \(v === '' \|\| v === null \|\| v === undefined\) return null;/,
+    );
+    expect(CODE).toMatch(
+      /function toNullableString[\s\S]*?if \(v === '' \|\| v === null \|\| v === undefined\) return null;/,
+    );
   });
 
   it('N3：通道 id **不过 Number()**（雪花 id 走 JSON string，过一遍就丢精度）', () => {
@@ -119,7 +129,11 @@ describe('WeComScheduleSection.vue — 纯组件纪律', () => {
   });
 
   it('P3：引 webhook 的 wire 类型用 `import type`（不引那个子域的守门 schema）', () => {
-    expect(CODE).toMatch(/import type \{ WeComWebhookData \} from '@\/views\/wecom\/webhooks\/weComWebhookSchema';/);
-    expect(CODE).not.toMatch(/^import \{[^}]*\} from '@\/views\/wecom\/webhooks\/weComWebhookSchema';/m);
+    expect(CODE).toMatch(
+      /import type \{ WeComWebhookData \} from '@\/views\/wecom\/webhooks\/weComWebhookSchema';/,
+    );
+    expect(CODE).not.toMatch(
+      /^import \{[^}]*\} from '@\/views\/wecom\/webhooks\/weComWebhookSchema';/m,
+    );
   });
 });

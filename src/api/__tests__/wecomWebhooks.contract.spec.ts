@@ -64,7 +64,8 @@ const WEBHOOK = { id: '9000000000000903', name: '生产群' };
 const VERSION_BODY = { version: 7 };
 const CREATE_BODY = {
   name: '生产群',
-  webhook_url: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=693a0000-1111-2222-3333-44445555ffff',
+  webhook_url:
+    'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=693a0000-1111-2222-3333-44445555ffff',
 };
 
 /** 跑一次写端点，返回实际打到 axios 的 [url, body]。 */

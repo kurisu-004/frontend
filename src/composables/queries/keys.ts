@@ -930,8 +930,7 @@ export const qk = {
   wecomDailyMeta: () => ['wecom-daily', 'meta'] as const,
   /** 发送历史分页键（`GET /api/v2/cron/wecom-daily/logs`）。**参数键**：端点接 limit /
    *  offset，键必须随 params 变化才能拿到不同 cache identity。 */
-  wecomDailyLogs: (params: ListWeComDailyLogsParams) =>
-    ['wecom-daily', 'logs', params] as const,
+  wecomDailyLogs: (params: ListWeComDailyLogsParams) => ['wecom-daily', 'logs', params] as const,
   /** 每日总结域前缀（**只覆盖 config + meta 两条**）。⚠️ **不覆盖 logs** —— 理由见上方
    *  「logs 刻意不挂 prefix 之下」那一段。⚠️ 不要在调用点拼 `['wecom-daily']` 字面量。 */
   wecomDailyPrefix: ['wecom-daily'] as const,

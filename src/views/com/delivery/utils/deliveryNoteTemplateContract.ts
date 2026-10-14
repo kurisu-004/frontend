@@ -154,8 +154,7 @@ export type GaugeDeliveryNoteTemplateContract = typeof GAUGE_DELIVERY_NOTE_TEMPL
  * `note`，页脚只有一个 `delivery_date`）⇒ 消费方必须先按 `kind` 收窄再取字段。
  */
 export type DeliveryNoteTemplateContract =
-  | PartDeliveryNoteTemplateContract
-  | GaugeDeliveryNoteTemplateContract;
+  PartDeliveryNoteTemplateContract | GaugeDeliveryNoteTemplateContract;
 
 /** 数据区最后一行的 0-based 下标（`dataStartRow + dataRowCount - 1`，零件版）。 */
 export const DELIVERY_NOTE_LAST_DATA_ROW =

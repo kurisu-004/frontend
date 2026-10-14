@@ -169,7 +169,13 @@ function mountDialog() {
   const wrapper = mount(UserFormDialog, {
     global: {
       ...globalConfig,
-      plugins: [pinia, [VueQueryPlugin, { queryClient: new QueryClient({ defaultOptions: { queries: { retry: 0 } } }) }]],
+      plugins: [
+        pinia,
+        [
+          VueQueryPlugin,
+          { queryClient: new QueryClient({ defaultOptions: { queries: { retry: 0 } } }) },
+        ],
+      ],
     },
   });
   return { wrapper, store: useUsersListStore() };

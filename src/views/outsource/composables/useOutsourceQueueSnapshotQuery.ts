@@ -64,7 +64,5 @@ export function useOutsourceQueueSnapshotQuery() {
  *  返回 Promise<void> 让调用方可以 await 失效完成再弹 toast。
  *  调用点：`useOutsourceQueueMove`（发送 / 回收后）、看板的手动刷新。 */
 export function invalidateOutsourceQueueSnapshotAll(qc: QueryClient): Promise<void> {
-  return qc
-    .invalidateQueries({ queryKey: qk.outsourceQueueSnapshotPrefix })
-    .then(() => undefined);
+  return qc.invalidateQueries({ queryKey: qk.outsourceQueueSnapshotPrefix }).then(() => undefined);
 }

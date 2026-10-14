@@ -78,7 +78,10 @@ describe('2026-10-02：useProcessChain currentStepId 派生', () => {
   it('S2：选中批次 → 该批次的 current_process_step_id', () => {
     const partId = ref('42');
     const part = ref<PartDetailDto | null>(makePart('chain-1'));
-    const batches = ref<PartBatch[]>([makeBatch({ id: 'b1' }), makeBatch({ id: 'b2', current_process_step_id: 'step-3' })]);
+    const batches = ref<PartBatch[]>([
+      makeBatch({ id: 'b1' }),
+      makeBatch({ id: 'b2', current_process_step_id: 'step-3' }),
+    ]);
     const selectedBatchId = ref<string | null>(null);
 
     const chain = useProcessChain(partId, part, batches, selectedBatchId);
@@ -199,6 +202,8 @@ describe('2026-10-02：useProcessChain currentStepId 派生', () => {
 
     expect(selectedBatchId.value).toBe('b2');
     expect(chain.currentStepId.value).toBe('step-2');
-    expect(chain.steps.value.findIndex((s) => s.id === chain.currentStepId.value)).toBeGreaterThanOrEqual(0);
+    expect(
+      chain.steps.value.findIndex((s) => s.id === chain.currentStepId.value),
+    ).toBeGreaterThanOrEqual(0);
   });
 });

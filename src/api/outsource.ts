@@ -114,7 +114,9 @@ export async function listCompaniesByProcess(processId: string): Promise<Outsour
  *  业务错：40001（`name` 空白）/ 21202 或 21214（公司名重名）/ 21203（`process_ids` 里的
  *  工序不存在或不是 OUTSOURCE / INHOUSE 类别）/ 40300（无 outsource.company.manage
  *  权限点）。 */
-export async function createOutsourceCompany(payload: OutsourceCompanyCreatePayload): Promise<void> {
+export async function createOutsourceCompany(
+  payload: OutsourceCompanyCreatePayload,
+): Promise<void> {
   await api.post('/outsource-companies', payload);
 }
 

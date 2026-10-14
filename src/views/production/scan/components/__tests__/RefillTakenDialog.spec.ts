@@ -54,11 +54,7 @@ function taken(over: Partial<TakenItemDto> = {}): TakenItemDto {
   };
 }
 
-function render(props: {
-  items: TakenItemDto[];
-  leadText?: string;
-  modelValue?: boolean;
-}) {
+function render(props: { items: TakenItemDto[]; leadText?: string; modelValue?: boolean }) {
   return mount(RefillTakenDialog, {
     props: { modelValue: true, ...props },
     global: { stubs },
@@ -98,7 +94,11 @@ describe('RefillTakenDialog / 补料告知', () => {
   });
 
   it('加急件才渲染加急标（chip 的「系统交期」标是另一个 el-tag，别混）', () => {
-    expect(render({ items: [taken()] }).find('.taken-main .mock-tag').exists()).toBe(false);
+    expect(
+      render({ items: [taken()] })
+        .find('.taken-main .mock-tag')
+        .exists(),
+    ).toBe(false);
     const urgent = render({ items: [taken({ is_urgent: true })] });
     expect(urgent.find('.taken-main .mock-tag').text()).toBe('加急');
   });
@@ -108,16 +108,24 @@ describe('RefillTakenDialog / 补料告知', () => {
   it('leadText 逐字渲染；不传时不渲染这一行', () => {
     const withLead = render({ items: [taken()], leadText: '已送检：F2117' });
     expect(withLead.find('.lead-text').text()).toContain('已送检：F2117');
-    expect(render({ items: [taken()] }).find('.lead-text').exists()).toBe(false);
+    expect(
+      render({ items: [taken()] })
+        .find('.lead-text')
+        .exists(),
+    ).toBe(false);
   });
 
   it('条数文案单复数分岔（1 条不带数字、多条带总数）', () => {
-    expect(render({ items: [taken()] }).find('.refill-text').text()).toBe(
-      '系统已自动为您接取以下批次：',
-    );
-    expect(render({ items: [taken(), taken()] }).find('.refill-text').text()).toBe(
-      '系统已自动为您接取以下 2 个批次：',
-    );
+    expect(
+      render({ items: [taken()] })
+        .find('.refill-text')
+        .text(),
+    ).toBe('系统已自动为您接取以下批次：');
+    expect(
+      render({ items: [taken(), taken()] })
+        .find('.refill-text')
+        .text(),
+    ).toBe('系统已自动为您接取以下 2 个批次：');
   });
 
   it('点「知道了」只抛 update:modelValue(false)（父组件 v-if 据此卸载，弹窗才关得掉）', async () => {

@@ -135,7 +135,12 @@ function readOption(wrapper: ReturnType<typeof mount>): OptionShape {
 /** 通用 mount：桶数据 + 三个必填参数（basis / days / today）+ stale。 */
 function mountChart(
   buckets: UpcomingDeliveryEntryData[],
-  overrides: Partial<{ basis: 'planned' | 'system'; days: number; today: string; stale: boolean }> = {},
+  overrides: Partial<{
+    basis: 'planned' | 'system';
+    days: number;
+    today: string;
+    stale: boolean;
+  }> = {},
 ) {
   return mount(UpcomingDeliveryChart, {
     props: {
@@ -193,7 +198,10 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配', () => {
   it('C2：layer.key=top 时，top series.data[0] = bucket.by_status 求和', async () => {
     // 顶层 statuses = [PENDING, PROGRAMMING, IN_PROCESS, OUTSOURCE]
     const wrapper = mountChart([
-      makeBucket({ count: 10, by_status: { PENDING: 1, PROGRAMMING: 2, IN_PROCESS: 3, OUTSOURCE: 0 } }),
+      makeBucket({
+        count: 10,
+        by_status: { PENDING: 1, PROGRAMMING: 2, IN_PROCESS: 3, OUTSOURCE: 0 },
+      }),
     ]);
     await nextTick();
     await flushPromises();

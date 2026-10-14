@@ -215,10 +215,7 @@ describe.skipIf(!BACKEND)('/preview 契约与后端源码一致', () => {
   // `FAILED` 只出现在 `t_file_preview.state` 表列里。前端把 `'FAILED'` 加进
   // `FilePreviewState` 就是在给一个后端永不返回的响应写分支。
   it('preview/dto.rs 声明的 wire state 只有 READY / PENDING', () => {
-    const src = readFileSync(
-      join(BACKEND!, 'src/modules/files/part_file/preview/dto.rs'),
-      'utf8',
-    );
+    const src = readFileSync(join(BACKEND!, 'src/modules/files/part_file/preview/dto.rs'), 'utf8');
     // 剥注释，只看代码里出现的 state 字面量 / 常量引用。
     const code = src.replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
     const usesFailedLiteral = /state::FAILED|\bFAILED\b/.test(code);

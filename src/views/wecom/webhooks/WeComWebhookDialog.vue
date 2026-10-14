@@ -48,7 +48,8 @@
           @update:model-value="patch({ webhook_url: String($event ?? '') })"
         />
         <div class="field-hint">
-          从企业微信群的「群机器人 → 添加机器人 → 复制 Webhook」拿到的完整地址；加密保存，保存后不再显示
+          从企业微信群的「群机器人 → 添加机器人 → 复制
+          Webhook」拿到的完整地址；加密保存，保存后不再显示
         </div>
       </el-form-item>
     </el-form>
@@ -97,7 +98,9 @@ const title = computed(() => (props.mode === 'create' ? '新增 Webhook' : '编�
 
 /** 编辑态 placeholder 写明「留空 = 不改」—— 这是后端显式契约，必须让用户看得见。 */
 const urlPlaceholder = computed(() =>
-  props.mode === 'create' ? 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…' : '留空表示不修改',
+  props.mode === 'create'
+    ? 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…'
+    : '留空表示不修改',
 );
 
 function patch(value: Partial<WeComWebhookFormModel>): void {

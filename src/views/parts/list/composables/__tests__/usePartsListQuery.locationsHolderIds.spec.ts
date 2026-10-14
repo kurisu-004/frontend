@@ -486,7 +486,10 @@ describe('usePartsListQuery — locations / holder_ids 过滤参数契约（PR-4
 
     // 先 fetch 一次（默认参数）
     await q!.fetchList();
-    const firstParams = realListUnionItemsMock.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
+    const firstParams = realListUnionItemsMock.mock.calls[0]?.[0] as unknown as Record<
+      string,
+      unknown
+    >;
     expect(firstParams?.locations).toBeUndefined();
 
     // 改 search 字段（queryKey 响应式变化）
@@ -509,7 +512,10 @@ describe('usePartsListQuery — locations / holder_ids 过滤参数契约（PR-4
     await new Promise((r) => setTimeout(r, 10));
 
     await q!.fetchList();
-    const firstParams = realListUnionItemsMock.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
+    const firstParams = realListUnionItemsMock.mock.calls[0]?.[0] as unknown as Record<
+      string,
+      unknown
+    >;
     expect(firstParams?.limit).toBe(20);
 
     // 改 pageSize（queryKey 响应式变化）

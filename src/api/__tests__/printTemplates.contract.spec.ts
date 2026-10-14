@@ -67,7 +67,10 @@ import type * as HttpModule from '@/api/http';
 // 否则这里就是 `Cannot access 'apiGetMock' before initialization`（mailAccounts 那份
 // 用的是 `vi.fn` 直接声明 + 全模块桩，本文件要保留 `cleanParams` 的真实现，只能用
 // importOriginal 形态，也就必须 hoisted）。
-const { apiGetMock, apiPostMock } = vi.hoisted(() => ({ apiGetMock: vi.fn(), apiPostMock: vi.fn() }));
+const { apiGetMock, apiPostMock } = vi.hoisted(() => ({
+  apiGetMock: vi.fn(),
+  apiPostMock: vi.fn(),
+}));
 
 vi.mock('@/api/http', async (importOriginal) => {
   const actual = await importOriginal<typeof HttpModule>();
@@ -242,9 +245,7 @@ describe('printTemplates api — 五个端点的 URL / method / body 契约', ()
     expect(filePart.name).toBe('fala.xlsx');
     // 段 content-type 恒为契约 MIME（绝不用 `file.type` —— 浏览器给 xlsx 的 type 极不稳定）。
     expect(filePart.type).toBe(XLSX_MIME);
-    expect(XLSX_MIME).toBe(
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    );
+    expect(XLSX_MIME).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   });
 
   // ⚠️ **强度有限，别当 URL 纪律的守卫**（2026-10-16 review 第 2 轮 M-4 复核）：它只认**单引号**

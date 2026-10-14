@@ -66,11 +66,7 @@ describe('planPick', () => {
     expect(plan.rejectedByAccept.length).toBe(1);
   });
   it('multiple=false 截断到第 1 个，其余 rejectedByMultiple', () => {
-    const plan = planPick(
-      [f('a', 1), f('b', 1)],
-      { multiple: false },
-      0,
-    );
+    const plan = planPick([f('a', 1), f('b', 1)], { multiple: false }, 0);
     expect(plan.accepted.map((x) => x.name)).toEqual(['a']);
     expect(plan.rejectedByMultiple.map((x) => x.file.name)).toEqual(['b']);
     expect(plan.rejectedByMultiple[0]!.reason).toContain('仅支持单文件上传');

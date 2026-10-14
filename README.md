@@ -28,6 +28,10 @@ npm run format:check # Prettier v3 校验（提交前必过）
 npm run test         # vitest run（全部单测）
 ```
 
+> `typecheck` / `lint` / `format:check` 三道静态闸已接入根仓 CI 的 frontend test job。
+> 闸的接入位置、耗时量级与「`npm ci` 生成的 `public/occt-wasm.js` 为何不会被校验」
+> 见 [`docs/ci-frontend-gates.md`](docs/ci-frontend-gates.md)（2026-10-20 新增）。
+
 ## 目录结构
 
 ```

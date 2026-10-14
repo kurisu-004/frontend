@@ -169,7 +169,8 @@ describe('useWeComWebhooksStore — 弹窗与「地址不回显」', () => {
 });
 
 describe('useWeComWebhooksStore — 保存（OCC 硬约束）', () => {
-  const GOOD_URL = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=693a0000-1111-2222-3333-44445555ffff';
+  const GOOD_URL =
+    'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=693a0000-1111-2222-3333-44445555ffff';
 
   it('S1：新建 payload 带 name + webhook_url', async () => {
     const store = useWeComWebhooksStore();
@@ -184,7 +185,10 @@ describe('useWeComWebhooksStore — 保存（OCC 硬约束）', () => {
     expect(ok).toBe(true);
     expect(createWeComWebhookMock).toHaveBeenCalledTimes(1);
     // trim 已归一（schema 的链式顺序 trim 在前）
-    expect(createWeComWebhookMock.mock.calls[0]![0]).toEqual({ name: '新群', webhook_url: GOOD_URL });
+    expect(createWeComWebhookMock.mock.calls[0]![0]).toEqual({
+      name: '新群',
+      webhook_url: GOOD_URL,
+    });
     expect(ElMessage.success).toHaveBeenCalledWith('Webhook 已创建');
     // 成功后弹窗关闭（唯一的提交出口走完）
     expect(store.dialogs.visible).toBe(false);
@@ -274,9 +278,7 @@ describe('useWeComWebhooksStore — 动作端点与失效编排', () => {
     store.query.openGate();
     await tick();
     const spy = vi.spyOn(qc, 'invalidateQueries');
-    deleteWeComWebhookMock.mockRejectedValue(
-      apiError(WECOM_WEBHOOK_ERROR_CODES.IN_USE, 'in use'),
-    );
+    deleteWeComWebhookMock.mockRejectedValue(apiError(WECOM_WEBHOOK_ERROR_CODES.IN_USE, 'in use'));
 
     await store.actions.remove(store.query.webhooks[0]!);
     await tick();
@@ -324,9 +326,7 @@ describe('useWeComWebhooksStore — 动作端点与失效编排', () => {
     store.query.openGate();
     await tick();
     const spy = vi.spyOn(qc, 'invalidateQueries');
-    testWeComWebhookMock.mockRejectedValue(
-      apiError(WECOM_WEBHOOK_ERROR_CODES.NOT_FOUND, 'gone'),
-    );
+    testWeComWebhookMock.mockRejectedValue(apiError(WECOM_WEBHOOK_ERROR_CODES.NOT_FOUND, 'gone'));
 
     await store.actions.test(store.query.webhooks[0]!);
     await tick();

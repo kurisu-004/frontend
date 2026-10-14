@@ -44,7 +44,9 @@ import {
 import { URGENT_FILTER_VALUE, usePartsColumnFilters } from '../usePartsColumnFilters';
 
 const realListUnionItemsMock = vi.fn<
-  (params: UnionListParams) => Promise<{ items: unknown[]; total: number; limit: number; offset: number }>
+  (
+    params: UnionListParams,
+  ) => Promise<{ items: unknown[]; total: number; limit: number; offset: number }>
 >(async () => ({ items: [], total: 0, limit: 20, offset: 0 }));
 
 vi.mock('@/api/com/unionList', () => ({

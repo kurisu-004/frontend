@@ -44,12 +44,7 @@
         aria-label="推送通道"
         @update:model-value="patch({ webhook_id: toNullableString($event) })"
       >
-        <el-option
-          v-for="w in webhooks"
-          :key="w.id"
-          :label="w.name"
-          :value="w.id"
-        >
+        <el-option v-for="w in webhooks" :key="w.id" :label="w.name" :value="w.id">
           <span>{{ w.name }}</span>
           <span class="option-masked">{{ w.url_masked }}</span>
         </el-option>

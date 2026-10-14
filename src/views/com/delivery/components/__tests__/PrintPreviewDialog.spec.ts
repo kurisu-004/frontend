@@ -73,7 +73,9 @@ vi.mock('@/utils/download', () => ({
 
 const app = createApp({ render: () => null });
 app.use(createPinia());
-app.use(VueQueryPlugin, { queryClient: new QueryClient({ defaultOptions: { queries: { retry: false } } }) });
+app.use(VueQueryPlugin, {
+  queryClient: new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+});
 setActivePinia(app.config.globalProperties.$pinia);
 
 const { ElMessage } = await import('element-plus');
@@ -291,8 +293,16 @@ const stubs = {
     template: '<div class="mock-el-select"><slot /></div>',
   },
   'el-option': { name: 'ElOptionStub', template: '<div><slot /></div>' },
-  'el-radio-group': { name: 'ElRadioGroupStub', props: ['modelValue'], template: '<div><slot /></div>' },
-  'el-radio-button': { name: 'ElRadioButtonStub', props: ['value'], template: '<span><slot /></span>' },
+  'el-radio-group': {
+    name: 'ElRadioGroupStub',
+    props: ['modelValue'],
+    template: '<div><slot /></div>',
+  },
+  'el-radio-button': {
+    name: 'ElRadioButtonStub',
+    props: ['value'],
+    template: '<span><slot /></span>',
+  },
   'el-tabs': {
     name: 'ElTabsStub',
     props: ['modelValue'],
@@ -306,20 +316,24 @@ const stubs = {
   'el-table': defineComponent({
     name: 'ElTableStub',
     props: { data: { type: Array as PropType<unknown[]>, default: () => [] } },
-    setup: (props, { slots }) => () =>
-      h(
-        'div',
-        { class: 'mock-el-table', 'data-rows': (props.data || []).length },
-        slots.default?.(),
-      ),
+    setup:
+      (props, { slots }) =>
+      () =>
+        h(
+          'div',
+          { class: 'mock-el-table', 'data-rows': (props.data || []).length },
+          slots.default?.(),
+        ),
   }),
   'el-table-column': defineComponent({
     name: 'ElTableColumnStub',
     props: ['label', 'columnKey'],
-    setup: (p) => () =>
-      h('div', { class: 'mock-el-table-column', 'data-label': p.label }),
+    setup: (p) => () => h('div', { class: 'mock-el-table-column', 'data-label': p.label }),
   }),
-  'el-input-number': { name: 'ElInputNumberStub', template: '<input class="mock-el-input-number" />' },
+  'el-input-number': {
+    name: 'ElInputNumberStub',
+    template: '<input class="mock-el-input-number" />',
+  },
   ColumnVisibilityPopover: true,
   ElIcon: true,
   ElTable: true,
@@ -557,7 +571,8 @@ function driverItemsFor(url: string): { data: unknown } | undefined {
 /** 让 GET /com/delivery/drivers 返回两名候选（否则下拉选中项查不到名字）。 */
 function withDriverOptions(): void {
   apiGetMock.mockImplementation(
-    async (url: string, config?: GetConfig) => driverItemsFor(url) ?? (await defaultGet(url, config)),
+    async (url: string, config?: GetConfig) =>
+      driverItemsFor(url) ?? (await defaultGet(url, config)),
   );
 }
 
@@ -692,7 +707,10 @@ describe('PrintPreviewDialog 司机绑定时机', () => {
     withDriverOptions();
     const w = await mountWithBound(BUILTIN_PART, { driver_worker_name: null });
     await selectDriver(w, 'W2');
-    await w.findAll('button.mock-el-button').find((b) => b.text().includes('取消'))!.trigger('click');
+    await w
+      .findAll('button.mock-el-button')
+      .find((b) => b.text().includes('取消'))!
+      .trigger('click');
     await flush();
     expect(driverPosts()).toHaveLength(0);
     expect(downloads).toHaveLength(0);
@@ -965,7 +983,9 @@ describe('PrintPreviewDialog 自动选用一级客户绑定的模板', () => {
     // 现在放行迟到的那条：没有代次守卫时它会把上面那个结果覆盖掉。
     firstGate.resolve();
     await waitUntil(
-      () => apiGetMock.mock.calls.filter((c) => String(c[0]).includes('/print-templates/T1/content')).length >= 2,
+      () =>
+        apiGetMock.mock.calls.filter((c) => String(c[0]).includes('/print-templates/T1/content'))
+          .length >= 2,
       '迟到的第一次 resolve 取字节',
     );
     await flush();
@@ -1055,8 +1075,9 @@ describe('PrintPreviewDialog 导出前复探版式', () => {
 
     await clickExport(w, false);
     expect(downloads).toHaveLength(0);
-    const msg = (ElMessage.error as unknown as { mock: { calls: string[][] } }).mock.calls
-      .at(-1)![0];
+    const msg = (ElMessage.error as unknown as { mock: { calls: string[][] } }).mock.calls.at(
+      -1,
+    )![0];
     expect(msg).toContain('打印模板已更换');
     expect(msg).toContain('重新打开');
     // 对话框不关（用户看完提示自己关），导出按钮回到可点。

@@ -161,7 +161,9 @@ describe('deliveryNoteLineItemSchema', () => {
   });
 
   it('delivery_seq 显式 null（历史数据未回填）→ 也是 null', () => {
-    expect(deliveryNoteLineItemSchema.parse(lineItem({ delivery_seq: null })).delivery_seq).toBeNull();
+    expect(
+      deliveryNoteLineItemSchema.parse(lineItem({ delivery_seq: null })).delivery_seq,
+    ).toBeNull();
   });
 });
 
@@ -170,12 +172,16 @@ describe('deliveryNoteDetailSchema', () => {
     const detail = deliveryNoteDetailSchema.parse({ ...item(), line_items: [lineItem()] });
     expect(detail.line_items).toHaveLength(1);
     const itemKeys = Object.keys(deliveryNoteItemSchema.shape).sort();
-    const detailKeys = Object.keys(detail).filter((k) => k !== 'line_items').sort();
+    const detailKeys = Object.keys(detail)
+      .filter((k) => k !== 'line_items')
+      .sort();
     expect(detailKeys).toEqual(itemKeys);
   });
 
   it('line_items 缺字段 → 抛', () => {
-    expect(() => deliveryNoteDetailSchema.parse({ ...item(), line_items: [{ id: '1' }] })).toThrow();
+    expect(() =>
+      deliveryNoteDetailSchema.parse({ ...item(), line_items: [{ id: '1' }] }),
+    ).toThrow();
   });
 });
 
@@ -564,10 +570,16 @@ describe('后端 VO 字段名清单护栏（schema ↔ 后端 VO，不是 schema
 
   it('schema 比 VO 更宽的字段都在登记表里（带理由），且登记无陈旧', () => {
     const skipped = BACKEND_VO_SKIPPED_FIELDS.lineItem;
-    const wider = optionalKeysOf(deliveryNoteLineItemSchema.shape).filter((k) => !skipped.includes(k));
+    const wider = optionalKeysOf(deliveryNoteLineItemSchema.shape).filter(
+      (k) => !skipped.includes(k),
+    );
     const unregistered = wider.filter((k) => !SCHEMA_WIDER_THAN_VO[`lineItem.${k}`]);
-    expect(unregistered, `这些字段接了 undefined 但没登记理由：${unregistered.join('、')}`).toEqual([]);
-    const stale = Object.keys(SCHEMA_WIDER_THAN_VO).filter((k) => !wider.includes(k.split('.')[1]!));
+    expect(unregistered, `这些字段接了 undefined 但没登记理由：${unregistered.join('、')}`).toEqual(
+      [],
+    );
+    const stale = Object.keys(SCHEMA_WIDER_THAN_VO).filter(
+      (k) => !wider.includes(k.split('.')[1]!),
+    );
     expect(stale, `SCHEMA_WIDER_THAN_VO 有陈旧登记：${stale.join('、')}`).toEqual([]);
   });
 
@@ -602,7 +614,10 @@ describe('后端 VO 字段名清单护栏（schema ↔ 后端 VO，不是 schema
     });
     // 后端有、前端零读的字段会落在这里 —— 那不是 bug（Zod strip 无害），但必须是有意识的
     // 零读；本域现状是空集。
-    expect(missing, `子对象上后端有而 schema 没声明（会被静默 strip）：${missing.join('、')}`).toEqual([]);
+    expect(
+      missing,
+      `子对象上后端有而 schema 没声明（会被静默 strip）：${missing.join('、')}`,
+    ).toEqual([]);
   });
 
   it('后端裸 Option（值恒可能是 null）的字段，schema 必须能接 null（可空性护栏）', () => {
@@ -651,7 +666,14 @@ describe('列表 / 批量详情 信封', () => {
 describe('deliveryGroupListResultSchema', () => {
   it('合法 groups + ungrouped_customers', () => {
     const parsed = deliveryGroupListResultSchema.parse({
-      groups: [{ id: '7', name: '二五六厂', members: [{ customer_id: '11', customer_name: '陆达' }], version: 1 }],
+      groups: [
+        {
+          id: '7',
+          name: '二五六厂',
+          members: [{ customer_id: '11', customer_name: '陆达' }],
+          version: 1,
+        },
+      ],
       ungrouped_customers: [{ id: '13', name: '法拉' }],
     });
     expect(parsed.groups[0]!.members[0]!.customer_id).toBe('11');

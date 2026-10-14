@@ -160,9 +160,9 @@ describe('usePreviewPolling', () => {
   });
 
   it('21117：第 1 次失败、第 2 次自愈成功 ⇒ 转成 READY，不降级', async () => {
-    getPartFilePreview.mockRejectedValueOnce(apiError(21117, 'CI job 终态失败')).mockResolvedValue(
-      ready(),
-    );
+    getPartFilePreview
+      .mockRejectedValueOnce(apiError(21117, 'CI job 终态失败'))
+      .mockResolvedValue(ready());
     const scope = effectScope();
     const p = scope.run(() => usePreviewPolling({ fileId: () => 'f1' }))!;
 

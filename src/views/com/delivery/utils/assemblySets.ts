@@ -30,9 +30,7 @@ type AssemblySetsCarrier = Pick<DeliveryNoteLineItemData, 'assembly_quantity' | 
 /** 装配件工单总套数：取组内首个有值的子件行（组内等值，缺失则 null）。
  *  2026-10-04 新增：详情页装配件父行与打印预览「合并一套」父行共用。 */
 export function assemblyTotalSetsOfGroup(siblings: readonly AssemblySetsCarrier[]): number | null {
-  const first: AssemblySetsCarrier | undefined = siblings.find(
-    (s) => s.assembly_quantity != null,
-  );
+  const first: AssemblySetsCarrier | undefined = siblings.find((s) => s.assembly_quantity != null);
   return first?.assembly_quantity ?? null;
 }
 

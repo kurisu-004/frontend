@@ -184,7 +184,12 @@
           <el-icon :size="32" class="is-loading"><Loading /></el-icon>
           <span>{{ wantsOriginalPdf ? '加载原始 PDF…' : '图纸转图中…' }}</span>
         </div>
-        <PdfViewer v-else :key="`pdf-${previewFile?.id}`" :url="previewBlobUrl" :page="defaultPage" />
+        <PdfViewer
+          v-else
+          :key="`pdf-${previewFile?.id}`"
+          :url="previewBlobUrl"
+          :page="defaultPage"
+        />
       </div>
       <div v-else-if="previewFile && isImage(previewFile.file_type)" class="image-preview-wrap">
         <!-- 2026-07-14：HEIC 不被浏览器支持 → 走下载；其它图片走 el-image 全屏预览。

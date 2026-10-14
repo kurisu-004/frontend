@@ -223,8 +223,10 @@ export const useWeComDailyStore = defineStore('wecom-daily', () => {
   );
   /** 三段取值范围（meta 驱动，后端收窄 / 放宽时前端自动跟随）。 */
   const ranges = computed<WeComDailyRanges>(() => ({
-    upcoming_days: metaQuery.data.value?.upcoming_days_range ?? DEFAULT_WECOM_DAILY_RANGES.upcoming_days,
-    worker_top_n: metaQuery.data.value?.worker_top_n_range ?? DEFAULT_WECOM_DAILY_RANGES.worker_top_n,
+    upcoming_days:
+      metaQuery.data.value?.upcoming_days_range ?? DEFAULT_WECOM_DAILY_RANGES.upcoming_days,
+    worker_top_n:
+      metaQuery.data.value?.worker_top_n_range ?? DEFAULT_WECOM_DAILY_RANGES.worker_top_n,
     max_chunks: metaQuery.data.value?.max_chunks_range ?? DEFAULT_WECOM_DAILY_RANGES.max_chunks,
   }));
 

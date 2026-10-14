@@ -56,7 +56,10 @@ vi.mock('@/api/outsource', () => ({
   moveOutsourceBatch: vi.fn(),
 }));
 
-import { useOutsourceQueueSnapshotQuery, invalidateOutsourceQueueSnapshotAll } from '../useOutsourceQueueSnapshotQuery';
+import {
+  useOutsourceQueueSnapshotQuery,
+  invalidateOutsourceQueueSnapshotAll,
+} from '../useOutsourceQueueSnapshotQuery';
 import { qk } from '@/composables/queries/keys';
 
 let testApp: ReturnType<typeof createApp>;

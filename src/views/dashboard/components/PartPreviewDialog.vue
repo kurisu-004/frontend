@@ -86,11 +86,7 @@
           <div v-if="preview.degradedReason.value" class="degrade-hint">
             {{ preview.degradedReason.value }}
           </div>
-          <PdfViewer
-            v-if="previewBlob"
-            :key="`original-${selectedFile?.id}`"
-            :url="previewBlob"
-          />
+          <PdfViewer v-if="previewBlob" :key="`original-${selectedFile?.id}`" :url="previewBlob" />
           <!-- 还没 blob 的两种情形文案必须分开：转图还在等（没打算要 blob，此刻一个
                /content 请求都没发过）与「已决定看原始 PDF、正在拉 blob」。 -->
           <div v-else class="preview-state">
@@ -182,11 +178,7 @@ import PdfViewer from '@/components/PdfViewer.vue';
 import ImagePager from '@/components/ImagePager.vue';
 import { useDialogSize } from '@/composables/useDialogSize';
 import { useDashboardInvalidation } from '@/views/dashboard/composables/useDashboardInvalidation';
-import {
-  ORDER_STATUS_LABEL,
-  ORDER_STATUS_TAG_TYPE,
-  type OrderStatus,
-} from '@/types/parts';
+import { ORDER_STATUS_LABEL, ORDER_STATUS_TAG_TYPE, type OrderStatus } from '@/types/parts';
 import type { PartPreviewTarget } from '@/types/dashboard';
 import type { PartBatchSchema, PartFileSchema } from '@/composables/queries/schemas';
 

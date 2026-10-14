@@ -76,7 +76,9 @@ function routerPlugin(value: unknown): Plugin {
 }
 
 /** 在组件里订阅并把 handler / 退订收走；`inMounted` 决定订阅发生在 setup 还是 onMounted。 */
-function subscribe(opts: { withRouter?: boolean; routeValue?: unknown; inMounted?: boolean } = {}): Sub {
+function subscribe(
+  opts: { withRouter?: boolean; routeValue?: unknown; inMounted?: boolean } = {},
+): Sub {
   const spy = vi.fn();
   const collected: Sub[] = [];
   const wrapper = mount(

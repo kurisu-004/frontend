@@ -292,7 +292,7 @@ describe('ADMIN_MENUS', () => {
       expect(group().children.map((c) => c.code)).toEqual(['print_templates_designer']);
     });
 
-    it('二级 print_templates_designer「模板编辑」path 为 /print-templates（与 router 的 `path: \'print-templates\'` 逐字一致）', () => {
+    it("二级 print_templates_designer「模板编辑」path 为 /print-templates（与 router 的 `path: 'print-templates'` 逐字一致）", () => {
       // ⚠️ path 与 router 逐字一致是**硬约束**：不一致时守卫第 3 条把用户踢走，
       // 现象是「点菜单闪一下又回到别的页」，不是编译错误（router 侧没有反向测试）。
       expect(leaf().title).toBe('模板编辑');

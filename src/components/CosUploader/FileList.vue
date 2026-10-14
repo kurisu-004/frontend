@@ -26,9 +26,7 @@
           <el-tag v-if="it.status === 'hashing'" size="small" type="info" effect="plain"
             >hash 中…</el-tag
           >
-          <el-tag v-else-if="it.status === 'uploading'" size="small" effect="plain"
-            >上传中</el-tag
-          >
+          <el-tag v-else-if="it.status === 'uploading'" size="small" effect="plain">上传中</el-tag>
           <el-tag v-else-if="it.status === 'done'" size="small" type="success" effect="plain"
             >✓ 已上传</el-tag
           >
@@ -44,12 +42,9 @@
           :show-text="false"
           class="cos-uploader__progress"
         />
-        <span
-          v-else-if="it.status === 'error'"
-          class="cos-uploader__error-msg"
-          :title="it.error"
-          >{{ it.error }}</span
-        >
+        <span v-else-if="it.status === 'error'" class="cos-uploader__error-msg" :title="it.error">{{
+          it.error
+        }}</span>
       </div>
       <div class="cos-uploader__actions">
         <el-button

@@ -194,81 +194,83 @@ export function useQueueDispatch(): UseQueueDispatchReturn {
 
   /** 自动下发（两步，详见文件头）。`items` 按入参顺序稳定排序；可下发判定 =
    * `skip_reason === null` 且 `first_process_id !== null`。 */
-  const autoDispatchMutation = useMutation<AutoDispatchResultSchema, Error, { batchIds: string[] }>({
-    mutationKey: ['production-queue', 'auto-dispatch'],
-    mutationFn: async ({ batchIds }) =>
-      autoDispatchResultSchema.parse(await previewAutoDispatch({ batch_ids: batchIds })),
-    onSuccess: async (res) => {
-      const dispatchable = res.items.filter(
-        (it) => it.skip_reason === null && it.first_process_id !== null,
-      );
-      const skipped = res.items.filter((it) => it.skip_reason !== null);
+  const autoDispatchMutation = useMutation<AutoDispatchResultSchema, Error, { batchIds: string[] }>(
+    {
+      mutationKey: ['production-queue', 'auto-dispatch'],
+      mutationFn: async ({ batchIds }) =>
+        autoDispatchResultSchema.parse(await previewAutoDispatch({ batch_ids: batchIds })),
+      onSuccess: async (res) => {
+        const dispatchable = res.items.filter(
+          (it) => it.skip_reason === null && it.first_process_id !== null,
+        );
+        const skipped = res.items.filter((it) => it.skip_reason !== null);
 
-      if (dispatchable.length === 0) {
-        clearSelection();
-        const noChain = skipped.filter((s) => s.skip_reason === 'NO_PROCESS_CHAIN');
-        const firstNoChain = noChain[0];
-        if (firstNoChain) {
-          const partId = partIdByBatchId.value.get(firstNoChain.batch_id) ?? null;
-          await handleProcessChainRequired(
-            new ApiError(
-              BIZ_PROCESS_CHAIN_REQUIRED,
-              noChain.length > 1 ? `${noChain.length} 件工单未制定工序链` : '请先制定工序链',
-            ),
-            partId,
-            router,
-          );
-        }
-        const other = skipped.filter((s) => s.skip_reason !== 'NO_PROCESS_CHAIN');
-        if (other.length > 0) {
-          ElMessage.warning(
-            `无可下发批次：${summarizeSkipReasons(other.map((s) => s.skip_reason!))}`,
-          );
-        }
-        return;
-      }
-
-      // 可下发项按「首道工序」分组 —— 一次 dispatch 请求只带一个 target_process_id，
-      // 故多首道工序时按 first_process_id 拆成多次 dispatch（顺序执行）。
-      const byProcess = new Map<string, string[]>();
-      for (const it of dispatchable) {
-        const pid = it.first_process_id!;
-        const arr = byProcess.get(pid) ?? [];
-        arr.push(it.batch_id);
-        byProcess.set(pid, arr);
-      }
-
-      const detail =
-        `可下发 ${dispatchable.length} 件` +
-        (byProcess.size > 1 ? `（分 ${byProcess.size} 批首道工序）` : '') +
-        (skipped.length > 0
-          ? `\n跳过 ${skipped.length} 件：${summarizeSkipReasons(skipped.map((s) => s.skip_reason!))}`
-          : '');
-      try {
-        await ElMessageBox.confirm(detail, '确认自动下发', {
-          confirmButtonText: '下发',
-          cancelButtonText: '取消',
-          type: skipped.length > 0 ? 'warning' : 'info',
-        });
-      } catch {
-        // 用户取消：不动数据（preview 是只读的，无需回滚任何东西）
-        return;
-      }
-
-      // 逐组下发（任一组失败即中断，剩余组不再发；失败信息由 dispatchMutation 的
-      // onError toast 呈现）
-      for (const [targetProcessId, batchIds] of byProcess) {
-        try {
-          await dispatchMutation.mutateAsync({ batchIds, targetProcessId });
-        } catch {
+        if (dispatchable.length === 0) {
+          clearSelection();
+          const noChain = skipped.filter((s) => s.skip_reason === 'NO_PROCESS_CHAIN');
+          const firstNoChain = noChain[0];
+          if (firstNoChain) {
+            const partId = partIdByBatchId.value.get(firstNoChain.batch_id) ?? null;
+            await handleProcessChainRequired(
+              new ApiError(
+                BIZ_PROCESS_CHAIN_REQUIRED,
+                noChain.length > 1 ? `${noChain.length} 件工单未制定工序链` : '请先制定工序链',
+              ),
+              partId,
+              router,
+            );
+          }
+          const other = skipped.filter((s) => s.skip_reason !== 'NO_PROCESS_CHAIN');
+          if (other.length > 0) {
+            ElMessage.warning(
+              `无可下发批次：${summarizeSkipReasons(other.map((s) => s.skip_reason!))}`,
+            );
+          }
           return;
         }
-      }
+
+        // 可下发项按「首道工序」分组 —— 一次 dispatch 请求只带一个 target_process_id，
+        // 故多首道工序时按 first_process_id 拆成多次 dispatch（顺序执行）。
+        const byProcess = new Map<string, string[]>();
+        for (const it of dispatchable) {
+          const pid = it.first_process_id!;
+          const arr = byProcess.get(pid) ?? [];
+          arr.push(it.batch_id);
+          byProcess.set(pid, arr);
+        }
+
+        const detail =
+          `可下发 ${dispatchable.length} 件` +
+          (byProcess.size > 1 ? `（分 ${byProcess.size} 批首道工序）` : '') +
+          (skipped.length > 0
+            ? `\n跳过 ${skipped.length} 件：${summarizeSkipReasons(skipped.map((s) => s.skip_reason!))}`
+            : '');
+        try {
+          await ElMessageBox.confirm(detail, '确认自动下发', {
+            confirmButtonText: '下发',
+            cancelButtonText: '取消',
+            type: skipped.length > 0 ? 'warning' : 'info',
+          });
+        } catch {
+          // 用户取消：不动数据（preview 是只读的，无需回滚任何东西）
+          return;
+        }
+
+        // 逐组下发（任一组失败即中断，剩余组不再发；失败信息由 dispatchMutation 的
+        // onError toast 呈现）
+        for (const [targetProcessId, batchIds] of byProcess) {
+          try {
+            await dispatchMutation.mutateAsync({ batchIds, targetProcessId });
+          } catch {
+            return;
+          }
+        }
+      },
+      onError: (e: Error) => {
+        ElMessage.error(e.message ?? '自动下发预览失败');
+      },
     },
-    onError: (e: Error) => {
-      ElMessage.error(e.message ?? '自动下发预览失败');
-    },
-  });
+  );
 
   return {
     batches,
@@ -314,9 +316,7 @@ function useQueuePendingQuery(
  *  都经它，失败也走全套失效链）、useQueueRecall（召回把批次送回本列表）、
  *  QueueBoard.onRefresh（手动刷新）。 */
 export function invalidateQueuePendingAll(qc: QueryClient): Promise<void> {
-  return qc
-    .invalidateQueries({ queryKey: qk.productionQueuePendingPrefix })
-    .then(() => undefined);
+  return qc.invalidateQueries({ queryKey: qk.productionQueuePendingPrefix }).then(() => undefined);
 }
 
 /** skip_reason 列表 → 紧凑中文摘要（按原因去重 + 计数，最多 2 种原因）。 */

@@ -187,11 +187,13 @@ const props = withDefaults(
 );
 
 const emit = defineEmits<{
-  barLayerClick: [payload: {
-    date: string;
-    layer: UpcomingLayer['key'];
-    statuses: readonly OrderStatus[];
-  }];
+  barLayerClick: [
+    payload: {
+      date: string;
+      layer: UpcomingLayer['key'];
+      statuses: readonly OrderStatus[];
+    },
+  ];
   /** 口径切换上抛（父组件改 basis → upcoming 换键 refetch）。 */
   'update:basis': [value: DeliveryBasis];
   /** 天数切换上抛（父组件改 days → upcoming 换键 refetch）。 */
@@ -268,9 +270,10 @@ function layerCount(bucket: UpcomingDeliveryEntryData, layer: UpcomingLayer): nu
 }
 
 /** 把 buckets 按 props.days 对齐，缺失日期补 0 桶（防御性，见脚本注释）。 */
-function alignBuckets(
-  buckets: UpcomingDeliveryEntryData[],
-): { xLabels: string[]; aligned: UpcomingDeliveryEntryData[] } {
+function alignBuckets(buckets: UpcomingDeliveryEntryData[]): {
+  xLabels: string[];
+  aligned: UpcomingDeliveryEntryData[];
+} {
   const map = new Map<string, UpcomingDeliveryEntryData>();
   for (const b of buckets) map.set(b.date, b);
   const isos = nextNDays(props.days, props.today);

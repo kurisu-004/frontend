@@ -138,9 +138,7 @@
         placeholder="留空则用后端默认标题（如「生产日报 2026-10-17」）"
         @update:model-value="patch({ subject_template: String($event ?? '') })"
       />
-      <span v-if="errors?.subject_template" class="field-error">{{
-        errors.subject_template
-      }}</span>
+      <span v-if="errors?.subject_template" class="field-error">{{ errors.subject_template }}</span>
     </div>
   </div>
 </template>

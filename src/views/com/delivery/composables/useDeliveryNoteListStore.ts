@@ -36,7 +36,12 @@ import { defineStore } from 'pinia';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/vue-query';
 
-import { pickup, setNoteDriver, softDeleteNote, type ListNotesParams } from '@/api/com/deliveryNote';
+import {
+  pickup,
+  setNoteDriver,
+  softDeleteNote,
+  type ListNotesParams,
+} from '@/api/com/deliveryNote';
 import { qk } from '@/composables/queries/keys';
 import { useCustomersQuery } from '@/composables/queries/useCustomersQuery';
 import { useColumnVisibility } from '@/composables/useColumnVisibility';
@@ -289,13 +294,7 @@ export const useDeliveryNoteListStore = defineStore('delivery-note-list', () => 
    *  driver POST 自己失败的那一支服务端没动，失效只是白刷一次列表，无副作用。 */
   const deliverMutation = useMutation({
     mutationKey: ['delivery', 'pickup'],
-    mutationFn: async ({
-      target,
-      driverId,
-    }: {
-      target: DeliverDialogTarget;
-      driverId: string;
-    }) => {
+    mutationFn: async ({ target, driverId }: { target: DeliverDialogTarget; driverId: string }) => {
       const version = driverId
         ? (
             await setNoteDriver(target.id, {

@@ -18,10 +18,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 
-const SRC = readFileSync(
-  new URL('../components/WeComContentSection.vue', import.meta.url),
-  'utf8',
-);
+const SRC = readFileSync(new URL('../components/WeComContentSection.vue', import.meta.url), 'utf8');
 
 function stripComments(src: string): string {
   return src
@@ -84,7 +81,9 @@ describe('WeComContentSection.vue — 四个开关与三个数字', () => {
     expect(CODE).toMatch(/:disabled="!modelValue\.include_orders"/);
     expect(CODE).toMatch(/:disabled="!modelValue\.include_workers"/);
     // 反向确认：切开关的那两个 handler **只改布尔量**，不动天数 / 人数。
-    expect(CODE).toMatch(/@update:model-value="patch\(\{ include_orders: Boolean\(\$event\) \}\)"\s*\/>/);
+    expect(CODE).toMatch(
+      /@update:model-value="patch\(\{ include_orders: Boolean\(\$event\) \}\)"\s*\/>/,
+    );
   });
 
   it('S4：三个 el-input-number 清空交原值给 schema（不兜成 0）', () => {

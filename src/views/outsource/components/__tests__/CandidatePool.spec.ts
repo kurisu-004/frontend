@@ -158,7 +158,11 @@ const ElInputStub = defineComponent({
   },
   emits: ['update:modelValue'],
   setup(props, { emit, expose }) {
-    expose({ blur: () => { blurLog.calls += 1; } });
+    expose({
+      blur: () => {
+        blurLog.calls += 1;
+      },
+    });
     return () =>
       h('input', {
         class: 'el-input-stub__input',

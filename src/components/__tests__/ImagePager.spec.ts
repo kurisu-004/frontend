@@ -64,7 +64,8 @@ const stubs = {
     name: 'ElButtonStub',
     props: ['disabled', 'title'],
     emits: ['click'],
-    template: '<button :title="title" :disabled="disabled" @click="$emit(\'click\')"><slot /></button>',
+    template:
+      '<button :title="title" :disabled="disabled" @click="$emit(\'click\')"><slot /></button>',
   },
   'el-icon': { name: 'ElIconStub', template: '<i class="mock-icon"><slot /></i>' },
   Picture: iconStub('picture'),

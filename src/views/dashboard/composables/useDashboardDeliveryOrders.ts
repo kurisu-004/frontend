@@ -48,9 +48,7 @@ interface DeliveryOrdersParams {
   basis: DeliveryBasis;
 }
 
-export function useDashboardDeliveryOrders(
-  params: MaybeRefOrGetter<DeliveryOrdersParams | null>,
-) {
+export function useDashboardDeliveryOrders(params: MaybeRefOrGetter<DeliveryOrdersParams | null>) {
   // WS 事件 → invalidate（沿 dashboard 域同形，共享 AFFECTS_DASHBOARD）。
   useDashboardInvalidation(qk.dashboardDeliveryOrdersPrefix);
 
