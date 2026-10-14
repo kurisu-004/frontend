@@ -84,9 +84,11 @@ export type WeComDailyWorkerMetricOptionData = z.infer<typeof weComDailyWorkerMe
 // ============================================================
 // 共享配置字段（`GET /config` 与 `GET /meta` 的 `defaults` 逐字同构）
 //
-// 抽成一份常量对象的原因：`defaults` 是「配置字段去掉 id / version / 时间戳 /
-// webhook_configured / webhook_id」，两份手写会漂 —— 后端加一个配置字段时只改一处的话，
+// 抽成一份常量对象的原因：`defaults` 是「配置字段去掉 `id` / `version` / 两个时间戳 /
+// `webhook_configured` 这 5 个行级字段」，两份手写会漂 —— 后端加一个配置字段时只改一处的话，
 // `defaults` 就静默少一个键，前端「首次初始化用默认值」这条路径会把它抹掉。
+// ⚠️ 去掉的 5 个里**不含 `webhook_id`**：它在 `defaults` 里恒在（只是恒为 `null`，默认配置不该
+// 替用户选一条通道）。逐条键集与这条边界的守卫见 `weComDailyConfigDefaultsSchema` 的说明。
 // ============================================================
 
 const weComDailyConfigFields = {

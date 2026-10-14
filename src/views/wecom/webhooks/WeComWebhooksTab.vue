@@ -72,8 +72,9 @@
           </template>
         </el-table-column>
         <!-- ⚠️ 走 `formatNaiveDateTime` 而不是裸 `prop`：后端 `updated_at` 是 naive 字符串，
-             裸渲染会把秒/小数原样怼进这一格，与同域日志表的切片口径不一致（同一页两张表两种
-             时间格式）。切片函数的取舍见 `views/wecom/utils/naiveDateTime.ts`。 -->
+             裸渲染会把秒/小数原样怼进这一格，与同域日志表（本 tab 与「每日总结」tab 各一张表）
+             的切片口径不一致（切 tab 时两处时间格式跳变）。切片函数的取舍见
+             `views/wecom/utils/naiveDateTime.ts`。 -->
         <el-table-column label="更新时间" width="180">
           <template #default="{ row }">
             <span>{{ formatNaiveDateTime(row.updated_at) }}</span>

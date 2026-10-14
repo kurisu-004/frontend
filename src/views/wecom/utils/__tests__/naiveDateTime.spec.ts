@@ -6,7 +6,8 @@
 //     墙钟），显示什么就切什么。踩过的坑是走 `utils/date.ts::formatDateTime` —— 那个函数
 //     `new Date()` 后按 UTC 输出，`08:30` 会变成 `00:30`，整整 8 小时。
 //  2. **同域两张表共用一份**：日志表的「时间」列与 Webhook 列表的「更新时间」列渲染的是同一种
-//     字段，两种格式（一边带秒一边不带）没法让人判断两行是不是同一次操作。
+//     字段（两张表分属 `WeComCenter` 的两个 tab）。两种格式（一边带秒一边不带）没法让人判断两处
+//     是不是同一次操作。
 
 import { describe, expect, it } from 'vitest';
 import { formatNaiveDateTime } from '../naiveDateTime';

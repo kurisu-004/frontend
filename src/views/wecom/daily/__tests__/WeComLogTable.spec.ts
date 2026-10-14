@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 // src/views/wecom/daily/__tests__/WeComLogTable.spec.ts
 //
-// 2026-10-17 新建：`WeComLogTable.vue` 的**源码契约**守卫（本文件不挂载组件）。
+// 2026-10-17 新建：`WeComLogTable.vue` 的守卫。本文件是**源码契约 + D 组挂载**两种形态：
+// 源码契约那几组读 `?raw`（不挂载），D 组挂载组件、只断言表头的**渲染结果**。
 //
 // 守的是三组很容易被改坏、而症状要么看不出来要么需要现场才复现的东西：
 //
@@ -53,10 +54,13 @@ const columns = CODE.match(/<el-table-column[\s\S]*?(?:\/>|<\/el-table-column>)/
 describe('WeComLogTable.vue — 8 列齐全', () => {
   it('C1：恰好 8 列，列序 = 时间 / 来源 / 状态 / 条数 / 推送对象 / 逾期 / N日内 / 错误信息', () => {
     expect(columns).toHaveLength(8);
-    const labels = columns.map((c) => {
-      const m = c.match(/label="([^"]*)"/);
-      return m ? m[1] : (c.match(/:label="([^"]*)"/)?.[1] ?? (c.match(/prop="([^"]*)"/)?.[1] ?? ''));
-    });
+    const labels = columns.map(
+      // ⚠️ 顺序有讲究：`/label="([^"]*)"/` 连 `:label="…"` 也会命中（前者是后者的子串），
+      // 所以绑定式表头在这一步就已经取到了 —— **不要再叠一个 `:label=` 分支**，那是永远走不到的
+      // 死分支。`prop=` 是唯一的兜底：某个列连 `label` 属性都没有时，用它的锚名让报错可读
+      //（C1 随后拿它与 8 项字面量比对，缺 label 的列照样当场红）。
+      (c) => c.match(/label="([^"]*)"/)?.[1] ?? c.match(/prop="([^"]*)"/)?.[1] ?? '',
+    );
     expect(labels).toEqual([
       '时间',
       '触发来源',
@@ -169,8 +173,8 @@ describe('WeComLogTable.vue — 刻意不做的东西', () => {
 
   it('N4：naive timestamp 走**域内共用的字符串切片**，不走 utils/date.ts（会整体平移 8 小时）',
     () => {
-      // 切片函数已提到 `views/wecom/utils/naiveDateTime.ts`（同域两张表共用一份：一张
-      // `2026-10-17 08:30:00`、另一张 `2026-10-17 08:30` 没法让人判断两行是不是同一次操作）。
+      // 切片函数已提到 `views/wecom/utils/naiveDateTime.ts`（与「Webhook 配置」tab 那张表共用一份：
+      // 一处 `2026-10-17 08:30:00`、另一处 `2026-10-17 08:30` 没法让人判断两处是不是同一次操作）。
       expect(CODE).toMatch(/import \{ formatNaiveDateTime \} from '\.\.\/\.\.\/utils\/naiveDateTime'/);
       expect(CODE).not.toMatch(/from '@\/utils\/date'/);
       // `prop` 仍是列的锚（EP 的 row-key / 排序域），但**单元格渲染必须过切片** —— 只留
