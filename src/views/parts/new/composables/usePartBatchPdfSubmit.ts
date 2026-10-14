@@ -16,8 +16,9 @@
 //
 // 「一批上传作业」的登记 / 调度 / 状态格 / 失败清单在上传 job 子系统里（2026-10-21 拆出，
 // 见 `usePartBatchPdfUploads.ts` 文件头）。本段保留的是**阶段机与收口**：三段状态迁移、
-// 建单两路、草稿落库 / 清场、以及收口后的清场与跳页。本段没有一个纯上传的派生被留在外面
-// 复述 —— `getRowPdfCell` / `getRowThreeDCell` 是转发，不是实现。
+// 建单两路、草稿落库 / 清场、以及收口后的清场与跳页。两个状态格取用
+// （`getRowPdfCell` / `getRowThreeDCell`）是**转发**（实现全在子系统里），对外接口零破坏
+// 要求这两个键仍由本段提供 —— 见 `UsePartBatchPdfSubmit`。
 
 import { computed, watch, type ComputedRef } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -206,9 +207,9 @@ export function usePartBatchPdfSubmit(
     ElMessage.success(`成功创建 ${segs.join(' + ') || '0 条'}${hint}`);
     // 2026-10-04：草稿在这里才清 —— 还有上传失败就必须留着（工单已落库，图样要靠本页
     // 的 job 现场补传）。注意草稿对 Tab 2 是**只写**的（`pdf_tab` 段没有回读路径，
-    // 刷新后表格本来就是空的），清掉它不代表行可恢复。⚠️ **顺序承重**：`saver.cancel()`
-    // 必须在 `draft.clear()` 之前 —— 反过来就是「先清空、再让一个已排期的 saver 把清空
-    // 前的现场写回盘上」。
+    // 刷新后表格本来就是空的），清掉它不代表行可恢复。
+    // ⚠️ 2026-10-21 **顺序承重**：`saver.cancel()` 必须在 `draft.clear()` 之前 ——
+    // 反过来就是「先清空、再让一个已排期的 saver 把清空前的现场写回盘上」。
     draft.saver.cancel();
     draft.clear();
     allPdfs.value = [];
