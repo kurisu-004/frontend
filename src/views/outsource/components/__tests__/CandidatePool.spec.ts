@@ -35,6 +35,11 @@
 //     C15 只渲染命中的卡（三处计数口径保持全量）；C16 两条空态分支各说各的话且都在
 //     .pool-cards 之外；C17 搜索行是 .pool-cards 的兄弟节点；C18 扫码命中被关键词过滤掉的
 //     行 ⇒ 关键词自动清空（否则操作员「勾上了却看不见卡」）。
+//   - C19 / C19b / C20 / C21 / C22（2026-10-20 review 第 1 轮）：搜索框回车路径 ——
+//     全局条码枪对输入框里的按键一律不派发（`useBarcodeScanner` 的 isInTextField），组件
+//     头部新增搜索框后「点过搜索框再扫码」静默失效，故 `@keyup.enter` 把手输内容当一次
+//     扫码提交并清空 + 失焦。C19 手输未命中静默（与扫码枪的 C19b 提示分支对照）；C20 命中
+//     复用扫码的匹配与勾选；C21「尚未上架」守卫两条路径都保留；C22 两条路径的实例隔离。
 //
 // 测试策略：
 //   - vi.mock('vue-draggable-plus') 复刻重载判别（照 WorkerColumn.spec.ts 同款），捕获
@@ -133,8 +138,12 @@ const ElCheckboxStub = defineComponent({
   },
 });
 
-/** 搜索框桩：真 <input>，v-model 走 update:modelValue。prefixIcon / clearable / size
- *  一并声明，避免未声明的 prop 落到 DOM 属性上。 */
+// 搜索框桩：真 <input>，v-model 走 update:modelValue。prefixIcon / clearable / size
+// 一并声明，避免未声明的 prop 落到 DOM 属性上。
+// blur() 走 expose（EP 真实 el-input 也经 defineExpose 暴露 focus/blur/select/clear），
+// 组件侧的回车路径要真的失焦 —— 焦点不离开输入框时全局条码枪对按键一律不派发，扫码持续
+// 静默失效。调用次数记在 blurLog 里供断言读。
+const blurLog = vi.hoisted(() => ({ calls: 0 }));
 const ElInputStub = defineComponent({
   name: 'ElInputStub',
   props: {
@@ -145,7 +154,8 @@ const ElInputStub = defineComponent({
     prefixIcon: { type: Object, default: undefined },
   },
   emits: ['update:modelValue'],
-  setup(props, { emit }) {
+  setup(props, { emit, expose }) {
+    expose({ blur: () => { blurLog.calls += 1; } });
     return () =>
       h('input', {
         class: 'el-input-stub__input',
@@ -302,6 +312,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   captured.calls.length = 0;
   captured.starts.length = 0;
+  blurLog.calls = 0;
   // 扫码枪是模块级单例：缓冲区在每次 Enter 后由 handleKeyDown 自己 resetBuffer
   // 清空，跨用例不会残留（末位字符的 `lastTime` 也不影响判定 —— 超时分支只是把缓冲区
   // 重启成当前字符，后续字符仍在 30ms 窗口内追加）。
@@ -700,6 +711,88 @@ describe('CandidatePool（外协候选池：拖拽源）', () => {
     expect((wrapper.find('.el-input-stub__input').element as HTMLInputElement).value).toBe('齿轮');
     expect(wrapper.findAll('.pool-cards .batch-card')).toHaveLength(1);
     wrapper.unmount();
+  });
+
+  // ── 2026-10-20 review 第 1 轮：搜索框回车路径（「点搜索框后扫码静默失效」的补偿） ─────
+  it('C19：手输不存在的序列号回车 → 静默（不弹 SCAN_MISS_HINT）+ 清空关键词 + 失焦', async () => {
+    const { ElMessage } = await import('element-plus');
+    const { wrapper, selectedIds } = mountedParent([makeCandidate()]);
+    const search = () => wrapper.find('.el-input-stub__input');
+
+    await search().setValue('SN-9999');
+    await search().trigger('keyup', { key: 'Enter' });
+    await nextTick();
+
+    // 手输半截图号再回车是正常动作，弹「扫不到」等于骂人 ⇒ 未命中静默
+    expect(ElMessage.warning).not.toHaveBeenCalled();
+    expect(ElMessage.success).not.toHaveBeenCalled();
+    expect(selectedIds.value.size).toBe(0);
+    // 失焦是恢复扫码派发的必要动作（焦点留在输入框上时条码枪的按键一律不派发）
+    expect(blurLog.calls).toBe(1);
+    // 关键词一并清空：回车之后框里留着那个搜不到的值，下一次扫码会继续被它挡着
+    expect((search().element as HTMLInputElement).value).toBe('');
+    wrapper.unmount();
+  });
+
+  it('C19b：扫码枪扫不到仍弹 SCAN_MISS_HINT（两条路径只在「未命中要不要提示」上分叉）', async () => {
+    // C19 的对照：C19 把扫码枪那条路的提示拿掉（notifyMiss 恒 false）时本条必须红。
+    const { ElMessage } = await import('element-plus');
+    const { wrapper } = mountedParent([makeCandidate()]);
+    fireScan('SN-9999');
+    await nextTick();
+    expect(ElMessage.warning).toHaveBeenCalledWith(SCAN_MISS_HINT);
+    wrapper.unmount();
+  });
+
+  it('C20：手输命中回车 → 勾选生效 + 成功提示沿用现有文案（复用扫码的匹配与勾选）', async () => {
+    const { ElMessage } = await import('element-plus');
+    const items = [makeCandidate({ part_serial_no: 'SN-0001', part_name: '连杆', batch_no: 1024 })];
+    const { wrapper, selectedIds } = mountedParent(items);
+    const search = () => wrapper.find('.el-input-stub__input');
+
+    await search().setValue('  SN-0001  ');
+    await search().trigger('keyup', { key: 'Enter' });
+    await nextTick();
+
+    // 匹配与扫码同款（含 trim），勾选集合照常换新 Set 上抛
+    expect(Array.from(selectedIds.value)).toEqual(['3000000000001']);
+    expect(ElMessage.success).toHaveBeenCalledWith(expect.stringContaining('已选中'));
+    expect(ElMessage.warning).not.toHaveBeenCalled();
+    expect(blurLog.calls).toBe(1);
+    expect((search().element as HTMLInputElement).value).toBe('');
+    wrapper.unmount();
+  });
+
+  it('C21：手输尚未上架的批次回车 → 仍弹 NOT_SHELVED_HINT 且不勾选（守卫两条路径都保留）', async () => {
+    // 勾上了却拖不动比直接提示更差，所以「尚未上架」不允许在回车路径上被静默豁免。
+    const { ElMessage } = await import('element-plus');
+    const { wrapper, selectedIds } = mountedParent([makeNotShelved()]);
+    const search = () => wrapper.find('.el-input-stub__input');
+
+    await search().setValue('SN-0009');
+    await search().trigger('keyup', { key: 'Enter' });
+    await nextTick();
+
+    expect(selectedIds.value.size).toBe(0);
+    expect(ElMessage.warning).toHaveBeenCalledWith(NOT_SHELVED_HINT);
+    wrapper.unmount();
+  });
+
+  it('C22：回车只清空自己这个实例的关键词（未激活 tab 的输入框拿不到焦点，不需要闸门）', async () => {
+    // 非当前 tab 的实例：回车路径刻意不过 activeProcessId 闸门（扫码是全局的才需要闸门，
+    // 回车只派发给本实例的输入框）。这里钉住「一个实例的清空不会动另一个实例的关键词」。
+    const first = mountPool([makeCandidate()]);
+    await first.find('.el-input-stub__input').setValue('SN-A');
+    const second = mountPool([makeCandidate()], new Set(), '2000000000999');
+    await second.find('.el-input-stub__input').setValue('SN-B');
+
+    await second.find('.el-input-stub__input').trigger('keyup', { key: 'Enter' });
+    await nextTick();
+
+    expect((first.find('.el-input-stub__input').element as HTMLInputElement).value).toBe('SN-A');
+    expect((second.find('.el-input-stub__input').element as HTMLInputElement).value).toBe('');
+    first.unmount();
+    second.unmount();
   });
 });
 

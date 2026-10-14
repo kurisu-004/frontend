@@ -23,6 +23,14 @@
 // **四个字段都可能为空**：`serial_no` 的类型就是 `string | null`（工单未派号 / 流水号被
 // 释放后是 NULL），另三个虽声明为非空串，但外协侧适配层对可空的零件字段做过 `?? ''`
 // 兜底。⇒ 统一按 `?? ''` 取 haystack：空值既不该抛错，也不该让一个非空关键词命中。
+//
+// **两个导出的主从关系（别把 `matches` 当死代码删掉）**：
+//   - `filterBatchCardsByKeyword`（**生产路径**：三个卡片列的唯一消费方）**委托**
+//     `matchesBatchCardKeyword` —— 判定规则只有一份实现；
+//   - `matchesBatchCardKeyword` 是那条规则的实现基元，需要「单卡判定」的调用方直接用它。
+// 两个导出各写一份归一化（trim / toLowerCase）时，生产路径与单卡判定会悄悄分叉，而
+// 「条码枪尾部空格」「小写序列号」这类退化**只在带空白 / 混合大小写的输入上显形**，其余
+// 用例照绿。
 
 import type { BatchCardModel } from '@/types/batchCard';
 
@@ -47,12 +55,16 @@ export function matchesBatchCardKeyword(card: BatchCardModel, keyword: string): 
   return haystacks(card).some((hay) => hay.includes(needle));
 }
 
-/** 按关键词过滤卡片数组，**保持原顺序**、不改传入数组（返回新数组；空关键词原样返回）。 */
+/** 按关键词过滤卡片数组，**保持原顺序**、不改传入数组（返回新数组；空关键词原样返回）。
+ *
+ *  判定委托给 `matchesBatchCardKeyword`（规则只有一份实现，见文件头的主从关系一节）。
+ *  代价是 needle 的 trim / toLowerCase 每张卡各算一遍 —— 卡片量级几十到几百、调用方一律
+ *  用 `computed` 包着（不在渲染热路径上），换「规则只有一份」这笔交易很划算，不要为省这点
+ *  重复计算把归一化再抄一份回来。 */
 export function filterBatchCardsByKeyword<T extends BatchCardModel>(
   cards: T[],
   keyword: string,
 ): T[] {
   if (isBlankKeyword(keyword)) return cards;
-  const needle = keyword.trim().toLowerCase();
-  return cards.filter((card) => haystacks(card).some((hay) => hay.includes(needle)));
+  return cards.filter((card) => matchesBatchCardKeyword(card, keyword));
 }

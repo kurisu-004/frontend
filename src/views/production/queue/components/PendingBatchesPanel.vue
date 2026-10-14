@@ -81,9 +81,9 @@
     <!-- 「无匹配」也是**兄弟覆盖层**：关键词把可见集清空时容器照常渲染（它同时是拖拽
          源，空容器不该消失），文案层压在它上面且不吃指针事件。判定带上
          batches.length > 0 —— 「本来就没有待下发批次」由上面那条 v-else-if 的既有空态
-         负责，两条空态各说各的事。 -->
+         （同款 el-empty）负责，两条空态各说各的事。 -->
     <div v-if="batches.length > 0 && cards.length === 0" class="no-match">
-      无匹配序列号 / 图号 / 批次号 / 名称
+      <el-empty description="无匹配序列号 / 图号 / 批次号 / 名称" :image-size="60" />
     </div>
 
     <div class="footer">
@@ -133,7 +133,10 @@ const emit = defineEmits<(e: 'hoverProcess', processId: string | null) => void>(
 const selectedIdsValue = computed<Set<string>>(() => props.selectedIds.value);
 
 /** 2026-10-20 新增：搜索关键词。组件局部状态、刻意不上抛 —— 过滤只影响本面板的可见集，
- *  父级的全选 / 已选 / 总计口径一律走 props.batches 的全量，两者不该互相牵动。 */
+ *  父级的全选 / 已选 / 总计口径一律走 props.batches 的全量，两者不该互相牵动。
+ *  **切 tab 不重置**：`el-tab-pane` 是「懒挂载一次、之后不再卸载」，切走再切回来本面板
+ *  仍活着，上次的搜索词就在框里。这是有意的局部状态取舍（板级不上抛它），别当漏掉的
+ *  reset 补上。 */
 const keyword = ref<string>('');
 
 /** 待下发 DTO → 卡片 model（统一适配层，组件零 DTO 依赖）→ 本地关键词过滤。

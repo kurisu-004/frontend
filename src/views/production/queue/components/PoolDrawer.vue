@@ -80,12 +80,19 @@
         />
       </div>
       <!-- 「无匹配」是**兄弟覆盖层**：关键词清空可见集时容器照常渲染（本容器同时是落点，
-           空容器必须仍是合法投放目标），pointer-events:none 保证不吃落点判定。判定带上
-           pool.batches.length > 0 —— 「这个工序本来就没有候选批次」是页面的常态之一（工序下
-           暂时没活），说成「无匹配序列号…」是在对没发生过的搜索撒谎；那种情况下保持容器空着
-           不说话。 -->
-      <div v-if="pool.batches.length > 0 && visibleBatches.length === 0" class="pool-no-match">
-        无匹配序列号 / 图号 / 批次号 / 名称
+           空容器必须仍是合法投放目标），pointer-events:none 保证不吃落点判定。判定是
+           「可见集空了，且（池里本来有货 / 用户确实输了关键词）」——
+             · 带上 pool.batches.length > 0：「这个工序本来就没有候选批次」是页面的常态之一
+               （工序下暂时没活），说成「无匹配序列号…」是在对没发生过的搜索撒谎；
+             · 带上 keyword.trim() !== ''：池空 + 用户输了关键词这一格，原来一个字都不说，
+               用户只知道「输了没反应」。判「无匹配」在语义上为真（关键词确实一条都没命中）、
+               也不与下面那条 `.pool-empty`（pool 为 null 的「无工序数据」）冲突。
+           覆盖层用 el-empty 与另两处卡片列的空态同款（形态统一，文案各自不同义）。 -->
+      <div
+        v-if="visibleBatches.length === 0 && (pool.batches.length > 0 || keyword.trim() !== '')"
+        class="pool-no-match"
+      >
+        <el-empty description="无匹配序列号 / 图号 / 批次号 / 名称" :image-size="60" />
       </div>
     </div>
     <div v-else class="pool-empty">无工序数据</div>
@@ -115,7 +122,9 @@ const props = defineProps<{
 }>();
 
 /** 搜索关键词。组件局部状态、刻意不上抛 —— 过滤只影响本抽屉的可见集，头部徽标与
- *  右键菜单的可选范围都保持 pool.batches 的全量。 */
+ *  右键菜单的可选范围都保持 pool.batches 的全量。**切 tab / 换工序都不重置**：组件级
+ *  局部状态的有意取舍，别当漏掉的 reset 补上（守卫见本组件 spec 的 D13：投放成功后
+ *  不命中关键词时才会清空，那是另一条口径）。 */
 const keyword = ref<string>('');
 
 /** 当前可见卡片 = pool.batches（已是 BatchCardModel[]，无需再过适配层）过关键词。
@@ -200,6 +209,17 @@ async function onDragAdd(evt: DraggableStartEvent) {
   // 给 useQueueMove 之前先自查，守卫在包装里）。缺失时 NaN，由 useQueueMove 拦下。
   const version = Number.parseInt(evt.item.dataset.batchVersion ?? '', 10);
   await moveBatchToPool(batchId, version, fromWorkerId);
+  // 2026-10-20 新增：撤回的批次若不命中当前关键词，它就永远不进 visibleBatches ⇒
+  // Vue 的 keyed diff 从头到尾不知道这个被 Sortable 插进来的外来节点，它会**永久**留在
+  // .pool-cards 里，且参与 from.children[oldIndex] 计数 ⇒ 后续投放失败时按下标放回会错位。
+  // 基线不残留幻影卡靠的正是「投放成功后该批次进入 pool.batches ⇒ keyed diff 接管这个
+  // 节点」这条前提，加了关键词后前提没了，必须显式把卡片交回可见集。与 CandidatePool
+  // 扫码命中后的清空同一条口径（守卫见本组件 spec 的 D13 / D13b）。
+  // 顺带说明判据的实战形态：pool.batches 的回流晚于这一行（父级 props 还没刷新），所以
+  // 「刚投进来的批次本来就在可见集里」这格几乎不会命中，本分支实际上接近「投放成功即清空」。
+  if (!visibleBatches.value.some((b) => b.batch_id === batchId)) {
+    keyword.value = '';
+  }
 }
 </script>
 

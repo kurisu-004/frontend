@@ -21,10 +21,10 @@
 //     之外的第二道闸，2026-10-15 权限闸）。
 //   - H6：卡片右键 → 注入的 opener 被调一次，第三参区域标签为 'pending'。
 //   - H7 / H8 / H9（2026-10-20）：序列号 / 图号 / 批次号 / 名称的**本地**过滤 ——
-//     H7 只渲染命中的卡（全选 / 已选 / 「总计 N 件待下发」三项口径刻意保持全量）；H8 无
-//     匹配时渲染「无匹配」空态而 `.pending-cards` 容器仍在、零元素子节点（空容器必须仍是
-//     合法拖拽源）；H9 搜索行是容器的**兄弟节点**（混进容器会让 Sortable 的 oldIndex 与
-//     可拖项下标错位）。
+//     H7 只渲染命中的卡（四字段各自命中都试；全选 / 已选 / 「总计 N 件待下发」三项口径刻意
+//     保持全量）；H8 无匹配时渲染「无匹配」空态（与另两处卡片列同款 el-empty）而
+//     `.pending-cards` 容器仍在、零元素子节点（空容器必须仍是合法拖拽源）；H9 搜索行是
+//     容器的**兄弟节点**（混进容器会让 Sortable 的 oldIndex 与可拖项下标错位）。
 //
 // 测试策略：
 //   - vi.mock('vue-draggable-plus') 捕获 useDraggable 的 options，再手动驱动回调
@@ -162,8 +162,15 @@ const ElSkeletonStub = defineComponent({
 const ElEmptyStub = defineComponent({
   name: 'ElEmptyStub',
   props: { description: String, imageSize: Number },
-  setup(_, { slots }) {
-    return () => h('div', { class: 'el-empty-stub' }, slots.default?.());
+  // description 透出成 data-description：两条空态分支各说各的话，断言要读得到文案本身
+  //（EP 真实 el-empty 把 description 渲染成插画下方的一行字）。
+  setup(props, { slots }) {
+    return () =>
+      h(
+        'div',
+        { class: 'el-empty-stub', 'data-description': props.description ?? '' },
+        slots.default?.(),
+      );
   },
 });
 
@@ -430,7 +437,7 @@ describe('PendingBatchesPanel（2026-10-02 拖入高亮事件源）', () => {
   });
 
   // ── 2026-10-20：本地关键词过滤（序列号 / 图号 / 批次号 / 名称） ─────────────────
-  it('H7：输入关键词只渲染命中的卡（三字段各自命中都试；计数口径保持全量）', async () => {
+  it('H7：输入关键词只渲染命中的卡（四字段各自命中都试；计数口径保持全量）', async () => {
     const setSelectedIds = vi.fn();
     const wrapper = mountPanel(
       [
@@ -507,7 +514,8 @@ describe('PendingBatchesPanel（2026-10-02 拖入高亮事件源）', () => {
     expect(wrapper.findAll('.pending-cards .batch-card')).toHaveLength(0);
     const overlay = wrapper.find('.no-match');
     expect(overlay.exists()).toBe(true);
-    expect(overlay.text()).toContain('无匹配');
+    // 空态形态与另两处卡片列统一为 el-empty（文案仍各自不同义）
+    expect(overlay.find('.el-empty-stub').attributes('data-description')).toContain('无匹配');
     // 容器必须还在：它同时是拖拽源，空容器摘掉会连 Sortable 实例一起没
     const container = wrapper.find('.pending-cards').element as HTMLElement;
     expect(container.children).toHaveLength(0);

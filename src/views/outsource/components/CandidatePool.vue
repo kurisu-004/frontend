@@ -25,7 +25,15 @@
 
      扫码：全局条码枪（`useBarcodeScanner`）按 `part_serial_no` 在**当前 tab 已加载的
      items** 里匹配，命中即勾选。多 tab 都已激活过时会同时有多个本组件实例，所以每个
-     回调先过 `activeProcessId` 闸门（板级 provide）。 -->
+     回调先过 `activeProcessId` 闸门（板级 provide）。
+
+     ⚠️ **2026-10-20：搜索框与扫码枪的交互**（组件头部新增了搜索框，这是本文件唯一的
+     交互回退点）。`useBarcodeScanner` 对输入框 / 可编辑区的按键一律 early-return ⇒
+     **焦点一旦落在搜索框上，扫码枪的按键不再进缓冲区、一次扫码都不会派发**（改动前本页
+     没有文本框，扫库枪永远命中）。用户看到序列号被填进框里、却什么也没发生，典型误判成
+     「扫到了但没生效」。因此搜索框挂 `@keyup.enter="onSearchEnter"`：手输序列号回车 =
+     走一遍扫码的匹配与勾选，且**清空关键词 + 让输入框失焦**（这两步是恢复扫码派发的
+     必要动作，只清空不失效焦点，扫码照样静默失效）。详见 onSearchEnter 的注释。 -->
 <template>
   <div class="candidate-pool">
     <div class="pool-toolbar">
@@ -42,14 +50,18 @@
          utils/batchCardKeyword.ts，端点零筛选参数故不发请求）。工具条里已排满 30% 窄栏的
          全部四格（标题 / 徽标 / 未上架提示 / 已选数），搜索行独立成行且是 .pool-body 的
          兄弟节点 —— .pool-cards 内部绝不许混入任何非可拖子元素。口径只影响显示：工具条的
-         三处计数与勾选集合全部走 items 的全量。 -->
+         三处计数与勾选集合全部走 items 的全量。
+         @keyup.enter 是「手输序列号回车」这条路（扫码枪对输入框里的按键一律不派发，
+         理由与副作用见 onSearchEnter）。 -->
     <div class="pool-search">
       <el-input
+        ref="searchInputRef"
         v-model="keyword"
         size="small"
         clearable
         :prefix-icon="Search"
         placeholder="序列号 / 图号 / 批次号 / 名称"
+        @keyup.enter="onSearchEnter"
       />
     </div>
     <div class="pool-body">
@@ -79,7 +91,7 @@
 
 <script setup lang="ts">
 import { computed, inject, onBeforeUnmount, onMounted, ref, watch, type ComputedRef } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, type InputInstance } from 'element-plus';
 import { Search } from '@element-plus/icons-vue';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
@@ -122,7 +134,10 @@ const emit = defineEmits<{
 type PoolCard = BatchCardModel & { __draggable: boolean };
 
 /** 2026-10-20 新增：搜索关键词。组件局部状态、刻意不上抛 —— 过滤只影响可见集，工具条的
- *  三处计数与勾选集合仍由板级按 items 全量持有。 */
+ *  三处计数与勾选集合仍由板级按 items 全量持有。**切 tab 不重置**：el-tab-pane 是
+ *  「懒挂载一次、之后不再卸载」，多 tab 都激活过时每个 CandidatePool 实例各留一个自己的
+ *  keyword（同一 path 多实例的既有形态，见 useBarcodeScanner 的文件头）。这是有意的
+ *  局部状态取舍，别当漏掉的 reset 补上。 */
 const keyword = ref<string>('');
 
 /** 候选 DTO → 卡片 model → 本地关键词过滤（可见集）。工具条的徽标 / 未上架计数 / 已选数
@@ -231,11 +246,21 @@ let unsubScan: (() => void) | null = null;
  *  `getPartBySerial` 反查零件再在当前页里找。 */
 function handleScan(code: string): void {
   if (activeProcessId.value !== props.processId) return;
-  const trimmed = code.trim();
+  applyCode(code, { notifyMiss: true });
+}
+
+/** 「匹配 + 守卫 + 勾选」的唯一实现，扫码枪与搜索框回车两条路径共用。
+ *
+ *  两条路径**只在「未命中要不要提示」上分叉**：
+ *   - 扫码枪扫不到 = 手上那把枪对着一个不存在的序列号，提示才有用（notifyMiss: true）；
+ *   - 手输半截图号再回车 = 用户自己在拼序列号，「扫不到」是骂人，静默即可（false）。
+ *  「尚未上架」守卫两条路径都不豁免：勾上了却拖不动比直接提示更差。 */
+function applyCode(raw: string, options: { notifyMiss: boolean }): void {
+  const trimmed = raw.trim();
   if (!trimmed) return;
   const hit = props.items.find((it) => it.part_serial_no === trimmed);
   if (!hit) {
-    ElMessage.warning(SCAN_MISS_HINT);
+    if (options.notifyMiss) ElMessage.warning(SCAN_MISS_HINT);
     return;
   }
   // 尚未上架的行没有勾选角标（拖拽侧另有 Sortable filter 兜底），扫码也一并拦住 ——
@@ -255,6 +280,30 @@ function handleScan(code: string): void {
     keyword.value = '';
   }
   ElMessage.success(`已选中：${hit.part_name ?? ''}（批次 ${hit.batch_no}）`);
+}
+
+/** 搜索框 ref —— 回车后要失焦（见 onSearchEnter）。ElInput 经 defineExpose 暴露
+ *  focus / blur / select / clear，所以这里拿到的是组件实例而不是内部 input 元素。 */
+const searchInputRef = ref<InputInstance | null>(null);
+
+/** 搜索框里手输序列号后回车 = 把框内内容当一次扫码提交。
+ *
+ *  **为什么必须有这条路**：全局条码枪对输入框 / 可编辑区的按键一律 early-return
+ *  （`useBarcodeScanner` 的 isInTextField），焦点落在搜索框上时**一次扫码都不会派发**，
+ *  而用户看到的只是序列号被填进了框里 —— 典型的「扫到了但没生效」静默误判。
+ *
+ *  顺序：取框内内容 → 清空关键词 → 失焦 → 复用扫码的匹配与勾选。
+ *   - 清空 + 失焦是**恢复扫码能力的两个必要动作**：清空让卡片回到可见集，失焦让焦点离开
+ *     输入框、后续扫码恢复派发。只做前者，扫码仍然静默失效。
+ *   - **刻意不过 activeProcessId 闸门**：那个闸门存在是因为扫码是全局的、N 个 tab 实例会
+ *     同时收到；回车是键在**本实例自己的输入框**上派发的，未激活的 tab pane 拿不到焦点、
+ *     不可能收到它，所以这里天然只有一个实例会响应，加闸门只会让「万一」那条路静默无反应。
+ *   - 未命中静默（notifyMiss: false）：理由见 applyCode 的注释。 */
+function onSearchEnter(): void {
+  const raw = keyword.value;
+  keyword.value = '';
+  searchInputRef.value?.blur();
+  applyCode(raw, { notifyMiss: false });
 }
 
 onMounted(() => {

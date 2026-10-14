@@ -25,10 +25,12 @@
 //   - D7b / D7c（2026-10-06）：Sortable 容器 .pool-cards 内的节点构成 —— 只有卡片根元素
 //     与 v-for 的 2 个空文本锚点，**没有注释节点**（dev 构建保留模板注释，注释同样是
 //     容器直接子节点）；空池时零元素子节点、容器仍是合法投放目标。
-//   - D10 / D11 / D11b / D12（2026-10-20）：序列号 / 图号 / 批次号 / 名称的**本地**过滤
-//     —— D10 只渲染命中的卡（头部徽标仍为全量）；D11 无匹配时渲染「无匹配」空态而
-//     .pool-cards 容器仍在、零元素子节点；D11b 工序本来就没有候选批次时不弹「无匹配」
-//     （没发生过的搜索不说谎）；D12 搜索行是容器的**兄弟节点**。
+//   - D10 / D11 / D11b / D11c / D12 / D13（2026-10-20）：序列号 / 图号 / 批次号 / 名称的
+//     **本地**过滤 —— D10 只渲染命中的卡（头部徽标仍为全量）；D11 无匹配时渲染「无匹配」
+//     空态而 .pool-cards 容器仍在、零元素子节点；D11b 工序本来就没有候选批次时不弹「无匹配」
+//     （没发生过的搜索不说谎）；D11c 池空 + 输了关键词时弹「无匹配」（用户输过搜索，一言不发
+//     是静默失败）；D12 搜索行是容器的**兄弟节点**；D13 撤回投放的批次不命中当前关键词 ⇒
+//     关键词被清空（否则 Sortable 插进来的节点永远不进 vdom，幻影卡永久残留）。
 //
 // 测试策略：
 //   - vi.mock('vue-draggable-plus') 捕获 useDraggable 的入参与 options（happy-dom
@@ -99,8 +101,23 @@ const ElTooltipStub = defineComponent({
   },
 });
 
+/** 空态桩：与另两处卡片列同款 el-empty（文案透出成 data-description，断言要读得到文案
+ *  本身 —— EP 真实 el-empty 把 description 渲染成插画下方的一行字）。 */
+const ElEmptyStub = defineComponent({
+  name: 'ElEmptyStub',
+  props: { description: String, imageSize: Number },
+  setup:
+    (props, { slots }) =>
+    () =>
+      h(
+        'div',
+        { class: 'el-empty-stub', 'data-description': props.description ?? '' },
+        slots.default?.(),
+      ),
+});
+
 /** 搜索框桩：真 <input>，v-model 走 update:modelValue。prefixIcon / clearable / size
- *  一并声明，避免未声明的 prop 落到 DOM 属性上。 */
+ * 一并声明，避免未声明的 prop 落到 DOM 属性上。 */
 const ElInputStub = defineComponent({
   name: 'ElInputStub',
   props: {
@@ -123,7 +140,12 @@ const ElInputStub = defineComponent({
 });
 
 const globalConfig = {
-  components: { ElTag: ElTagStub, ElTooltip: ElTooltipStub, ElInput: ElInputStub },
+  components: {
+    ElTag: ElTagStub,
+    ElTooltip: ElTooltipStub,
+    ElEmpty: ElEmptyStub,
+    ElInput: ElInputStub,
+  },
 };
 
 const PROCESS_ID = '2000000000001';
@@ -550,7 +572,8 @@ describe('PoolDrawer（2026-10-03 Sortable 接线）', () => {
     expect(wrapper.findAll('.pool-cards .batch-card')).toHaveLength(0);
     const overlay = wrapper.find('.pool-no-match');
     expect(overlay.exists()).toBe(true);
-    expect(overlay.text()).toContain('无匹配');
+    // 空态形态与另两处卡片列统一为 el-empty（文案仍各自不同义）
+    expect(overlay.find('.el-empty-stub').attributes('data-description')).toContain('无匹配');
     // 容器必须还在：它同时是落点（撤回投放）与源，空容器摘掉会连 Sortable 实例一起没
     const container = wrapper.find('.pool-cards').element as HTMLElement;
     expect(container.children).toHaveLength(0);
@@ -575,6 +598,28 @@ describe('PoolDrawer（2026-10-03 Sortable 接线）', () => {
     wrapper.unmount();
   });
 
+  it('D11c：池本来是空的 + 输了关键词 → 弹「无匹配」（用户输过搜索却一言不发是静默失败）', async () => {
+    // 与 D11b 互补的那一格：判定带上 keyword.trim() !== ''，「池空 + 用户确实输了关键词」
+    // 说「无匹配」在语义上为真（关键词确实一条都没命中），也不是在撒谎。
+    const wrapper = mountDrawer(makePool([]));
+    await nextTick();
+    // 前置：D11b 那一格（池空、无关键词）确实没有提示
+    expect(wrapper.find('.pool-no-match').exists()).toBe(false);
+
+    await wrapper.find('.el-input-stub__input').setValue('SN-0001');
+
+    expect(wrapper.findAll('.pool-cards .batch-card')).toHaveLength(0);
+    const overlay = wrapper.find('.pool-no-match');
+    expect(overlay.exists()).toBe(true);
+    expect(overlay.find('.el-empty-stub').attributes('data-description')).toContain('无匹配');
+    // 覆盖层仍在容器之外，且容器照常渲染（本容器同时是落点）
+    expect(overlay.element.closest('.pool-cards')).toBeNull();
+    expect(wrapper.find('.pool-cards').exists()).toBe(true);
+    // pool 为 null 时走的是另一条空态（.pool-empty），两条不重叠
+    expect(wrapper.find('.pool-empty').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it('D12：搜索行是 .pool-cards 的兄弟节点（容器内不许混非可拖子元素）', async () => {
     const wrapper = mountDrawer(makePool([makeCard()]));
     await nextTick();
@@ -587,6 +632,51 @@ describe('PoolDrawer（2026-10-03 Sortable 接线）', () => {
     expect(container.parentElement).toBe(rowEl.parentElement);
     // 搜索行独立一行，不挤进 section-header
     expect(rowEl.closest('.section-header')).toBeNull();
+    wrapper.unmount();
+  });
+
+  it('D13：撤回投放的批次不命中当前关键词 → 关键词被清空（否则幻影卡永久残留）', async () => {
+    // 本容器同时是源与落点。基线不残留幻影卡靠的是「投放成功后该批次进入 pool.batches ⇒
+    // Vue 的 keyed diff 接管这个被 Sortable 插进来的外来节点」；加了关键词后这条前提没了 ——
+    // 投进来的批次若不命中当前关键词，它永远不进 visibleBatches，Vue 从头到尾不知道这个
+    // DOM 节点（patchKeyedChildren 只遍历 vdom 里的旧节点），节点会永久留在 .pool-cards 里，
+    // 且参与 from.children[oldIndex] 计数 ⇒ 后续回滚按下标放回会错位。
+    const moveBatchToPool = vi.fn(async () => true);
+    const wrapper = mountDrawer(makePool([makeCard({ serial_no: 'SN-A' })]), { moveBatchToPool });
+    await nextTick();
+    const search = () => wrapper.find('.el-input-stub__input');
+    await search().setValue('SN-A');
+    // 前置：关键词生效，可见集只剩一张卡
+    expect(wrapper.findAll('.pool-cards .batch-card')).toHaveLength(1);
+    expect((search().element as HTMLInputElement).value).toBe('SN-A');
+
+    // 从工人列撤回另一条批次（序列号 SN-B，不命中关键词）
+    const evt = workerDragEvent('3000000000009');
+    await (capturedOptions().onAdd as (e: unknown) => Promise<void>)(evt);
+    await nextTick();
+
+    expect(moveBatchToPool).toHaveBeenCalledTimes(1);
+    expect((search().element as HTMLInputElement).value).toBe('');
+    wrapper.unmount();
+  });
+
+  it('D13b：撤回投放的批次本来就在可见集里 → 关键词保持（判据的反方向）', async () => {
+    // D13 钉「投进来的批次不在可见集 ⇒ 清空」，这里钉它的另一侧，把判据钉成双向而不是
+    // 「投放成功就无条件清空」。注意真实链路上 pool.batches 的回流**晚于**这一行
+    // （props 还没刷新就判了），所以实战中这一格基本不会命中 —— 它守的是判据本身，
+    // 不是一条主流交互。
+    const moveBatchToPool = vi.fn(async () => true);
+    const target = makeCard({ batch_id: '3000000000009', serial_no: 'SN-B' });
+    const wrapper = mountDrawer(makePool([target]), { moveBatchToPool });
+    await nextTick();
+    const search = () => wrapper.find('.el-input-stub__input');
+    await search().setValue('SN-B');
+
+    const evt = workerDragEvent('3000000000009');
+    await (capturedOptions().onAdd as (e: unknown) => Promise<void>)(evt);
+    await nextTick();
+
+    expect((search().element as HTMLInputElement).value).toBe('SN-B');
     wrapper.unmount();
   });
 });

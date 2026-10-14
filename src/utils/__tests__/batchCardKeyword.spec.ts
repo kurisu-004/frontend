@@ -10,11 +10,17 @@
 // 因为另外三个字段命中而全绿。
 //
 // **非零信号核对**（改实现后本文件必须变红）：
-//   - 去掉 `trim()`（K2 变红：带空格的关键词不再命中）；
-//   - 去掉 `toLowerCase()`（K3 变红：小写关键词命中不了大写序列号）；
+//   - 去掉 `trim()`（K2 / K9 变红：带空格的关键词不再命中）；
+//   - 去掉 `toLowerCase()`（K3 / K10 变红：小写关键词命中不了大写序列号）；
 //   - 把某个字段从匹配集合里删掉（K4 对应那一条变红）；
 //   - 用 `null.toLowerCase()` 之类的直调（K6 变红：序列号为空串的卡直接抛错）；
 //   - 空关键词走 filter 而不是原样返回（K1 的引用断言变红）。
+//
+// **K9 / K10 为什么必须直接打 `filterBatchCardsByKeyword`**（2026-10-20 review 第 1 轮）：
+// 生产路径上三个卡片列只调 `filter`，`matches` 只是它的实现基元。K1~K8 里除了 K2 的一行
+// 之外全部打在 `matches` 上 —— 把 `filter` 改成「自己抄一份归一化、且抄漏了 trim 或
+// toLowerCase」，K 组其余用例与三个组件 spec 都可能照绿（组件 spec 一条不带首尾空白 /
+// 混合大小写的关键词）。K9 / K10 是把规则钉在**生产路径本身**上的那两条。
 
 import { describe, expect, it } from 'vitest';
 import { filterBatchCardsByKeyword, matchesBatchCardKeyword } from '../batchCardKeyword';
@@ -135,5 +141,30 @@ describe('batchCardKeyword（2026-10-20 批次卡片关键词过滤）', () => {
     expect(filterBatchCardsByKeyword([], 'SN-0001')).toEqual([]);
     expect(filterBatchCardsByKeyword([], '')).toEqual([]);
     expect(filterBatchCardsByKeyword([makeCard()], 'ZZZ')).toEqual([]);
+  });
+
+  it('K9：filter 直接吃带首尾空白的关键词（条码枪 / 粘贴的空格落在生产路径上）', () => {
+    const card = makeCard({ serial_no: 'SN-0001' });
+    // 真打空白（不是只打 'sn-'）：漏掉 trim 时 needle 恒带空格，四张卡一条都命中不了
+    expect(filterBatchCardsByKeyword([card], '  SN-0001  ')).toHaveLength(1);
+    expect(filterBatchCardsByKeyword([card], 'SN-0001\r')).toHaveLength(1);
+    expect(filterBatchCardsByKeyword([card], ' SN-0001 ')[0]).toBe(card);
+    // 反方向同样成立：带空白的关键词要能筛掉，而不是「trim 前不匹配就全量放行」
+    expect(filterBatchCardsByKeyword([card], '  不存在的词  ')).toHaveLength(0);
+    // 只含空白的关键词仍是「不过滤」（原样返回入参数组，不是新数组）
+    expect(filterBatchCardsByKeyword([card], '   ')).toHaveLength(1);
+  });
+
+  it('K10：filter 直接吃小写关键词命中大写序列号（忽略大小写落在生产路径上）', () => {
+    // 序列号是大写、关键词全小写：归一化只漏一边（needle 不 lowerCase）时全表落空
+    const card = makeCard({ serial_no: 'F1234', batch_no: 'B777', part_name: 'Axle' });
+    expect(filterBatchCardsByKeyword([card], 'f1234')).toHaveLength(1);
+    expect(filterBatchCardsByKeyword([card], 'b777')).toHaveLength(1);
+    expect(filterBatchCardsByKeyword([card], 'axle')).toHaveLength(1);
+    // 另一向：大小写混输的关键词（现场常态）—— needle 与 haystack 两边都必须归一化
+    expect(filterBatchCardsByKeyword([card], 'F1234')).toHaveLength(1);
+    expect(filterBatchCardsByKeyword([card], 'f12')).toHaveLength(1);
+    // 反方向：四字段都不含的子串必须筛掉（防「归一化写错导致恒真」的退化实现）
+    expect(filterBatchCardsByKeyword([card], 'f9999')).toHaveLength(0);
   });
 });
