@@ -2,7 +2,7 @@
 //
 // 2026-10-19 新增：`POST /serials/release-terminal` 出参守门 schema 单测。
 //
-// 覆盖两类回归：
+// 覆盖三类回归：
 //
 //  1. **缺键必抛**：Zod 默认 strip 会把后端漏发的键静默丢掉且不报错 ⇒ 漏声明一个键 =
 //     那一格在确认框里恒为空白 / undefined，而管理员看到的明细与服务端实际释放的集合
@@ -10,6 +10,16 @@
 //     这里逐键删除，断言每个被删的键都让 parse 抛 ZodError。
 //  2. **多一个未知键必抛**：守 `.strict()`。若哪天去掉 strict，后端给这个回执加一个
 //     键就会被静默 strip，管理员看到的明细少一列而没有任何报错。
+//  3. **值形态必抛**：R5 / R6 / R7 逐字段钉住「后端给什么形态」。`drawing_no` 尤其关键 ——
+//     它**值恒非空**（后端两列均 NOT NULL ⇒ `dto.rs` 声明成 `String` 而非
+//     `Option<String>`），接了 `.nullable()` 就会养出一个恒不触发的死分支，并把「后端
+//     真改成可空」降级成静默通过而不是当场抛。
+//
+// ⚠️ **本文件的 fixture 是「前端此刻的想象」，不是外部事实**（照
+// `src/api/__tests__/printTemplates.contract.spec.ts` 的同款定位）：断言的只是「parse
+// 接在返回路径上、`.strict()` 按预期抛或 strip、值形态按声明接」。**「后端此刻长什么样」
+// 由 `src/api/__tests__/serial.contract.spec.ts` 的 V 组承担** —— 那份真读后端
+// `modules/serial/dto.rs`，把字段集与可空性逐字对拍；改这里之前先跑它。
 
 import { describe, expect, it } from 'vitest';
 import { ZodError, type ZodType } from 'zod';
@@ -25,10 +35,12 @@ function expectEveryKeyRequired(schema: ZodType, obj: Record<string, unknown>): 
 }
 
 // ---------------------------------------------------------------
-// fixtures（逐字对齐冻结的后端契约）
+// fixtures（真源在 `src/api/__tests__/serial.contract.spec.ts` 的 V 组，本段只是它的镜像）
 // ---------------------------------------------------------------
 
-/** 两条明细：一条装配件（drawing_no 有值）、一条零件（drawing_no 为 null）。 */
+/** 两条明细：一条装配件、一条零件（两侧 `drawing_no` 都**恒非空** —— 后端
+ *  `t_assembly.drawing_no` / `t_part.drawing_no` 在 baseline 里都是 `NOT NULL`，
+ *  `dto.rs` 因此声明成 `String`；真源见 `src/api/__tests__/serial.contract.spec.ts`）。 */
 const AFFECTED = [
   {
     kind: 'ASSEMBLY',
@@ -41,7 +53,7 @@ const AFFECTED = [
     kind: 'PART',
     id: '1900000000000000002',
     serial_no: 'WO-2026-0002',
-    drawing_no: null,
+    drawing_no: 'DWG-B-02',
     status: 'CANCELLED',
   },
 ];
@@ -64,7 +76,7 @@ describe('releaseTerminalSerialsOutSchema（2026-10-19）', () => {
     expect(parsed.truncated).toBe(false);
     expect(parsed.affected).toHaveLength(2);
     expect(parsed.affected[0]!.kind).toBe('ASSEMBLY');
-    expect(parsed.affected[1]!.drawing_no).toBeNull();
+    expect(parsed.affected[1]!.drawing_no).toBe('DWG-B-02');
   });
 
   it('R2：逐键删除 —— 缺任何一个必填键都必须抛 ZodError（Zod 默认 strip 会静默放过）', () => {
@@ -88,20 +100,23 @@ describe('releaseTerminalSerialsOutSchema（2026-10-19）', () => {
     );
   });
 
-  it('R5：drawing_no 两种形态都接 —— null 接、字符串接、undefined 不接', () => {
-    expect(
-      releaseTerminalSerialsOutSchema.parse({
-        ...OUT,
-        affected: [{ ...AFFECTED[0]!, drawing_no: null }],
-      }).affected[0]!.drawing_no,
-    ).toBeNull();
+  it('R5：drawing_no 只接字符串 —— 接 null 必抛、接 undefined 必抛', () => {
+    // ⚠️ 这一条守的是「**值恒非空**」这半边：键恒在由 R2 / R3 的逐键删除守住，值恒非空
+    // 只能靠「显式接 null / undefined 必抛」守。守门 schema 一旦放回 `.nullable()`，本条红。
     expect(
       releaseTerminalSerialsOutSchema.parse({
         ...OUT,
         affected: [{ ...AFFECTED[0]!, drawing_no: 'DWG-X' }],
       }).affected[0]!.drawing_no,
     ).toBe('DWG-X');
-    // 键恒在、值可空：undefined 不是合法 wire 形态（前端据此渲染「—」）
+    // 后端 `pub drawing_no: String` ⇒ wire 上恒有值；`null` 不是合法形态（接了就是消费侧
+    // 养一个恒不触发的死分支，且把「后端真改成可空」降级成静默通过而不是当场抛）。
+    expect(() =>
+      releaseTerminalSerialsOutSchema.parse({
+        ...OUT,
+        affected: [{ ...AFFECTED[0]!, drawing_no: null }],
+      }),
+    ).toThrow(ZodError);
     expect(() =>
       releaseTerminalSerialsOutSchema.parse({
         ...OUT,

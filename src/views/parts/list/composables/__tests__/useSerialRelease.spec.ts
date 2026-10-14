@@ -81,7 +81,9 @@ function makeOut(overrides: Partial<ReleaseTerminalSerialsData> = {}): ReleaseTe
         kind: 'PART',
         id: '1900000000000000002',
         serial_no: 'WO-2026-0002',
-        drawing_no: null,
+        // ⚠️ 恒非空（后端两列均 NOT NULL，`dto.rs` 声明成 `String`）。这里写 `null` 会让
+        // fixture 自身过不了守门，而 makeOut 的返回值类型也不再与 `*Data` 一致。
+        drawing_no: 'DWG-B-02',
         status: 'CANCELLED',
       },
     ],

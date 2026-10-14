@@ -60,9 +60,11 @@
           </template>
         </el-table-column>
         <el-table-column prop="serial_no" label="序列号" min-width="180" />
-        <el-table-column label="图号" min-width="160">
-          <template #default="{ row }">{{ row.drawing_no ?? '—' }}</template>
-        </el-table-column>
+        <!-- 图号：⚠️ 刻意不写 `?? '—'`。`drawing_no` 是**必填键、值非空**（两列在 baseline
+             里都是 NOT NULL，后端据此声明成 `String`），加兜底等于在消费侧养一个恒不触发
+             的死分支，并把「后端哪天真的改成可空」降级成静默渲染「—」而不是当场抛。
+             字段真源与跨仓对账见 serialReleaseSchema.ts 的文件头 + serial.contract.spec.ts。 -->
+        <el-table-column prop="drawing_no" label="图号" min-width="160" />
         <el-table-column prop="status" label="状态" min-width="120" />
       </el-table>
 
