@@ -109,8 +109,15 @@
 /**
  * 工序大按钮 picker（2026-07-17，HMI 重设计）。
  *
- * 数据源：一次性 GET /processes?limit=200 拉所有 INHOUSE+OUTSOURCE 工序，可展示范围由
- * `allowedProcessIds` 决定 —— 传了只渲染该集合（扫码接管 / 外协收回两条自助恢复路径按
+ * 数据源：共享基础数据层 `useProcessesQuery({ limit: 200 })`（2026-10-20 接入，此前是本组件
+ * 内裸调 `listProcesses`）—— 工序字典是跨域基础数据，生产队列看板 `QueueBoard.vue` 读的是
+ * 同一条 queryKey（`qk.processesOptions({ limit: 200 })`），同屏两处打开只发一次往返。
+ * `staleTime: 30_000` / `gcTime: 5 * 60 * 1000`（共享层统一口径），弹窗关着的 5 分钟内
+ * 再开直接命中缓存、零等待 —— 放回页「换一道工序」是工人高频路径，车间网络下每次开弹窗
+ * 白等一个 200 行字典往返是不可接受的。
+ * enabled 闸门取 `() => props.modelValue`：弹窗不可见时零请求。
+ *
+ * 可展示范围由 `allowedProcessIds` 决定 —— 传了只渲染该集合（扫码接管 / 外协收回两条自助恢复路径按
  * 工人工种收窄），不传则渲染全量（放回页 `ScanReturnParts.vue`，`kind="return"`，观感逐字
  * 不变）。
  *
@@ -128,7 +135,8 @@ import { computed, ref, watch } from 'vue';
 import { Box, CircleCloseFilled, Loading, Select } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import HmiPickerCard from './HmiPickerCard.vue';
-import { listProcesses } from '@/api/process';
+import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
+import type { ProcessSchema } from '@/composables/queries/schemas';
 import type { Process } from '@/types/process';
 
 const props = withDefaults(
@@ -198,11 +206,41 @@ const emit = defineEmits<{
   cancel: [];
 }>();
 
-const loading = ref(false);
-const errorMessage = ref<string | null>(null);
-const processes = ref<Process[]>([]);
 const selectedId = ref<string | null>(null);
 const activeTab = ref<'INHOUSE' | 'OUTSOURCE'>('INHOUSE');
+
+/**
+ * 2026-10-20：工序字典改走共享基础数据层 `useProcessesQuery`（此前是本组件内裸调
+ * `listProcesses`，弹窗每开一次打一次 200 行字典请求、零缓存零去重）。
+ *
+ * - `limit: 200` 与生产队列看板 `QueueBoard.vue` 逐字相同 ⇒ 同一条 queryKey
+ *   （`qk.processesOptions({ limit: 200 })`）⇒ 同屏两处只发一次往返。
+ * - `enabled: () => props.modelValue` ⇒ 弹窗不可见时零请求（弹窗关着时这条工序字典对
+ *   本组件没有用途）。闸门只挡发起请求、不挡读缓存：缓存新鲜时打开直接命中，零等待。
+ * - `staleTime: 30_000` / `gcTime: 5 * 60 * 1000` 由共享 hook 统一，本组件不覆写。
+ */
+const processesQuery = useProcessesQuery({ limit: 200 }, { enabled: () => props.modelValue });
+
+/**
+ * 列表三态由 query 直接派生。`isPending`（无数据）而非 `isFetching`（含后台 refetch）：
+ * 后台 refetch 时不该把已经在屏的卡片整片换成 loading 骨架，工人会以为弹窗坏了。
+ */
+const loading = computed<boolean>(() => processesQuery.isPending.value);
+const errorMessage = computed<string | null>(() => {
+  const err = processesQuery.error.value;
+  if (!err) return null;
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg || '加载失败';
+});
+
+// 错误提示走 toast（error-state 那块横幅另有模板渲染）。用 watch 而不是模板副作用：
+// 同一次失败只弹一次，且错误态本身由上面的 errorMessage 驱动，二者不会各说各话。
+watch(errorMessage, (msg) => {
+  if (!msg) return;
+  ElMessage.error(msg);
+  // 加载失败时清空预填：只弹了个错误、确认键却还能点，工人就会提交一个本轮没校验过的工序 id。
+  selectedId.value = null;
+});
 
 /** 四个 kind 的文案映射（**纯文案**，不改变组件的任何行为分支）。
  *
@@ -265,19 +303,41 @@ const tabs = computed<TabEntry[]>(() => [
   },
 ]);
 
-/** 是否处于「按工种收窄」形态（`allowedProcessIds` 传了数组，含空数组）。
+/**
+ * 守门 schema 的 `description` / `color` 是**可选键**（后端 `skip_serializing_if`，None 时
+ * 整个键从 JSON 里消失），而 `types/process.ts::Process` 把两者声明成「必填、值可 undefined」
+ * —— 运行时取值逐字相同，只差「键可能压根不存在」。这里显式补齐成 `null` 过一道，而不是去
+ * 改 `Process` 的声明：那是全仓零件 / 工序域共用的 wire 镜像，动它会波及十几个消费方。
+ */
+function toProcesses(items: ProcessSchema[]): Process[] {
+  return items.map((p) => ({ ...p, description: p.description ?? null, color: p.color ?? null }));
+}
+
+/** 一次取值 = 工序全集 + 收窄集合，两者打包成**同一个**快照对象。
  *
- *  ⚠️ **刻意是普通 `ref`、不是 `computed`**（2026-10-16 review 第 1 轮）：它必须与
- *  `processes` 取自**同一时刻的同一份快照**（都由 `load()` 里那次局部取值填）。若它是响应式
- *  的，就会出现自相矛盾态 —— 弹窗开着、后台 refetch 把候选集从 `[a,b]` 变成 `[]` 时，
- *  `processes` **不会**重跑（watch 依赖刻意不含 `allowedProcessIds`，理由见那段注释），
- *  于是卡片停在旧的 `[a,b]`、空态文案却已切成「你的工种暂无可选工序」：同一屏内两句话
- *  互相打脸，而两句话都「有依据」。
+ *  ⚠️ 卡片集与空态文案必须来自同一次取值：若「候选集」与「是否收窄」分别响应式，分两次读
+ *  prop / data 就会出现自相矛盾态 —— 弹窗开着、候选集从 `[a,b]` 换成 `[]` 时卡片还停在
+ *  `[a,b]`、空态文案却已翻成「你的工种暂无可选工序」：同一屏两句话互相打脸，而两句话
+ *  都「有依据」。
  *
- *  另一种修法（把 `props.allowedProcessIds` 加进 watch 依赖、接受重跑 `listProcesses`）
- *  也成立，但代价是每次父组件给新数组引用就重拉一次全量工序；本组件的候选集在一次打开
- *  期间本就不该变（换集的那条路径会连带换掉整行数据与动作结论），取快照更贴合语义。 */
-const restricted = ref(false);
+ *  快照在三个时刻各取一次：弹窗开关 / `currentProcessId` 变化（调用方换推荐项）/ query
+ *  数据变化（首次拿到或后台 refetch 换新数据）。`allowedProcessIds` **刻意不进 watch 依赖**：
+ *  父组件每次渲染给新数组引用会让本回调空跑，而本组件的候选集在一次打开期间本就不该变
+ *  （换集的那条路径会连带换掉整行数据与动作结论，用户必须重新走一遍点击）。 */
+const snapshot = ref<{ items: Process[]; allowed: string[] | null } | null>(null);
+
+/** 收窄后的工序全集（收窄在**拿到全量之后本地过滤**，不下推到请求：
+ *  那条 list 端点没有按 id 过滤的入参，候选集合也只有几百条，本地过滤比多造一条端点便宜）。 */
+const processes = computed<Process[]>(() => {
+  const s = snapshot.value;
+  if (!s) return [];
+  const allowed = s.allowed;
+  // `[]`（空数组）同样是「不展示任何工序」，与 `null`（不限定）的区别只体现在空态文案上。
+  return allowed == null ? s.items : s.items.filter((p) => allowed.includes(p.id));
+});
+
+/** 是否处于「按工种收窄」形态（`allowedProcessIds` 传了数组，含空数组）。见 `snapshot`。 */
+const restricted = computed<boolean>(() => snapshot.value?.allowed != null);
 
 /**
  * tab 空态文案：收窄形态下「这个分类下你的工种一道工序都没有」与「这个分类本来就没有
@@ -287,17 +347,16 @@ function tabEmptyText(label: string): string {
   return restricted.value ? `「${label}」下你的工种暂无可选工序` : `「${label}」暂无工序`;
 }
 
-// 依赖只取「开关 + 预填推荐」两项：`allowedProcessIds` 是**打开时读一次**的收窄集合，
-// 不进依赖是为了避开数组 prop 的引用抖动（父组件每次渲染给新数组会让本回调反复重跑
-// listProcesses）。调用方在一次打开期间不会换候选集 —— 换集的那条路径（写动作触发诊断
-// 失效重查）会连带换掉整行数据与动作结论，用户必须重新走一遍点击。
+// 依赖三取：开关 + 预填推荐 + query 数据。数据项让「缓存已热 ⇒ 打开即渲染」成立（同步命中
+// 缓存时 data 在 setup 期间就有值，本回调 immediate 跑一趟把快照取好）。
 watch(
-  () => [props.modelValue, props.currentProcessId] as const,
-  async ([visible, currentId]) => {
-    if (!visible) return;
-    // 先把 selectedId + activeTab 用 currentId 预填；load 完成后保持
+  [() => props.modelValue, () => props.currentProcessId, () => processesQuery.data.value],
+  ([visible, currentId, data]) => {
+    if (!visible || !data) return;
+    // 收窄集合取成局部常量再与 items 一起塞进快照：见 snapshot 的注释。
+    snapshot.value = { items: toProcesses(data.items), allowed: props.allowedProcessIds };
+    // 先把 selectedId + activeTab 用 currentId 预填
     selectedId.value = currentId ?? null;
-    await load();
     if (currentId) {
       const matched = processes.value.find((p) => p.id === currentId);
       if (matched) {
@@ -307,6 +366,10 @@ watch(
       // 无 currentProcessId：默认自产 tab
       activeTab.value = 'INHOUSE';
     }
+    // 预填项不在本次候选集内（已被软删、或不落在收窄集合内）：清空让用户重选
+    if (selectedId.value && !processes.value.some((p) => p.id === selectedId.value)) {
+      selectedId.value = null;
+    }
     // 被排除的工序不能预填：清空（确认按钮会因 selectedId null 而禁用，强制用户改选）
     if (selectedId.value && props.excludeProcessIds.includes(selectedId.value)) {
       selectedId.value = null;
@@ -314,36 +377,6 @@ watch(
   },
   { immediate: true },
 );
-
-async function load(): Promise<void> {
-  loading.value = true;
-  errorMessage.value = null;
-  // ⚠️ 收窄集合取成局部常量再连同 `restricted` 一起赋值：这两者必须来自**同一次取值**
-  // （`restricted` 与 `processes` 的口径是同一个判据的两面，分两次读 prop 就会在
-  // 「弹窗开着 + 父组件换集合」时对不上，见 `restricted` 的注释）。顺带省掉 filter 回调里
-  // 的非空断言 —— `allowed != null` 已在本分支判过，逐项再判一次是白费。
-  const allowed = props.allowedProcessIds;
-  restricted.value = allowed != null;
-  try {
-    const resp = await listProcesses({ limit: 200 });
-    // 收窄在**拉全量之后本地过滤**，不在请求里下推：那条 list 端点没有按 id 过滤的入参，
-    // 候选集合也只有几百条，本地过滤比多造一条端点便宜。`[]`（空数组）同样是「不展示任何
-    // 工序」，与 `null`（不限定）的区别只体现在空态文案上。
-    processes.value =
-      allowed == null ? resp.items : resp.items.filter((p) => allowed.includes(p.id));
-    // 若 currentProcessId 在新列表中找不到（已被软删、或不落在收窄集合内），清空选中让用户重选
-    if (selectedId.value && !processes.value.some((p) => p.id === selectedId.value)) {
-      selectedId.value = null;
-    }
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    errorMessage.value = msg || '加载失败';
-    selectedId.value = null;
-    ElMessage.error(errorMessage.value);
-  } finally {
-    loading.value = false;
-  }
-}
 
 function onSelect(id: string): void {
   selectedId.value = id;

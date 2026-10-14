@@ -12,9 +12,16 @@
 //
 // 顺带守另一条：hint 缺省时**一个像素都不多渲染**，两个 kind（return / inspection）都不受
 // 影响 —— 送检页及其它调用方不传这个 prop 时的行为必须与改动前逐字一致。
+//
+// 2026-10-20：工序数据源从组件内裸调 `listProcesses` 换成共享基础数据层
+// `useProcessesQuery`（见 `ProcessPickerDialog.processQuery.spec.ts`）。本文件随之补两处
+// 基建：`vi.mock('@/api/process')` 仍生效（共享 hook 内部调的正是它），但桩出来的返回值
+// 必须带上 `processListResultSchema` 声明的 `limit` / `offset` 两个必填键；每个用例要装
+// VueQueryPlugin + QueryClient（vue-query 5.x 的 `useQueryClient()` 走 inject，没装会抛）。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
+import { QueryClient, VueQueryPlugin } from '@tanstack/vue-query';
 
 const h = vi.hoisted(() => ({
   listProcesses: vi.fn(),
@@ -79,8 +86,19 @@ const PROCESSES = [
   process({ id: '190000000000003', code: 'SUB', name: '委外喷涂', category: 'OUTSOURCE' }),
 ];
 
+/** 2026-10-20：`listProcesses` 的桩返回值要过 `processListResultSchema`（queryFn 里的守门），
+ *  `limit` / `offset` 是必填键，漏一个就是整条列表恒空。 */
+function listResult(items: Record<string, unknown>[]): {
+  items: Record<string, unknown>[];
+  total: number;
+  limit: number;
+  offset: number;
+} {
+  return { items, total: items.length, limit: 200, offset: 0 };
+}
+
 beforeEach(() => {
-  h.listProcesses.mockReset().mockResolvedValue({ items: [], total: 0 });
+  h.listProcesses.mockReset().mockResolvedValue(listResult([]));
   h.ElMessage.error.mockReset();
 });
 
@@ -99,7 +117,18 @@ function render(
 ) {
   return mount(ProcessPickerDialog, {
     props: { modelValue: true, ...props },
-    global: { stubs },
+    global: {
+      stubs,
+      // 2026-10-20：工序数据走 `useProcessesQuery`，vue-query 的 `useQueryClient()` 是
+      // inject 来的，必须装插件。retry 显式设 0 与 main.ts 的全局默认同口径 —— 否则
+      // 「工序列表加载失败」那条用例要等 3 次重试退避才落到 error 态。
+      plugins: [
+        [
+          VueQueryPlugin,
+          { queryClient: new QueryClient({ defaultOptions: { queries: { retry: 0 } } }) },
+        ],
+      ],
+    },
   });
 }
 
@@ -180,7 +209,7 @@ describe('ProcessPickerDialog / 作用说明行的渲染范围', () => {
 describe('ProcessPickerDialog / allowedProcessIds 收窄候选', () => {
   /** 已渲染的工序代码（按工序分类 tab 顺序，与渲染顺序一致）。 */
   async function renderedCodes(props: Parameters<typeof render>[0] = {}): Promise<string[]> {
-    h.listProcesses.mockResolvedValue({ items: PROCESSES, total: PROCESSES.length });
+    h.listProcesses.mockResolvedValue(listResult(PROCESSES));
     const w = render(props);
     await flushPromises();
     return w.findAll('.stub-card').map((c) => c.attributes('data-code') ?? '');
@@ -205,7 +234,7 @@ describe('ProcessPickerDialog / allowedProcessIds 收窄候选', () => {
 
   it('收窄到 0 条：空态说「你的工种没有工序」，不是「该分类暂无工序」', async () => {
     // 空集合与「这个分类本来就没有工序」是两件事 —— 后者会让人以为整个工种没配工序。
-    h.listProcesses.mockResolvedValue({ items: PROCESSES, total: PROCESSES.length });
+    h.listProcesses.mockResolvedValue(listResult(PROCESSES));
     const w = render({ kind: 'takeover', allowedProcessIds: [] });
     await flushPromises();
 
@@ -221,7 +250,7 @@ describe('ProcessPickerDialog / allowedProcessIds 收窄候选', () => {
   });
 
   it('未收窄且该分类真的没有工序：沿用原空态文案（区分两种空）', async () => {
-    h.listProcesses.mockResolvedValue({ items: [PROCESSES[0]!], total: 1 });
+    h.listProcesses.mockResolvedValue(listResult([PROCESSES[0]!]));
     const w = render({ kind: 'return' });
     await flushPromises();
 
@@ -242,7 +271,7 @@ describe('ProcessPickerDialog / allowedProcessIds 收窄候选', () => {
   // （本组件刻意不重跑 `listProcesses`），那么文案也不许翻 —— 否则就是文案在描述一份
   // 不再生效的快照。
   it('打开后改 allowedProcessIds：卡片不重跑，空态文案也不许翻（同一快照）', async () => {
-    h.listProcesses.mockResolvedValue({ items: PROCESSES, total: PROCESSES.length });
+    h.listProcesses.mockResolvedValue(listResult(PROCESSES));
     const w = render({ kind: 'takeover', allowedProcessIds: [] });
     await flushPromises();
 

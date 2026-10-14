@@ -20,6 +20,8 @@
 //     清单，**不是**「全部写点」—— 缓存时长已改为有限值（30s / 5min）兜底新鲜度，
 //     不再依赖穷举写点。
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
+//   - 2026-10-20 新增可选第二参 `options.enabled`（enabled 闸门）：见
+//     UseProcessesQueryOptions 的注释。不传时行为与此前逐字一致。
 
 import { useQuery, type QueryClient } from '@tanstack/vue-query';
 import { computed, toValue, type MaybeRefOrGetter } from 'vue';
@@ -27,7 +29,23 @@ import { listProcesses } from '@/api/process';
 import { processListResultSchema, type ProcessListResultSchema } from './schemas';
 import { qk, type ProcessListParams } from './keys';
 
-export function useProcessesQuery(params?: MaybeRefOrGetter<ProcessListParams>) {
+export interface UseProcessesQueryOptions {
+  /**
+   * 2026-10-20 新增：enabled 闸门（`MaybeRefOrGetter<boolean | undefined>`，可传 getter）。
+   * 不传 = 恒启用，与 2026-09-26 起的行为逐字一致。
+   *
+   * 消费方：报工台的工序选择弹窗（`views/production/scan/components/ProcessPickerDialog.vue`），
+   * 它只在弹窗可见时才需要工序字典，闸门取 `() => props.modelValue` ⇒ 弹窗关着时零请求、
+   * 开着时与生产队列看板（`QueueBoard.vue`，恒启用）共享同一条 queryKey ⇒ 同屏两处只发
+   * 一次往返。闸门只挡**发起请求**，不挡读缓存：缓存新鲜时打开弹窗直接命中，零往返。
+   */
+  enabled?: MaybeRefOrGetter<boolean | undefined>;
+}
+
+export function useProcessesQuery(
+  params?: MaybeRefOrGetter<ProcessListParams>,
+  options?: UseProcessesQueryOptions,
+) {
   // 2026-09-26：queryKey 走 computed(toValue(params))，params 可以是 Ref / ComputedRef /
   // getter；queryFn 从 queryKey[2] 读最新 params（不 snapshot），保证 reactive params
   // 变化时 listProcesses 拿到的是新值（避免首轮 review B-1 提到的「setup 一次性
@@ -43,6 +61,8 @@ export function useProcessesQuery(params?: MaybeRefOrGetter<ProcessListParams>) 
         raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as ProcessListParams) : {};
       return processListResultSchema.parse(await listProcesses(p));
     },
+    // 2026-10-20：undefined 时等价于「恒启用」，vue-query 内部按缺省 true 处理。
+    enabled: options?.enabled,
     staleTime: 30_000,
     gcTime: 5 * 60 * 1000,
   });
