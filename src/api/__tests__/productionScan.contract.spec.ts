@@ -1,14 +1,13 @@
 // src/api/__tests__/productionScan.contract.spec.ts
 //
-// 2026-10-10 重写：报工台（工人扫码台）域 `src/api/productionScan.ts` 5 个端点的
+// 报工台（工人扫码台）域 `src/api/productionScan.ts` 5 个端点的
 // **逐条 URL + query + body 契约守卫** + `scanPartListResultSchema` 的守门有效性回归锁。
 //
-// 本文件的前身是 `src/api/parts/__tests__/scan-list.contract.spec.ts`（报工台当时挂在
-// part 域，URL 是 `/parts/pickable-by-work-type/{id}` 与 `/parts/by-worker/{id}`，行 VO
-// 是 40 字段的 `PartListItem`）。后端把这 5 条端点整体迁进新的 `prod::scan` 域并把行
-// VO 收敛成 17 字段的 `ScanListItem`（砍掉 23 个恒为占位值的键）⇒ URL 与守卫一起重写。
-// 旧的「helper 返回值必须过 Zod」那组断言（F 组）**不再成立**：按 CLAUDE.md 的分层
-// 取舍，api 层已不做守门，守门落在 queryFn / mutationFn（见 E 组与
+// 契约形态（2026-10-10 定型，**硬切无 alias**）：5 条端点整体落在后端 `prod::scan` 域、
+// URL 前缀 `/api/v2/prod/scan/*`，行 VO 是从 40 字段的 `PartListItem` 收敛来的 17 字段
+// `ScanListItem`（砍掉 23 个恒为占位值的键）⇒ A 组 / L 组按这个形态逐字钉 URL 与 body。
+// ⚠️ 本文件**不含**「helper 返回值必须过 Zod」那类断言：按 CLAUDE.md 的分层取舍，api 层
+// 已不做守门，守门落在 queryFn / mutationFn（见 E 组与
 // `views/production/scan/composables/__tests__/scanSchema.spec.ts`）。
 //
 // 为什么 URL 必须逐字钉死：这次是**硬切无 alias**，且两条 list 的过滤键由 path 改成
@@ -20,8 +19,8 @@
 // 「queryFn 真的把 parse 接在返回路径上」由 scan 域的 query hook spec 守
 // （把 parse 整段删掉时，本文件全绿而线上三页崩 —— 那个失败模式的守卫在那边）。
 //
-// mock 手法沿 `inspection.contract.spec.ts` / 旧的 scan-list spec 同款：整模块桩掉
-// `@/api/http`（不 importOriginal），只留 api.get / api.post / cleanParams。
+// mock 手法沿 `inspection.contract.spec.ts` 同款：整模块桩掉 `@/api/http`
+// （不 importOriginal），只留 api.get / api.post / cleanParams。
 // ⚠️ `cleanParams` 是**语义复刻**而非恒等函数：A6（falsy 的 `offset: 0` 必须仍出现在
 // params 里）要成立，恒等桩会让这条退化成恒真断言。
 

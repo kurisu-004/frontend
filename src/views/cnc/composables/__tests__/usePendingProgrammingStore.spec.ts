@@ -49,8 +49,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from 'vue';
 import { createPinia, setActivePinia } from 'pinia';
 import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
-// 供 vi.mock 的 importOriginal 泛型使用（@typescript-eslint/consistent-type-imports
-// 禁止内联 `typeof import('...')` 写法；沿 usePendingDispatch.spec.ts:42 同款）
+// 2026-10-21 订正（清理失效引用）：供 vi.mock 的 importOriginal 泛型使用 ——
+// @typescript-eslint/consistent-type-imports 禁止内联 `typeof import('...')` 写法，
+// 故在此处单独 import type 整个模块。
 import type * as HttpModule from '@/api/http';
 
 vi.mock('element-plus', () => ({

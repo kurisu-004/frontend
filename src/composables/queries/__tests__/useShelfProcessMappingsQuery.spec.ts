@@ -24,7 +24,7 @@
 //     跨 observer 生命周期存活（这才是 keys.ts 里「30s 窗口内只发一次请求」那句注释
 //     的实证；变异测试 staleTime 30_000 → 0 本例立刻红）。
 //
-// 测试策略（沿 useWorkerPoolCountsQuery.spec.ts 范本）：
+// 测试策略（2026-10-21 订正：清理失效引用，三条各自自解释）：
 //   - vi.mock('@/api/shelves')：getAllShelfProcessMappings 替换为可控 vi.fn()；
 //   - createApp + VueQueryPlugin + QueryClient(queries.retry: 0)：useQuery 内部
 //     useQueryClient() 走 inject，必须在 app.runWithContext + effectScope 内调；

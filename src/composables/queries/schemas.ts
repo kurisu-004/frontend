@@ -234,13 +234,12 @@ export const partSchema = z.object({
    *  `usePartsListStore.spec.ts` 等共用 fixture 的用例变红，fixture 是跨 spec 共享
    *  对象，改动面超出注释订正的合理半径。补齐留待单独一轮。
    *
-   *  这个失守的**症状边界要说清**（别误读成「无读点」）：`batch_id` 在本 schema 上
-   *  **有**前端读点 —— `usePartDispatch.ts:353`（批量下发的 targets）与 `:421`
-   *  （单件召回）读 union-list 行的 `batch_id`。但后端刻意不填 ⇒ 读到的**恒为
-   *  null** ⇒ 这两处恒走 `PLACE_ON_SHELF_NO_BATCH_HINT` / `RECALL_NO_BATCH_HINT`
-   *  显式报错分支（2026-10-02 登记的已知缺口，见 usePartDispatch 文件头）。所以
-   *  缺键与否**不改变运行时行为**，`.optional()` 真正丢掉的是「后端删键时报错」
-   *  这一层契约守门（区别于
+   *  这个失守的**症状边界要说清**：`batch_id` 在本 schema 上**当前没有前端读点** ——
+   *  2026-10-21 核实：零件一览域里 `batch_id` 零读点（唯一还在读 union-list 行锚点的
+   *  批量下发 targets 与单件召回两条路径已于 2026-10-10 整块下线，`usePartDispatch` 只剩
+   *  强制完成）。所以缺键与否**不改变运行时行为**，`.optional()` 真正丢掉的是「后端删键
+   *  时报错」这一层契约守门。⚠️ 将来若接回读本键的功能，必须同时把它提成必填 + 可空 ——
+   *  「恒为 null」只在无读点时无害（区别于
    *  src/views/cnc/composables/pendingProgrammingSchema.ts::pendingProgrammingItemSchema：
    *  那边的读点是**按钮可用性判据**，缺键会静默让全表下发按钮恒 disabled，是真症状）。
    *
