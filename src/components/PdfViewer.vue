@@ -86,9 +86,19 @@
     已经把那份清理做了。
     承载弹窗是 destroy-on-close，所以「不释放」等价于「每打开一次图纸预览就漏一个线程」，
     而图纸预览是工人全天的高频动作。
-    同一条链上的另一半：`load()` 全程带 `disposed` / loadingTask 换主的守卫，卸载后迟到的
-    结果不写回状态 —— 被自己 destroy 掉的 task 会以 "Worker was destroyed" /
-    "Loading aborted" 拒绝，把它当加载失败上屏是假的，写回已死的视图更是纯浪费。
+    同一条链上的另一半：`load()` 全程带守卫，卸载后迟到的结果不写回状态 —— 被自己
+    destroy 掉的 task 会以 "Worker was destroyed" / "Loading aborted" 拒绝，把它当加载
+    失败上屏是假的，写回已死的视图更是纯浪费。
+    ⚠️ **「最后发起 load 的那次赢」这条硬保证由单调序号（loadSeq）兜底，不是由
+    `loadingTask` 的赋值顺序**：load() 要先 await 释放上一份，而 await 期间完全可能有
+    新的 load 打进来；那样一来「谁最后写 loadingTask」与「谁最后调 load()」就分家了 ——
+    抢在 await 之前建好 task 的那次会被后来者覆盖掉 loadingTask，从此再没人能 destroy
+    它（这恰好把本段要消灭的泄漏又造回来）。注意可见后果是「多建一个孤儿 task + 对同一
+    份文档多下一次重复下载」，**不是**「显示错文档」：url 是在 getDocument() 那一刻读的，
+    被抢跑的那次同样会取到最新的 url，所以别把「谁渲染出来的」当判据。
+    所以 bail 点一律对照 seq，且**必须在建 task 之前**bail（建出来就晚了）。同样的道理，
+    url 被清空也是一条释放路径。
+
   CLAUDE.md #6：仍走 @/utils/pdfjs，不直接 import pdfjs-dist。
 -->
 <template>
@@ -234,6 +244,11 @@ let resizeObserver: ResizeObserver | null = null;
 let loadingTask: pdfjsLib.PDFDocumentLoadingTask | null = null;
 // 卸载后仍在飞行的 load() 一律不得再写状态（见 releaseLoadingTask 与 load 的守卫）。
 let disposed = false;
+// 2026-10-20 补：load() 的单调序号。基线里 getDocument() 整个在 load() 的同步段内，
+// 「谁最后调用 load 谁赢」是硬保证；引入「先 await 释放旧 task」之后这个保证没了 ——
+// 抢在后一个 await 里回来的那次会把 loadingTask 覆盖成自己的，让先建的那一份彻底
+// 失去句柄（孤儿 worker 线程）。序号是唯一单调递增的量，判据只能是它。
+let loadSeq = 0;
 
 /**
  * 释放当前 loadingTask（2026-10-20 修 Worker 泄漏）。
@@ -243,6 +258,11 @@ let disposed = false;
  *    高频发生时新旧线程会并存，峰值线程数跟着涨；
  *  · unmount：**不 await** —— 卸载是同步流程，不能为一个后台收尾卡住整条卸载链；
  *    失败只记一行 warn（沿用本仓 best-effort 清理的既有风格），绝不冒泡成未处理拒绝。
+ *
+ * ⚠️ 释放失败（warn 之后）**照常建新 task**：destroy 失败只说明旧线程的终止没被确认，
+ *   不代表这份文档还能取到页 —— 停在旧文档上等于给工人看一份已经不成立的图纸，比多
+ *   留一个待回收的线程更难查。下一次 load / unmount 还会再释放一次（那时 loadingTask
+ *   已经指向新 task，旧的只能靠 pdf.js 自身的 GC），这属于可接受的兜底。
  */
 async function releaseLoadingTask(): Promise<void> {
   const task = loadingTask;
@@ -255,18 +275,37 @@ async function releaseLoadingTask(): Promise<void> {
   }
 }
 
-/** 本次加载是否仍然「算数」：组件已卸载、或被更新的 load 抢跑 ⇒ 结果作废。 */
+/**
+ * 本次加载是否仍然「算数」：组件已卸载、或 loadingTask 已换主（有一份更新的 task
+ * 接手了这份文档的 worker 线程）⇒ 结果作废。
+ *
+ * 判据用「task 换主」而不是序号，是因为**每一次新的 load 都会先释放上一份**：
+ * 新的 load 一动手（同步段内）就把 loadingTask 摘空或换成人，于是「这份 task 还在
+ * loadingTask 上」与「没有更新的 load 抢跑」是同一件事，序号不必再进这道闸。
+ */
 function isStale(task: pdfjsLib.PDFDocumentLoadingTask): boolean {
   return disposed || loadingTask !== task;
 }
 
 async function load() {
-  if (!props.url) return;
+  // 单调序号：本次调用在整个 load() 生命周期内的身份。所有 bail 点都拿它对照，
+  // 不用「loadingTask 是不是我」——那一项在 task 建出来之前还没有值可比。
+  const seq = (loadSeq += 1);
+  if (!props.url) {
+    // 2026-10-20 补：url 被清空（宿主收起预览）也是一条释放路径。直接 return 会把
+    // 上一份的 worker 丢在后台跑，等于换一种写法复现同一个泄漏。
+    await releaseLoadingTask();
+    return;
+  }
   loading.value = true;
   error.value = null;
   // 先释放上一份：切 url 时它对应的 worker 还活着，留着就是一次泄漏。
   await releaseLoadingTask();
-  if (disposed) return;
+  // ⚠️ 必须在建 task **之前** bail：上面那个 await 期间可能又来了一次 load（url
+  // 再变）或组件已卸载，那种情况下本次不该再建 task —— 建出来的那份会被后一次
+  // load 覆盖掉 loadingTask，从此没有任何句柄能 destroy 它（孤儿 worker），还白白多下
+  // 一次同一份文档。
+  if (disposed || seq !== loadSeq) return;
   const task = pdfjsLib.getDocument({ url: props.url, ...PDF_CMAP_OPTIONS });
   loadingTask = task;
   try {
@@ -312,7 +351,8 @@ function ensureResizeObserver(): void {
 }
 
 async function render() {
-  if (!pdfDoc || !canvasRef.value) return;
+  const doc = pdfDoc;
+  if (!doc || !canvasRef.value) return;
   if (renderTask) {
     try {
       renderTask.cancel();
@@ -320,7 +360,20 @@ async function render() {
       /* ignore */
     }
   }
-  const p = await pdfDoc.getPage(page.value);
+  let p: pdfjsLib.PDFPageProxy;
+  try {
+    p = await doc.getPage(page.value);
+  } catch {
+    // 2026-10-20 补：换文件会把上一份 doc 的 worker 终止掉，在途的 getPage 于是以
+    // "Worker was destroyed" 拒绝。render() 由多处 void 调用，抛出去就是一条未处理
+    // 拒绝；那是竞态的正常收尾，新文档的 load 会自己重渲，直接放弃本次即可。
+    return;
+  }
+  // ⚠️ getPage 是 await，醒来时可能已经卸载（canvas 随之被移除）或换了文档 ——
+  // 继续往下摸 canvas.width 会是 TypeError。load() 的守卫管不到这里（render 还被
+  // 复位 / +/- / ResizeObserver 直接调用）。
+  const canvas = canvasRef.value;
+  if (disposed || !canvas || doc !== pdfDoc) return;
   // 2026-10-11：先把 renderScale 落到「整页塞进容器」的比例（写 renderScale 而非
   // viewScale：fit 要的是矢量清晰的成像，CSS 放大只会把图放大糊）。
   // 两个门都过才重算：`props.fit` 是 opt-out 口子；`userZoomed` 表示工人已经用 +/− /
@@ -342,7 +395,6 @@ async function render() {
     fitPending = false;
   }
   const viewport = p.getViewport({ scale: renderScale.value * (window.devicePixelRatio || 1) });
-  const canvas = canvasRef.value;
   canvas.width = viewport.width;
   canvas.height = viewport.height;
   const cssWidth = viewport.width / (window.devicePixelRatio || 1);

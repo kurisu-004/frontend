@@ -3,7 +3,8 @@
 //
 // 两组守卫：
 //   · P 组 —— 「默认 fit 到容器」的缩放 / 翻页 / 平移契约（2026-10-11 补）；
-//   · W 组 —— loadingTask 即 pdf.js worker 线程的生命周期（2026-10-20 补）。
+//   · W 组 —— loadingTask 即 pdf.js worker 线程的生命周期（2026-10-20 补，含换文件的
+//     并发竞态与 url 清空两条边界）。
 //
 // 为什么 P 组以前不存在（2026-10-11 补）：fit 那次改动把 `render()` 改成每次都按
 // 容器尺寸覆写 `renderScale`，而 `zoomIn` / `zoomOut` 的实现恰恰是「改 renderScale →
@@ -38,7 +39,6 @@ const container = { w: 0, h: 0 };
 const renderedScales: number[] = [];
 
 const h = vi.hoisted(() => ({
-  cleanup: vi.fn(),
   getDocument: vi.fn(),
 }));
 
@@ -56,9 +56,22 @@ interface FakeLoadingTask {
 /** 本次用例里创建过的 loadingTask，按创建顺序。断言「销毁了哪一个」全靠它。 */
 const createdTasks: FakeLoadingTask[] = [];
 
+/**
+ * 「建 task 的这一刻，全局已经发起过多少次 destroy」，与 `createdTasks` 同序。
+ *
+ * 存在的理由：**只断言 destroy 的调用次数钉不住顺序** —— 把「先 await 释放旧 task」
+ * 挪到 `getDocument()` 之后（旧线程还没终止就建新线程），新旧 task 各被 destroy 一次，
+ * 次数一条不差，全绿。要钉住「新 task 建出来之前旧 task 已经发起销毁」，只能在
+ * 建 task 的当场把已有的 destroy 次数记下来。
+ */
+const destroyCallsBeforeCreate: number[] = [];
+
 function makeLoadingTask(doc: Promise<unknown>): FakeLoadingTask {
   const task: FakeLoadingTask = { promise: doc, destroy: vi.fn(() => Promise.resolve()) };
   createdTasks.push(task);
+  destroyCallsBeforeCreate.push(
+    createdTasks.reduce((sum, t) => sum + t.destroy.mock.calls.length, 0),
+  );
   return task;
 }
 
@@ -85,7 +98,6 @@ function makePage(w: number, hgt: number) {
 function fakeDoc(pages: { w: number; h: number }[]) {
   return {
     numPages: pages.length,
-    cleanup: h.cleanup,
     getPage: (n: number) => Promise.resolve(makePage(pages[n - 1]!.w, pages[n - 1]!.h)),
   };
 }
@@ -170,10 +182,17 @@ async function mountViewer(
     props: { url: 'https://example.test/a.pdf', ...props },
     global: { stubs },
   });
-  await flushPromises();
-  await flushPromises();
-  await flushPromises();
+  await flushAll();
   return w;
+}
+
+/**
+ * 连刷若干轮微任务：`load()` 的 await 链有六段（释放旧 task → `task.promise` →
+ * `nextTick` → `getPage` → `renderTask.promise`），单轮 `flushPromises()` 常常只跑到链
+ * 中段。凡是要「等整条链跑完」的断言都必须用它。
+ */
+async function flushAll(times = 8): Promise<void> {
+  for (let i = 0; i < times; i++) await flushPromises();
 }
 
 /** 画布的 CSS 宽（= renderScale × 页宽@scale1）。fit 的断言全部打在它上面。 */
@@ -229,7 +248,7 @@ beforeEach(() => {
   renderedScales.length = 0;
   roCallbacks.length = 0;
   createdTasks.length = 0;
-  h.cleanup.mockReset();
+  destroyCallsBeforeCreate.length = 0;
   h.getDocument.mockReset();
 });
 
@@ -515,10 +534,14 @@ describe('PdfViewer / pdf.js Worker 生命周期', () => {
     container.h = 800;
     const w = await mountViewer();
     expect(createdTasks.length).toBe(1);
+    // ⚠️ 记下换文件**之前**的渲染条数：`renderedScales` 在 beforeEach 清零，而首次
+    // load 已经渲染过一次，直接断言 `> 0` 是近似恒真的 —— 新文档根本没加载出来也照样
+    // 绿。要证明的是「切换之后又渲染过」，不是「曾经渲染过」。
+    const rendersBefore = renderedScales.length;
+    expect(rendersBefore, '前置：首屏渲染应当已经发生').toBeGreaterThan(0);
 
     await w.setProps({ url: 'https://example.test/b.pdf' });
-    await flushPromises();
-    await flushPromises();
+    await flushAll();
 
     expect(createdTasks.length, '换文件应当新建一个 loadingTask').toBe(2);
     expect(
@@ -526,11 +549,20 @@ describe('PdfViewer / pdf.js Worker 生命周期', () => {
       '换文件时旧 task 没被销毁 —— 每切一次文件就漏一个 worker',
     ).toHaveBeenCalledTimes(1);
     expect(createdTasks[1]!.destroy, '新 task 此时还活着，不能被提前销毁').not.toHaveBeenCalled();
-    // 换文件后仍在正常渲染新文档（销毁旧 task 不能把新文档一起带走）
-    expect(renderedScales.length, '换文件后应当已经渲染过新文档').toBeGreaterThan(0);
+    // 顺序闸：新 task 建出来的那一刻，旧 task 的销毁**已经发起**（只断言调用次数钉不住
+    // 顺序 —— 先建后销毁时两条各被 destroy 一次，次数一样、全绿，而新旧 worker 会并存）。
+    expect(
+      destroyCallsBeforeCreate[1],
+      '新 task 建出来之前旧 task 的 destroy 还没发起 —— 新旧 worker 会并存，峰值线程数跟着涨',
+    ).toBeGreaterThan(0);
+    // 换文件后确实又渲染过新文档（销毁旧 task 不能把新文档一起带走）
+    expect(
+      renderedScales.length,
+      '换文件后应当**又**渲染过新文档（不是把首屏那次渲染当数）',
+    ).toBeGreaterThan(rendersBefore);
 
     w.unmount();
-    await flushPromises();
+    await flushAll();
     expect(createdTasks[1]!.destroy, '最终卸载时新 task 也要被销毁').toHaveBeenCalledTimes(1);
   });
 
@@ -614,5 +646,147 @@ describe('PdfViewer / pdf.js Worker 生命周期', () => {
     expect(warn, '释放失败被静默吞掉了，排查时看不出线程为什么没回收').toHaveBeenCalled();
     expect(String(warn.mock.calls.at(-1)?.[0] ?? '')).toContain('worker 已死');
     warn.mockRestore();
+  });
+
+  // 竞态本体：`load()` 要先 await 释放旧 task，而那个 await 期间完全可能有新的 load 打
+  // 进来。于是「谁最后写 loadingTask」与「谁最后调 load()」分了家 —— 被抢跑的那次醒来后
+  // 会再建一个 task 并覆盖 loadingTask，被它盖掉的那一份从此再没有句柄能 destroy
+  // （这恰好把本组要消灭的 worker 泄漏又造回来），还会对同一份文档多下一次重复下载。
+  //
+  // 放大器：让 a 的 task 的 destroy 迟迟不 resolve（真实 worker 终止本来就有异步尾巴），
+  // 保证第二次换 url 一定落在那个窗口里。
+  it('W6：旧 task 的 destroy 未回来时又换了一次 url —— 只建两份 task，且最终渲染的是 props.url 那份', async () => {
+    container.w = 800;
+    container.h = 800;
+    // 每个 url 一份可辨认的文档：800×800 容器下 fit 分别是 0.8 / 1.0 / 2.0。
+    const edgeOf: Record<string, number> = {
+      'https://example.test/a.pdf': 1000,
+      'https://example.test/b.pdf': 800,
+      'https://example.test/c.pdf': 400,
+    };
+    let current = 'https://example.test/a.pdf';
+    let releaseDestroy: (() => void) | null = null;
+    h.getDocument.mockImplementation(() => {
+      const edge = edgeOf[current]!;
+      const task = makeLoadingTask(Promise.resolve(fakeDoc([{ w: edge, h: edge }])));
+      if (current.endsWith('/a.pdf')) {
+        task.destroy.mockImplementation(
+          () =>
+            new Promise<void>((res) => {
+              releaseDestroy = () => res();
+            }),
+        );
+      }
+      return task;
+    });
+    const w = mount(PdfViewer, { props: { url: current }, global: { stubs } });
+    await flushAll();
+    expect(createdTasks.length, '前置：首次加载应当建了一个 task').toBe(1);
+    expect(renderedScales.at(-1), '前置：a.pdf 的 fit = 800/1000').toBeCloseTo(0.8, 6);
+
+    // 第 1 次换 url：load#2 释放 taskA，卡在它的 destroy 上
+    current = 'https://example.test/b.pdf';
+    await w.setProps({ url: current });
+    await flushAll();
+    expect(releaseDestroy, '前置：b 的 load 应当正卡在 taskA 的 destroy 上').not.toBeNull();
+
+    // 第 2 次换 url：正落在上面那个窗口里（taskA 还没销毁完）
+    current = 'https://example.test/c.pdf';
+    await w.setProps({ url: current });
+    await flushAll();
+    releaseDestroy!();
+    await flushAll();
+
+    expect(
+      createdTasks.length,
+      '被抢跑的那次 load 不该再建 task —— 建出来就没人能 destroy 它（孤儿 worker 线程）',
+    ).toBe(2);
+    expect(createdTasks[0]!.destroy, 'a 的 task 应当已被销毁').toHaveBeenCalledTimes(1);
+    expect(createdTasks[1]!.destroy, 'c 的 task 此时还活着').not.toHaveBeenCalled();
+    expect(
+      renderedScales.at(-1),
+      '最后渲染的必须是 props.url 当前指向的那份（c.pdf 的 fit = 800/400 = 2.0）',
+    ).toBeCloseTo(2.0, 6);
+
+    w.unmount();
+    await flushAll();
+    // 无孤儿的不变量收口：卸载之后，每一个建出来过的 task 都恰好被销毁过一次。
+    for (const [i, task] of createdTasks.entries()) {
+      expect(
+        task.destroy,
+        `第 ${i + 1} 个 task 从头到尾没被 destroy —— 它的 worker 线程会一直活着`,
+      ).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  // `load()` 的 `if (!props.url) return` 排在释放之前时，url 被清空（宿主收起预览）
+  // 这条路径会把上一份的 worker 丢在后台跑完 —— 等于换一种写法复现同一个泄漏。
+  it('W7：props.url 被清空时释放旧 task（这也是一条释放路径，不能只 return）', async () => {
+    container.w = 800;
+    container.h = 800;
+    const w = await mountViewer();
+    expect(createdTasks.length).toBe(1);
+
+    await w.setProps({ url: '' });
+    await flushAll();
+
+    expect(createdTasks.length, 'url 为空时不该再建 task').toBe(1);
+    expect(
+      createdTasks[0]!.destroy,
+      'url 被清空时没有释放 —— 旧 worker 会留在后台一直跑',
+    ).toHaveBeenCalledTimes(1);
+    w.unmount();
+    await flushAll();
+  });
+
+  it('W8：挂载时 url 就为空则一个 task 都不建（getDocument 拿不到可加载的东西）', async () => {
+    container.w = 800;
+    container.h = 800;
+    const w = await mountViewer({ url: '' });
+
+    expect(createdTasks.length, 'url 为空却建了 task —— 一个空下载的 worker 线程').toBe(0);
+    expect(h.getDocument, 'url 为空却发了 getDocument').not.toHaveBeenCalled();
+    w.unmount();
+  });
+
+  // render() 的 await 窗口：getPage 在途时组件被卸载，醒来后 canvas 已被移除 ——
+  // 继续往下摸 canvas.width 是 TypeError，而 render 由复位 / +/- / ResizeObserver 以
+  // void 调用，抛出去就是一条未处理拒绝。
+  it('W9：卸载发生在 render() 的 getPage 在途时 —— 醒来不再摸已卸载的 canvas', async () => {
+    container.w = 800;
+    container.h = 800;
+    let releasePage: (() => void) | null = null;
+    h.getDocument.mockImplementation(() =>
+      makeLoadingTask(
+        Promise.resolve({
+          numPages: 1,
+          getPage: () =>
+            new Promise((res) => {
+              releasePage = () => res(makePage(PAGE_W, PAGE_H));
+            }),
+        }),
+      ),
+    );
+    const unhandled: unknown[] = [];
+    const collect = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', collect);
+    const w = mount(PdfViewer, {
+      props: { url: 'https://example.test/slow.pdf' },
+      global: { stubs },
+    });
+    try {
+      await flushAll();
+      expect(releasePage, '前置：render() 应当正卡在 getPage 上').not.toBeNull();
+
+      w.unmount();
+      releasePage!();
+      // 未处理拒绝是在微任务队列排空之后的下一个宏任务才派发的，所以要多等一轮定时器。
+      await new Promise((res) => setTimeout(res, 0));
+      await flushAll();
+    } finally {
+      process.off('unhandledRejection', collect);
+    }
+
+    expect(unhandled, 'getPage 醒来后摸已卸载的 canvas ⇒ 未处理拒绝').toEqual([]);
   });
 });
