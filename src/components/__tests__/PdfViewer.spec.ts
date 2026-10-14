@@ -1,9 +1,11 @@
 // @vitest-environment happy-dom
 // src/components/__tests__/PdfViewer.spec.ts
 //
-// PdfViewer「默认 fit 到容器」的回归守卫。
+// 两组守卫：
+//   · P 组 —— 「默认 fit 到容器」的缩放 / 翻页 / 平移契约（2026-10-11 补）；
+//   · W 组 —— loadingTask 即 pdf.js worker 线程的生命周期（2026-10-20 补）。
 //
-// 为什么这批用例以前不存在（2026-10-11 补）：fit 那次改动把 `render()` 改成每次都按
+// 为什么 P 组以前不存在（2026-10-11 补）：fit 那次改动把 `render()` 改成每次都按
 // 容器尺寸覆写 `renderScale`，而 `zoomIn` / `zoomOut` 的实现恰恰是「改 renderScale →
 // 调 render()」—— 刚写进去的值在同一次调用里被抹掉，净效果是**点 +/- 视觉零变化**
 // （唯一残留效果是把 viewScale 重置为 1，观感上像「缩小回原样」）。这条回归不需要任何
@@ -18,6 +20,8 @@
 //   - getDocument → 一个 numPages 页、getPage 给出确定尺寸的假文档；
 //   - getViewport({scale}) → 尺寸线性于 scale（真实 pdfjs 就是线性的）；
 //   - render() → 返回一个带 promise / cancel 的任务对象（不真的画像素）。
+// 2026-10-20 起再加第四样：`getDocument` 返回的 **loadingTask** 带 `destroy()` ——
+// 真实 pdf.js 里它是唯一能终止 worker 线程的句柄，Worker 泄漏那批用例就打在它身上。
 
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
@@ -42,6 +46,21 @@ vi.mock('@/utils/pdfjs', () => ({
   pdfjsLib: { getDocument: (opts: unknown) => h.getDocument(opts) },
   PDF_CMAP_OPTIONS: {},
 }));
+
+/** 一个 loadingTask 桩：`promise` 可控（延迟 resolve 用），`destroy` 单独一个 spy。 */
+interface FakeLoadingTask {
+  promise: Promise<unknown>;
+  destroy: ReturnType<typeof vi.fn>;
+}
+
+/** 本次用例里创建过的 loadingTask，按创建顺序。断言「销毁了哪一个」全靠它。 */
+const createdTasks: FakeLoadingTask[] = [];
+
+function makeLoadingTask(doc: Promise<unknown>): FakeLoadingTask {
+  const task: FakeLoadingTask = { promise: doc, destroy: vi.fn(() => Promise.resolve()) };
+  createdTasks.push(task);
+  return task;
+}
 
 /** 一页假 PDF：getViewport 的尺寸线性于 scale（真实 pdfjs 就是线性的）。 */
 function makePage(w: number, hgt: number) {
@@ -144,7 +163,9 @@ async function mountViewer(
   props: { url?: string; initialScale?: number; fit?: boolean; page?: number } = {},
   pages: { w: number; h: number }[] = [{ w: PAGE_W, h: PAGE_H }],
 ): Promise<Wrapper> {
-  h.getDocument.mockReturnValue({ promise: Promise.resolve(fakeDoc(pages)) });
+  // 每次 getDocument 都造一个新 task（真实 pdf.js 就是一个 task 对应一个 worker），
+  // 并登记到 createdTasks —— Worker 泄漏那批用例靠它分辨「销毁的是哪一个」。
+  h.getDocument.mockImplementation(() => makeLoadingTask(Promise.resolve(fakeDoc(pages))));
   const w = mount(PdfViewer, {
     props: { url: 'https://example.test/a.pdf', ...props },
     global: { stubs },
@@ -207,6 +228,7 @@ beforeEach(() => {
   container.h = 0;
   renderedScales.length = 0;
   roCallbacks.length = 0;
+  createdTasks.length = 0;
   h.cleanup.mockReset();
   h.getDocument.mockReset();
 });
@@ -454,5 +476,143 @@ describe('PdfViewer / fit 到容器', () => {
     await flushPromises();
     expect(canvasWidth(w)).toBe(1200);
     w.unmount();
+  });
+});
+
+/**
+ * loadingTask（pdf.js worker 线程）的生命周期。
+ *
+ * `getDocument()` 每次返回一个 loadingTask，真实 pdf.js 会为它 new 一个 Worker；
+ * `task.destroy()` 是唯一能终止那个线程的句柄。承载弹窗是 destroy-on-close，所以
+ * 「用完即弃的局部变量」等价于「每打开一次图纸预览就漏一个线程」——而图纸预览是
+ * 工人全天的高频动作，常驻 HMI 上线程数与内存单调上涨。这类回归不产生任何报错，
+ * 全仓其它 spec 也拦不住它，只能把 loadingTask 的桩显式做出来盯着。
+ */
+describe('PdfViewer / pdf.js Worker 生命周期', () => {
+  /** 读 setup state（`<script setup>` 的绑定都在里面；VTU 的 vm proxy 透出 setupState）。 */
+  function stateOf(w: Wrapper): { loading: boolean; error: string | null; totalPages: number } {
+    return w.vm as unknown as { loading: boolean; error: string | null; totalPages: number };
+  }
+
+  it('W1：unmount 时对已创建的 loadingTask 调 destroy（不释放就等于每开一次预览漏一个线程）', async () => {
+    container.w = 800;
+    container.h = 800;
+    const w = await mountViewer();
+    expect(createdTasks.length, '前置：应当已经建了一个 loadingTask').toBe(1);
+    expect(createdTasks[0]!.destroy, '前置：task 上必须有 destroy 句柄').toBeDefined();
+
+    w.unmount();
+    await flushPromises();
+
+    expect(
+      createdTasks[0]!.destroy,
+      '卸载时没有终止 worker —— destroy-on-close 的承载弹窗每开一次就漏一个线程',
+    ).toHaveBeenCalledTimes(1);
+  });
+
+  it('W2：props.url 变化时旧 task 被 destroy、新 task 被创建（旧 worker 不能留着叠着）', async () => {
+    container.w = 800;
+    container.h = 800;
+    const w = await mountViewer();
+    expect(createdTasks.length).toBe(1);
+
+    await w.setProps({ url: 'https://example.test/b.pdf' });
+    await flushPromises();
+    await flushPromises();
+
+    expect(createdTasks.length, '换文件应当新建一个 loadingTask').toBe(2);
+    expect(
+      createdTasks[0]!.destroy,
+      '换文件时旧 task 没被销毁 —— 每切一次文件就漏一个 worker',
+    ).toHaveBeenCalledTimes(1);
+    expect(createdTasks[1]!.destroy, '新 task 此时还活着，不能被提前销毁').not.toHaveBeenCalled();
+    // 换文件后仍在正常渲染新文档（销毁旧 task 不能把新文档一起带走）
+    expect(renderedScales.length, '换文件后应当已经渲染过新文档').toBeGreaterThan(0);
+
+    w.unmount();
+    await flushPromises();
+    expect(createdTasks[1]!.destroy, '最终卸载时新 task 也要被销毁').toHaveBeenCalledTimes(1);
+  });
+
+  // 关弹窗时 `task.promise` 可能还没 settle。无守卫时它照样跑完并把 doc / 页数写进
+  // 已卸载的视图 —— 那是同一个 worker 泄漏路径的上游：写回之后没人再会去销毁它。
+  it('W3：卸载后才 resolve 的 load 不再写回状态（页数不落进已卸载的视图）', async () => {
+    let resolveDoc: ((d: unknown) => void) | null = null;
+    h.getDocument.mockImplementation(() =>
+      makeLoadingTask(new Promise((res) => (resolveDoc = res))),
+    );
+    const w = mount(PdfViewer, {
+      props: { url: 'https://example.test/slow.pdf' },
+      global: { stubs },
+    });
+    await flushPromises();
+    expect(stateOf(w).loading, '前置：还卡在 task.promise 上，界面处于加载中').toBe(true);
+
+    w.unmount();
+    await flushPromises();
+    expect(createdTasks[0]!.destroy, '前置：卸载已终止 worker').toHaveBeenCalledTimes(1);
+
+    resolveDoc!(fakeDoc([{ w: PAGE_W, h: PAGE_H }]));
+    await flushPromises();
+    await flushPromises();
+
+    expect(stateOf(w).totalPages, '卸载后不得把迟到的 doc 写回状态').toBe(0);
+  });
+
+  // 真实 pdf.js 里，被 destroy 掉的 task 会以 "Worker was destroyed" / "Loading aborted"
+  // 拒绝 loadingTask 的 promise（见 pdf.mjs 的 `Loading aborted` / `Worker was destroyed`
+  // 两个抛出点）。把它当加载失败上屏 = 切文件 / 关弹窗时闪一句假报错，所以「不上屏」
+  // 与「不写回」是同一道守卫的两面，用各自的桩分开钉。
+  it('W4：被自己 destroy 掉的 task 拒绝 promise 时不当成加载失败（不上屏）', async () => {
+    let rejectDoc: ((r: unknown) => void) | null = null;
+    const doc = new Promise((_, rej) => (rejectDoc = rej));
+    h.getDocument.mockImplementation(() => {
+      const task = makeLoadingTask(doc);
+      // 真实行为：destroy 终止传输 ⇒ loadingTask 的 promise 以 "Worker was destroyed" 拒绝
+      task.destroy.mockImplementation(() => {
+        rejectDoc!(new Error('Worker was destroyed'));
+        return Promise.resolve();
+      });
+      return task;
+    });
+    const w = mount(PdfViewer, {
+      props: { url: 'https://example.test/slow.pdf' },
+      global: { stubs },
+    });
+    await flushPromises();
+
+    w.unmount();
+    await flushPromises();
+    await flushPromises();
+
+    const st = stateOf(w);
+    expect(st.error, '自己销毁掉的 task 造成的拒绝不是加载失败，不得上屏').toBeNull();
+    expect(st.totalPages, '也不得把这次拒绝当成「加载完成」写页数').toBe(0);
+  });
+
+  // 释放是 best-effort：destroy() 失败不该冒泡成未处理拒绝（unmount 是同步流程，
+  // 抛出去会打断整条卸载链），但也不能静默吞掉 —— 记一行 warn，沿用本仓既有风格。
+  it('W5：destroy 失败时只记 warn，不产生未处理拒绝', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    container.w = 800;
+    container.h = 800;
+    h.getDocument.mockImplementation(() => {
+      const task = makeLoadingTask(Promise.resolve(fakeDoc([{ w: PAGE_W, h: PAGE_H }])));
+      task.destroy.mockImplementation(() => Promise.reject(new Error('worker 已死')));
+      return task;
+    });
+    const w = mount(PdfViewer, {
+      props: { url: 'https://example.test/a.pdf' },
+      global: { stubs },
+    });
+    await flushPromises();
+    await flushPromises();
+
+    w.unmount();
+    await flushPromises();
+
+    expect(warn, '释放失败被静默吞掉了，排查时看不出线程为什么没回收').toHaveBeenCalled();
+    expect(String(warn.mock.calls.at(-1)?.[0] ?? '')).toContain('worker 已死');
+    warn.mockRestore();
   });
 });
