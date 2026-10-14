@@ -542,6 +542,9 @@ export interface BatchFlowOut {
 /** 单件送检（多状态 → INSPECTION）。后端 `ToInspectionRequest`：
  *  `version` 必填，`quantity` / `note` 选填。
  *
+ *  2026-10-17：新增选填键 `force`（强制送检，语义见字段注释）—— 后端同批上线，
+ *  缺省时行为与改造前逐字不变。
+ *
  *  2026-10-10：`target_inspection_shelf_id` 后端删除 —— 目标品检架由后端按负载自动选
  *  （见 CLAUDE.md「货架自动选择」）。
  *  响应里的 `new_batch_id` 是拆批信号，语义与 toShip 完全一致（拆批时源批次原地减量、
@@ -552,6 +555,25 @@ export interface ToInspectionPayload {
   version: number;
   quantity?: number | null;
   note?: string | null;
+  /**
+   * 2026-10-17 新增（可选键）：**强制送检**。
+   *
+   * 缺省 / `false` = 后端原行为逐字不变：`IN_PROCESS` 且批次**在工人手上**
+   * （`location='WORKER'`）时后端返 20103。
+   *
+   * `true` = 放宽 `location='WORKER'` 这一支，让品检员把工人手上的批次提到品检架。
+   * ⚠️ 它**只**放宽这一支：`location` 为空（老数据，服务层定性为数据完整性违规）
+   * 或挂在 `OFFICE` / `INSPECTION_SHELF` / `OUTSOURCE_COMPANY` 等其它位置时，
+   * 后端**仍然拒绝**。前端因此只在 `IN_PROCESS + WORKER` 那一档给这个键。
+   *
+   * 业务语义：这是**品检员代替工人**把批次提到品检架，**不会计入该工人的报工工时**
+   * （后端记 `FORCED_SENT_TO_INSPECTION` 事件，不产生 `SENT_TO_INSPECTION` 的工时贡献）。
+   * 权限与普通送检同款（`batch.transition` = Manager + Inspector）。
+   *
+   * ⚠️ 部署顺序：**后端必须先上**。本键缺省时后端行为与改造前完全一致，所以前端先上线
+   * 也是安全的；但后端没上时点「强制送检」按钮会得 20103。
+   */
+  force?: boolean;
 }
 
 export async function toInspection(

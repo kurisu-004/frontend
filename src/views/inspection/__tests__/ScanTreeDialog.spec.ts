@@ -10,6 +10,9 @@
 //  3. 按钮矩阵：INSPECTION → 品检通过 + 指定工序；PENDING / PROGRAMMING / IN_PROCESS
 //     → 送检（IN_PROCESS 还要过 location 白名单闸门：只有生产架上才给）；READY_TO_SHIP
 //     等其它状态无按钮；装配件 / 零件行不渲染操作按钮。
+//     ★ 2026-10-17：IN_PROCESS 且批次**在工人手上**（`location='WORKER'`）改给
+//     **强制送检**（warning 色 / 文案「强制送检」/ 提交带 `force: true`）；
+//     `location` 为空或挂在其它位置（非工人）仍然一个按钮都不给。
 //  4. 返修守卫：`is_repairing` 的批次行「指定工序」禁用。
 //  5. 高亮**三档**（批次层照抄后端 `is_scanned`，不在前端按 hit_kind 反推）：独立件 /
 //     装配件**子件**（hit_kind 仍 PART + assembly 非空，只有被扫中那个子件亮）/
@@ -19,9 +22,9 @@
 //     都没有给 `—`（不吐枚举原文）；系统交期由批次行从父零件继承。
 //  7. emit 载荷：「品检通过」「指定工序」抛的是**批次**行，且 `version` 是
 //     `t_part_batch.version`（不是零件节点的 version —— 两个计数器混用必 409）。
-//  8. 送检：行内面板选品检架（候选来自 props）+ 数量 → 调 `toInspection`（批次 id +
-//     批次 version + 目标架名）；未选品检架时「确认送检」禁用、不发请求；成功后树就地
-//     更新（状态 / 当前位置 / 按钮矩阵一起变）。
+//  8. 送检：行内面板只填数量 → 调 `toInspection`（批次 id + 批次 version，载荷无货架）；
+//     强制送检走同一个面板、提交时多带一个 `force: true`；成功后树就地更新
+//     （状态 / 当前位置 / 按钮矩阵一起变）。
 //  9. 关闭弹窗清树 + 清行内面板态；`v-loading` 绑扫码请求的在飞态。
 //
 // 为什么用 EP 模板桩而不是真 el-table：el-table ↔ el-table-column 的插槽作用域协议
@@ -746,7 +749,7 @@ describe('ScanTreeDialog', () => {
     w2.unmount();
   });
 
-  it('IN_PROCESS 批次的送检按钮受 location 白名单约束（工人手上的、空的都不给）', async () => {
+  it('IN_PROCESS 批次的送检按钮受 location 白名单约束：生产架给普通送检，工人手上给强制送检，空 location 不给任何按钮', async () => {
     const tree: ScanTreeOut = {
       ...TREE_PART,
       children: [
@@ -754,40 +757,154 @@ describe('ScanTreeDialog', () => {
           ...PART_A,
           children: [
             { ...PART_A.children[1], status: 'IN_PROCESS', location: 'PRODUCTION_SHELF' },
+            // 2026-10-17：批次在**工人手上**。普通送检这条路后端必拒 20103，现在改走
+            // 「强制送检」（提交时带 force: true）—— 文案与配色都与普通送检分开。
+            {
+              ...PART_A.children[1],
+              id: '9000000000104',
+              status: 'IN_PROCESS',
+              location: 'WORKER',
+              current_holder_display: '张三',
+            },
+            // location 为空的老数据同样必被后端拒（20103），且 `force` **不放宽**它
+            // （后端把这一列的空值定性为数据完整性违规）⇒ 不给「注定失败」的按钮。
+            { ...PART_A.children[1], id: '9000000000105', status: 'IN_PROCESS', location: null },
+            // 挂在其它位置（办公室）的批次：`force` 只放开 WORKER 一支，仍必拒。
+            {
+              ...PART_A.children[1],
+              id: '9000000000107',
+              status: 'IN_PROCESS',
+              location: 'OFFICE',
+            },
+            // 非 IN_PROCESS 状态不受 location 闸门约束，也**不该**有强制按钮
+            //（`force` 对它们无意义，后端也不放行那一支）。
+            { ...PART_A.children[1], id: '9000000000106', status: 'PENDING', location: 'WORKER' },
+            {
+              ...PART_A.children[1],
+              id: '9000000000108',
+              status: 'PROGRAMMING',
+              location: 'WORKER',
+            },
+          ],
+        },
+      ],
+    };
+    const { wrapper } = await mountDialog(tree);
+    // IN_PROCESS + PRODUCTION_SHELF → 给普通送检。
+    expect(
+      rowBy(wrapper, 'BATCH_9000000000102')
+        ?.findAll('button')
+        .map((b) => b.text()),
+    ).toEqual(['送检']);
+    // IN_PROCESS + WORKER → 给**强制送检**（不是普通送检，也不是两者都给）。
+    const workerRow = rowBy(wrapper, 'BATCH_9000000000104');
+    expect(workerRow?.findAll('button').map((b) => b.text())).toEqual(['强制送检']);
+    expect(workerRow?.find('button')?.classes()).toContain('mock-button-warning');
+    // IN_PROCESS + location 为空 → 仍然必拒，不给任何按钮（原断言保留）。
+    const nullLocRow = rowBy(wrapper, 'BATCH_9000000000105');
+    expect(nullLocRow?.findAll('button')).toHaveLength(0);
+    expect(nullLocRow?.text()).toContain('—');
+    // IN_PROCESS + OFFICE（非工人）→ `force` 不放宽，同样不给按钮。
+    const officeRow = rowBy(wrapper, 'BATCH_9000000000107');
+    expect(officeRow?.findAll('button')).toHaveLength(0);
+    expect(officeRow?.text()).toContain('—');
+    // 非 IN_PROCESS 状态不受 location 闸门约束，且只有普通送检、没有强制送检。
+    for (const key of ['BATCH_9000000000106', 'BATCH_9000000000108']) {
+      expect(
+        rowBy(wrapper, key)
+          ?.findAll('button')
+          .map((b) => b.text()),
+      ).toEqual(['送检']);
+    }
+    wrapper.unmount();
+  });
+
+  it('无 batch.transition 权限点：工人手上的 IN_PROCESS 批次也给不出「强制送检」按钮', async () => {
+    // 强制送检沿用与普通送检同一道权限闸（后端两条路径是同一个端点、同一组权限点）：
+    // 无权限时它同样落 `—` 分支，不能因为「文案不同」就绕过 canTransition。
+    const tree: ScanTreeOut = {
+      ...TREE_PART,
+      children: [
+        {
+          ...PART_A,
+          children: [
             {
               ...PART_A.children[1],
               id: '9000000000104',
               status: 'IN_PROCESS',
               location: 'WORKER',
             },
-            // location 为空的老数据同样必被后端拒（20103），不给「注定失败」的按钮。
-            { ...PART_A.children[1], id: '9000000000105', status: 'IN_PROCESS', location: null },
-            { ...PART_A.children[1], id: '9000000000106', status: 'PENDING', location: 'WORKER' },
           ],
         },
       ],
     };
-    const { wrapper } = await mountDialog(tree);
-    // IN_PROCESS + PRODUCTION_SHELF → 给送检。
-    expect(
-      rowBy(wrapper, 'BATCH_9000000000102')
-        ?.findAll('button')
-        .map((b) => b.text()),
-    ).toEqual(['送检']);
-    // IN_PROCESS + WORKER → 后端必拒 20103，不给按钮。
+    const { wrapper } = await mountDialog(tree, { canTransition: false });
+    const row = rowBy(wrapper, 'BATCH_9000000000104');
+    expect(row?.findAll('button')).toHaveLength(0);
+    expect(row?.text()).toContain('—');
+    wrapper.unmount();
+  });
+
+  it('「强制送检」：行内面板确认后调 toInspection 且载荷带 force: true，成功后树就地翻成品检态', async () => {
+    // 2026-10-17 新增：点「强制送检」→ 面板里的确认按钮文案换成「确认强制送检」，
+    // 提交时多带一个 `force: true`。成功后与普通送检**同一套**本地回写
+    // （status=INSPECTION / location=INSPECTION_SHELF），后端行为一致。
+    toInspectionMock.mockResolvedValue({
+      part: { status: 'INSPECTION', version: 9 },
+      new_batch_id: null,
+    });
+    const tree: ScanTreeOut = {
+      ...TREE_PART,
+      children: [
+        {
+          ...PART_A,
+          children: [
+            {
+              ...PART_A.children[1],
+              id: '9000000000104',
+              status: 'IN_PROCESS',
+              location: 'WORKER',
+              current_holder_display: '张三',
+            },
+          ],
+        },
+      ],
+    };
+    // 重拉回来的树 = 强制送检后的真实状态（后端把批次提到品检架、holder 换成品检架）。
+    const AFTER_FORCE: ScanTreeOut = structuredClone(tree);
+    const afterBatch = AFTER_FORCE.children[0]!.children[0]!;
+    afterBatch.status = 'INSPECTION';
+    afterBatch.location = 'INSPECTION_SHELF';
+    afterBatch.current_holder_display = '品检架 1';
+    afterBatch.version = 3;
+    scanInspectionMock.mockResolvedValue(AFTER_FORCE);
+
+    const { wrapper, store } = await mountDialog(tree);
     const workerRow = rowBy(wrapper, 'BATCH_9000000000104');
-    expect(workerRow?.findAll('button')).toHaveLength(0);
-    expect(workerRow?.text()).toContain('—');
-    // IN_PROCESS + location 为空 → 同样必拒，不给按钮。
-    const nullLocRow = rowBy(wrapper, 'BATCH_9000000000105');
-    expect(nullLocRow?.findAll('button')).toHaveLength(0);
-    expect(nullLocRow?.text()).toContain('—');
-    // 非 IN_PROCESS 状态不受 location 闸门约束。
+    await workerRow?.find('button').trigger('click');
+
+    // ⚠️ 按文案定位按钮：按下标取会取错。
+    const confirmBtn = () => workerRow?.findAll('button').find((b) => b.text() === '确认强制送检');
+    expect(confirmBtn()).toBeDefined();
+    await confirmBtn()?.trigger('click');
+    await flushPromises();
+
+    // 载荷：批次 id + 批次 version（t_part_batch.version，零件的是另一个计数器）+ force。
+    expect(toInspectionMock).toHaveBeenCalledWith('9000000000104', {
+      version: 2,
+      quantity: 5,
+      force: true,
+    });
+    // 本地回写：批次离开工人手、落到品检架。
+    const batch = store.mutations.scanTree?.children[0]?.children[0];
+    expect(batch?.status).toBe('INSPECTION');
+    expect(batch?.location).toBe('INSPECTION_SHELF');
+    // 表格随之重渲染：操作列换成品检侧动作（不再是「强制送检」）。
     expect(
-      rowBy(wrapper, 'BATCH_9000000000106')
+      rowBy(wrapper, 'BATCH_9000000000104')
         ?.findAll('button')
         .map((b) => b.text()),
-    ).toEqual(['送检']);
+    ).toEqual(['品检通过', '指定工序']);
     wrapper.unmount();
   });
 

@@ -10,9 +10,16 @@
     - INSPECTION → 品检通过（to-ship）/ 指定工序（to-process）
     - PENDING / PROGRAMMING → 送检（to-inspection，行内只填数量）
     - IN_PROCESS → 送检，但还要过 location 闸门（必须在生产架上，见 canSendToInspection）
+    - IN_PROCESS + 在工人手上 → **强制送检**（2026-10-17 新增，见 canForceSendToInspection）
     - 其余（READY_TO_SHIP / DELIVERED / COMPLETED / CANCELLED / OUTSOURCE …）→ 不给按钮
   2026-10-15：整个按钮矩阵还要过 `batch.transition` 权限点（store.canTransition）——
-    无权限时批次行落最后的 `—` 分支（不给「可见却 403」的入口）。
+    无权限时批次行落最后的 `—` 分支（不给「可见却 403」的入口）。强制送检沿用同一道闸。
+  2026-10-17 强制送检：批次在工人手上（`IN_PROCESS` + `location='WORKER'`）时，普通送检
+    必被后端拒 20103 —— 现在给一个 `type="warning"`、文案「强制送检」的按钮，提交时带
+    `force: true`。**这是品检员代替工人把批次提到品检架，不会计入该工人的报工工时**
+    （后端记 `FORCED_SENT_TO_INSPECTION`，不产生 `SENT_TO_INSPECTION` 的工时贡献）。
+    权限与普通送检同款（`batch.transition`）；⚠️ 部署顺序：**后端必须先上**，否则点它得 20103。
+    `location` 为空 / 非 `WORKER` 的一切形态仍然不给按钮 —— `force` 不放宽它们。
   「品检通过」「指定工序」只 emit，由壳（InspectionPending.vue）复用它已有的两个对话框 ——
   品检器在这里选数量、选工序，没有理由重造一遍。
   2026-10-10：目标货架改由后端按负载自动选，行内送检面板的品检架下拉随之删除
@@ -143,10 +150,35 @@
               </span>
             </el-tooltip>
           </template>
-          <template v-else-if="canTransition && canSendToInspection(row as SendGateRow)">
-            <el-button size="small" type="primary" @click="toggleSendPanel(row as ActionRow)">
-              {{ sendPanel(row.id) ? '收起' : '送检' }}
-            </el-button>
+          <template
+            v-else-if="
+              canTransition &&
+              (canSendToInspection(row as SendGateRow) ||
+                canForceSendToInspection(row as SendGateRow))
+            "
+          >
+            <!--
+              2026-10-17：普通送检与**强制送检**共用这一个行内面板，差别只有三处 ——
+              按钮配色（primary / warning）、按钮文案、提交时多带一个 `force: true`。
+              两者**互斥**（IN_PROCESS 时前者要 `location='PRODUCTION_SHELF'`、后者要
+              `'WORKER'`），所以「哪个模式」直接由这一行的 location 决定，不存第二份状态。
+              文案必须一眼分得开：强制送检是品检员**代替工人**把批次提到品检架，
+              **不会计入该工人的报工工时**。
+            -->
+            <el-tooltip
+              :disabled="!isForceSend(row as SendGateRow)"
+              :content="FORCE_SEND_HINT"
+              placement="top"
+            >
+              <span class="btn-wrap">
+                <el-button
+                  size="small"
+                  :type="isForceSend(row as SendGateRow) ? 'warning' : 'primary'"
+                  @click="toggleSendPanel(row as ActionRow, isForceSend(row as SendGateRow))"
+                  >{{ sendPanel(row.id) ? '收起' : sendToggleLabel(row as SendGateRow) }}</el-button
+                >
+              </span>
+            </el-tooltip>
             <!--
               面板内两个受控值用 `:model-value` + `@update:model-value` 而不是 v-model
               绑 `sendForms[id]` 的字段：后者要在渲染期取值（v-model 的读取是编译成
@@ -165,10 +197,10 @@
               />
               <el-button
                 size="small"
-                type="primary"
+                :type="sendPanel(row.id)?.force ? 'warning' : 'primary'"
                 :loading="sendSubmittingId === row.id"
                 @click="onConfirmSend(row as ActionRow)"
-                >确认送检</el-button
+                >{{ sendPanel(row.id)?.force ? '确认强制送检' : '确认送检' }}</el-button
               >
             </div>
           </template>
@@ -260,6 +292,11 @@ type SendGateRow = ActionRow & Pick<ScanTreeRow, 'status' | 'location'>;
 
 /** 可送检的批次状态。IN_PROCESS 还带一道 location 白名单闸门，见 canSendToInspection。 */
 const SEND_TO_INSPECTION_STATUSES: readonly string[] = ['PENDING', 'PROGRAMMING', 'IN_PROCESS'];
+
+/** 「强制送检」按钮的 hover 说明。⚠️ 这条语义必须常驻在按钮上：强制送检是品检员**代替
+ *  工人**把批次提到品检架，后端记 `FORCED_SENT_TO_INSPECTION` 事件、
+ *  **不会计入该工人的报工工时**（普通送检的 `SENT_TO_INSPECTION` 才计）。 */
+const FORCE_SEND_HINT = '强制送检：品检员代替工人把这批提到品检架，不会计入该工人的报工工时';
 
 /** 返修批次的「指定工序」为什么不给：后端对返修中批次返 20118 守卫，而本仓的返修出口
  *  在「返修接收」页（那里才是「返修中」批次的可操作面）。 */
@@ -439,13 +476,44 @@ function canSendToInspection(row: SendGateRow): boolean {
   return row.location === 'PRODUCTION_SHELF';
 }
 
+/** 「强制送检」按钮的显隐（2026-10-17 新增，与普通送检**互斥**且刻意更窄）。
+ *
+ *  判据 = `IN_PROCESS` 且批次**在工人手上**（`location='WORKER'`）。这正是普通送检
+ *  白名单（`PRODUCTION_SHELF`）放过的那一支的反面 —— 后端 `force: true` 放行的也正是
+ *  `location='WORKER'`，两者对同一批数据互补、不重叠。
+ *
+ *  ⚠️ 其余形态一律不给按钮：`location` 为空（老数据，后端把这一列的空值定性为数据
+ *  完整性违规）、`OFFICE` / `INSPECTION_SHELF` / `OUTSOURCE_COMPANY` / 生产架上的批次
+ *  —— `force` **不放宽**它们，给出来就是「点了必然 20103」的死按钮。
+ *  `PENDING` / `PROGRAMMING` 也不给：它们本来就能走普通送检，`force` 对它们无意义。
+ *
+ *  权限不在这里判：与普通送检共用 `batch.transition`（`canTransition`），后端两条路径
+ *  是同一个端点、同一组权限点。 */
+function canForceSendToInspection(row: SendGateRow): boolean {
+  return row.status === 'IN_PROCESS' && row.location === 'WORKER';
+}
+
+/** 这一行走普通送检还是强制送检 —— 模板里按钮配色 / 文案 / tooltip 三处共用这一个来源。
+ *  两者互斥（见上面两个判据），所以它总归一，不存在「两个都给」的歧义态。 */
+function isForceSend(row: SendGateRow): boolean {
+  return canForceSendToInspection(row);
+}
+
+/** 折叠态按钮文案。强制动作必须与普通动作在字面上就分得开，不能只靠颜色区分。 */
+function sendToggleLabel(row: SendGateRow): string {
+  return isForceSend(row) ? '强制送检' : '送检';
+}
+
 // ============ 行内送检面板 ============
 /** 展开态与面板内的数量按 batch_id 记：同一个批次反复送检不该重填数量。
- *  key 不存在 = 面板收起（渲染期只读，不在这里建对象）。 */
-const sendForms = reactive<Record<string, { quantity: number | undefined }>>({});
+ *  key 不存在 = 面板收起（渲染期只读，不在这里建对象）。
+ *  `force` 是**这一行的提交模式**（普通 / 强制），由打开面板时那一行的 location 决定
+ *  —— 两个模式互斥（见 canSendToInspection / canForceSendToInspection），不需要第二份
+ *  状态，也不会出现「面板开着但模式漂了」。 */
+const sendForms = reactive<Record<string, { quantity: number | undefined; force: boolean }>>({});
 const sendSubmittingId = ref<string | null>(null);
 
-function sendPanel(batchId: string): { quantity: number | undefined } | undefined {
+function sendPanel(batchId: string): { quantity: number | undefined; force: boolean } | undefined {
   return sendForms[batchId];
 }
 
@@ -454,12 +522,12 @@ function setQuantity(batchId: string, value: number | undefined): void {
   if (form) form.quantity = value;
 }
 
-function toggleSendPanel(row: ActionRow): void {
+function toggleSendPanel(row: ActionRow, force: boolean): void {
   if (sendForms[row.id]) {
     delete sendForms[row.id];
     return;
   }
-  sendForms[row.id] = { quantity: row.quantity };
+  sendForms[row.id] = { quantity: row.quantity, force };
 }
 
 async function onConfirmSend(row: ActionRow): Promise<void> {
@@ -471,11 +539,13 @@ async function onConfirmSend(row: ActionRow): Promise<void> {
     // OCC 锚用 **batch.version**（t_part_batch.version），不是零件行的 version
     // （t_part.version 是另一个计数器，混用必 409）。
     // 2026-10-10：不再传目标品检架 —— 后端按负载自动选。
+    // 2026-10-17：强制送检多带一个 `force: true`（普通送检缺省 ⇒ 后端行为逐字不变）。
     await store.mutations.toInspectionMutation.mutateAsync({
       batchId: batch.id,
       version: batch.version,
       quantity: form.quantity ?? null,
       label: batch.batch_no ? `批次 #${batch.batch_no}` : batch.id,
+      force: form.force,
     });
     delete sendForms[row.id];
   } catch {

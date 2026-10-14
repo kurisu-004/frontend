@@ -86,12 +86,19 @@ export interface ToProcessVars {
  *  `label` 只进成功提示。
  *
  *  2026-10-10：`target_inspection_shelf_id` 后端删除（目标品检架按负载自动选），
- *  `targetInspectionShelfId` / `targetShelfName` 两项随之退场。 */
+ *  `targetInspectionShelfId` / `targetShelfName` 两项随之退场。
+ *
+ *  2026-10-17：新增 `force`（强制送检）—— 批次**在工人手上**（`IN_PROCESS` +
+ *  `location='WORKER'`）时普通送检必被后端拒 20103，带 `force: true` 才放行。
+ *  缺省 / `false` = 后端原行为逐字不变（老客户端不发这个键也没问题）；
+ *  权限与普通送检同款（`batch.transition`）。详见 `@/api/parts` 的 `ToInspectionPayload`。 */
 export interface ToInspectionVars {
   batchId: string;
   version: number;
   quantity: number | null;
   label: string;
+  /** 强制送检（2026-10-17 新增，缺省 = 普通送检）。 */
+  force?: boolean;
 }
 
 /** 流转后要写进扫码树批次节点的目标列。`undefined` = 保持原值（后端该列本就未变），
@@ -394,15 +401,21 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
 
   const toInspectionMutation = useMutation({
     mutationKey: ['inspection', 'to-inspection'],
-    mutationFn: ({ batchId, version, quantity }: ToInspectionVars) =>
+    mutationFn: ({ batchId, version, quantity, force }: ToInspectionVars) =>
       toInspection(batchId, {
         version,
         quantity,
+        // 2026-10-17：普通送检**不带** `force` 键（后端缺省行为逐字不变，对不认这个
+        // 键的老后端同样安全），只有强制送检才显式带上 `true`。
+        ...(force ? { force: true } : {}),
       }),
     onSuccess: async (data, vars) => {
       await invalidateInspectionQuery();
       // 送检 = 出池：location 落品检架、工序列被后端清空。holder 同 to-process ——
       // 目标品检架由后端按负载自动选，前端不知道，置空后强制重拉扫码树填真实值。
+      // ⚠️ 2026-10-17：强制送检走的是**同一个端点**、后端也把 location 写成
+      // `INSPECTION_SHELF` 并把 holder 换成品检架 ⇒ 这段本地回写对两条路径**同样正确**，
+      // 不需要按 force 分叉。
       const applied = applyScanTreeTransition(
         vars.batchId,
         {
@@ -416,7 +429,14 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
       );
       await resyncScanTree();
       if (scanTreeNeedsResync(data, applied)) await resyncScanTree();
-      ElMessage.success(`零件 ${vars.label} 已送检${vars.quantity ? ` × ${vars.quantity}` : ''}`);
+      // 强制送检的成功提示刻意换一句（2026-10-17）：品检员要能从提示里看出「这一笔没
+      // 计入工人报工工时」，否则与普通送检长得一样、事后无从追。普通送检的文案逐字不变。
+      const qtySuffix = vars.quantity ? ` × ${vars.quantity}` : '';
+      ElMessage.success(
+        vars.force
+          ? `零件 ${vars.label} 已强制送检${qtySuffix}（未计入工人报工工时）`
+          : `零件 ${vars.label} 已送检${qtySuffix}`,
+      );
     },
     onError: async (e: Error & { code?: number }) => {
       if (e?.code === 40901) {

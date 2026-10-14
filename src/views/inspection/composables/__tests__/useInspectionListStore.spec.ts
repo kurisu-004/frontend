@@ -637,10 +637,55 @@ describe('useInspectionListStore', () => {
       quantity: 2,
       label: 'SN-A',
     });
+    // 普通送检**不带** force 键（缺省 = 后端原行为逐字不变）：逐字断言整个 body，
+    // 谁把 force: false 也塞进来本用例即红。
     expect(toInspectionMock).toHaveBeenCalledWith('B1', {
       version: 7,
       quantity: 2,
     });
+  });
+
+  it('强制送检：payload 带 force: true，成功后的本地树回写与普通送检完全一致', async () => {
+    // 2026-10-17：批次在工人手上时普通送检必被后端拒 20103，带 force: true 才放行。
+    // 后端走的是**同一个端点**、同样把 location 写成 INSPECTION_SHELF 并换 holder
+    // ⇒ store 的本地树回写不需要按 force 分叉，这里一并钉住。
+    const store = useInspectionListStore();
+    store.mutations.scanTree = treeWithOneBatch();
+    const AFTER_FORCE = treeWithOneBatch();
+    AFTER_FORCE.children[0]!.children[0]!.version = 8;
+    AFTER_FORCE.children[0]!.children[0]!.status = 'INSPECTION';
+    AFTER_FORCE.children[0]!.children[0]!.location = 'INSPECTION_SHELF';
+    AFTER_FORCE.children[0]!.children[0]!.current_holder_display = '品检架 2';
+    scanInspectionMock.mockResolvedValue(AFTER_FORCE);
+    toInspectionMock.mockResolvedValue({
+      part: { status: 'INSPECTION', version: 4 },
+      new_batch_id: null,
+    });
+
+    await store.mutations.toInspectionMutation.mutateAsync({
+      batchId: 'B1',
+      version: 7,
+      quantity: 3,
+      label: 'F1006-01',
+      force: true,
+    });
+
+    expect(toInspectionMock).toHaveBeenCalledWith('B1', {
+      version: 7,
+      quantity: 3,
+      force: true,
+    });
+    // 本地回写与普通送检同款：出池落品检架、version +1；holder 来自重拉回来的树。
+    const batch = store.mutations.scanTree?.children[0]?.children[0];
+    expect(batch?.status).toBe('INSPECTION');
+    expect(batch?.version).toBe(8);
+    expect(batch?.location).toBe('INSPECTION_SHELF');
+    expect(batch?.current_holder_display).toBe('品检架 2');
+    // 强制路径的成功提示要能让人看出「没计工时」，否则与普通送检长得一样。
+    const { ElMessage } = await import('element-plus');
+    expect(ElMessage.success).toHaveBeenCalledWith(
+      '零件 F1006-01 已强制送检 × 3（未计入工人报工工时）',
+    );
   });
 
   it('送检遇到 40901 走 warning + 重拉（与 toShip / toProcess 同款）', async () => {
