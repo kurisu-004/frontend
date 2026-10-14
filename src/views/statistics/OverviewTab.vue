@@ -116,7 +116,15 @@
             <template #header>
               <span class="chart-title">每日新建 vs 每日完成</span>
             </template>
-            <EChart :option="dailyOption" height="320px" />
+            <v-chart
+              class="chart"
+              :option="dailyOption"
+              :update-options="{ notMerge: true }"
+              :init-options="{ renderer: 'canvas' }"
+              :style="{ height: '320px', width: '100%' }"
+              theme="v5"
+              autoresize
+            />
           </el-card>
         </el-col>
         <el-col :xs="24" :md="8">
@@ -124,7 +132,15 @@
             <template #header>
               <span class="chart-title">期内交付表现</span>
             </template>
-            <EChart :option="deliveryOption" height="320px" />
+            <v-chart
+              class="chart"
+              :option="deliveryOption"
+              :update-options="{ notMerge: true }"
+              :init-options="{ renderer: 'canvas' }"
+              :style="{ height: '320px', width: '100%' }"
+              theme="v5"
+              autoresize
+            />
           </el-card>
         </el-col>
       </el-row>
@@ -135,7 +151,15 @@
             <template #header>
               <span class="chart-title">当前零件状态分布</span>
             </template>
-            <EChart :option="statusOption" height="320px" />
+            <v-chart
+              class="chart"
+              :option="statusOption"
+              :update-options="{ notMerge: true }"
+              :init-options="{ renderer: 'canvas' }"
+              :style="{ height: '320px', width: '100%' }"
+              theme="v5"
+              autoresize
+            />
           </el-card>
         </el-col>
       </el-row>
@@ -148,7 +172,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { Warning } from '@element-plus/icons-vue';
-import EChart from '@/components/EChart.vue';
 import { useStatisticsOverviewQuery } from './composables/useStatisticsOverviewQuery';
 import type { OrderStatus } from '@/types/parts';
 import { STATUS_LABEL, STATUS_TAG_TYPE } from '@/constants/partStatus';
@@ -176,6 +199,19 @@ const valueYuan = computed<number>(() => {
 });
 
 // ============== ECharts options ==============
+//
+// 2026-10-14 新增：图一律走全局 <v-chart>（vue-echarts，模块化注册在
+// src/plugins/echarts.ts），三个 option computed 不变。四处传参各有理由：
+//   - :update-options="{ notMerge: true }"：option 是 computed 每次重算的整份新对象，
+//     更新语义显式钉死成「整份替换」。不传 update-options 时 vue-echarts 走结构签名
+//     planner（它比对前后 option 的结构签名，结构变了自己会翻成 notMerge，只有纯数值
+//     变化才合并）—— 那是库的启发式、随版本漂移 ⇒ 显式钉死，不依赖 planner 判断。
+//   - autoresize：vue-echarts 内建 ResizeObserver（默认 100ms 节流，容器尺寸未变时跳过
+//     resize），容器尺寸变化自动重画。
+//   - theme="v5"：锁定配色 / legend 默认位置（echarts 6 缺省主题与 v5 不同；v5 主题在
+//     src/plugins/echarts.ts 注册）。
+//   - :init-options="{ renderer: 'canvas' }"：渲染器不交给缺省值，显式钉 canvas
+//     （仓内只注册了 CanvasRenderer）。
 
 const dailyOption = computed(() => {
   const created = data.value?.daily_created ?? [];
@@ -291,5 +327,12 @@ function tagColor(statusValue: string): string {
 .chart-title {
   font-weight: 600;
   font-size: 14px;
+}
+
+/* 图表容器：宽跟随 el-col，高由模板里的 style 绑定给（320px）。min-width: 0 防
+   flex 子项被内容顶开。 */
+.chart {
+  width: 100%;
+  min-width: 0;
 }
 </style>

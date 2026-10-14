@@ -329,7 +329,28 @@ v2 后端约 40 个事件里，**只有 `SCAN_BANNER` 的 payload 带展示字�
 
 ### 图表
 
-业务组件一律走 `vue-echarts`（`app.component('VChart', VChart)` 全局注册），模块化注册统一在 `src/plugins/echarts.ts`。**禁止**在业务组件内值导入 `echarts/core` + `echarts.init()` + 自写 ResizeObserver / dispose 生命周期（type-only import 不受限）。`src/components/EChart.vue` 是历史兜底薄壳，不在新增代码中使用。
+业务组件一律走 `vue-echarts` 8.3.1：`VChart` 在 `src/main.ts` 全局注册（`app.component('VChart', VChart)`），SFC 模板里直接写 `<v-chart>`，**不局部 import**（全仓唯一的 `from 'vue-echarts'` 在 `src/plugins/echarts.ts`）。**禁止**在业务组件内值导入 `echarts/core` + `echarts.init()` + 自写 ResizeObserver / dispose 生命周期（type-only import 不受限）。`echarts.use()` 的**唯一**落点是 `src/plugins/echarts.ts`（模块化注册 + `import 'echarts/theme/v5'` 副作用导入）—— 要新增图表类型 / 组件 / 特性就往那里加，业务组件自己不 `use`。
+
+**两种承载点形态，按图的职责选**
+
+- ① 纯展示、option 只由本组件数据算出 ⇒ 直接在页面 / tab 的 `<template>` 里写 `<v-chart>`（statistics 三个 tab 5 张图）。
+- ② 图带交互下钻（`@click` emit）或 option 有多条视觉约束（配色来源、图层顺序、legend 与 series 逐字对齐）⇒ 收进**域内**专用组件，页面只见组件不见 `<v-chart>`（dashboard 的 `UpcomingDeliveryChart.vue`）。
+
+判据同「目录归位」：只有一处消费方的图组件留在域内（依赖域内常量与布局），不上提 `src/components/`。
+
+**传参口径逐项相同，缺一即行为或视觉回退**
+
+| 传参 | 为什么必须 |
+|---|---|
+| `:option="xxxOption"` | option 是 computed 每次重算的整份新对象 |
+| `:update-options="{ notMerge: true }"` | 把更新语义**显式钉死**成整份替换。不传 update-options 时 vue-echarts 走**结构签名 planner** —— 它比对前后 option 的结构签名，结构变了自己会翻成 `notMerge`，只有纯数值变化才合并。那是库的启发式、**行为随库版本漂移** ⇒ 显式钉死，不依赖 planner 的判断 |
+| `autoresize` | vue-echarts 内建 ResizeObserver（默认 100ms 节流，容器尺寸未变时跳过 resize），容器尺寸变化自动重画 |
+| `theme="v5"` | echarts 6 的缺省主题在配色与 legend 默认位置上与 v5 不同；v5 主题的注册绑死在 `plugins/echarts.ts`，图表组件自己不碰主题 |
+| `:init-options="{ renderer: 'canvas' }"` | 渲染器不交给缺省值，显式钉 canvas（仓内只注册了 `CanvasRenderer`） |
+
+高度走 `:style` 绑定（纯 CSS，canvas 自适应容器），不是 prop。
+
+**守卫是源码契约断言，不是 mount 断言**：图表渲染要真 canvas，node / happy-dom 都没有布局引擎与 canvas 后端，mount 后量到的只有一具空壳；能测出回归的只有「渲染方式 + option 更新语义 + 高度」这几条静态契约。⚠️ **扫描范围必须收到 `<template>` / `<script>` 段**：全文正则会被 `//` 注释里出现的 `<v-chart>` 字面量当成开标签，`[\s\S]*?` 再向后惰性吃到别处的 `/>`，凭空多出一个指不到位置的断言失败。域内 spec（`views/<域>/__tests__/chartContract.spec.ts`）只守本域承载点的传参与逐格高度；「兜底壳归零 + `echarts.use()` 只有一个落点」这两条**跨域**不变量归 `src/plugins/__tests__/echartsContract.spec.ts`。
 
 ### 共享批次卡片
 

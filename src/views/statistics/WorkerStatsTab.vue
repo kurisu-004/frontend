@@ -64,7 +64,15 @@
           </el-radio-group>
         </div>
       </template>
-      <EChart :option="barOption" height="360px" />
+      <v-chart
+        class="chart"
+        :option="barOption"
+        :update-options="{ notMerge: true }"
+        :init-options="{ renderer: 'canvas' }"
+        :style="{ height: '360px', width: '100%' }"
+        theme="v5"
+        autoresize
+      />
     </el-card>
 
     <!-- 表 -->
@@ -125,7 +133,6 @@
 <script setup lang="ts">
 import { computed, h, ref } from 'vue';
 import { ElProgress, ElTag } from 'element-plus';
-import EChart from '@/components/EChart.vue';
 import { listWorkTypes } from '@/api/workType';
 import type { WorkType } from '@/types/workType';
 import { useStatisticsWorkersQuery } from './composables/useStatisticsWorkersQuery';
@@ -318,6 +325,18 @@ function minutesToHoursText(minutes: unknown): string {
 
 // ============== ECharts options ==============
 
+// 2026-10-14 新增：图走全局 <v-chart>（vue-echarts，模块化注册在 src/plugins/echarts.ts）。
+// 四处传参各有理由：
+//
+//   - :update-options="{ notMerge: true }"：option 是 computed 每次重算的整份新对象，
+//     更新语义显式钉死成「整份替换」。不传 update-options 时 vue-echarts 走结构签名
+//     planner（它比对前后 option 的结构签名，结构变了自己会翻成 notMerge，只有纯数值
+//     变化才合并）—— 那是库的启发式、随版本漂移 ⇒ 显式钉死，不依赖 planner 判断。
+//     切指标只改 series.data 与 xAxis.minInterval（xAxis.type 两支恒为 'value'）。
+//   - autoresize：vue-echarts 内建 ResizeObserver（默认 100ms 节流，尺寸未变时跳过 resize）。
+//   - theme="v5"：锁定配色 / legend 默认位置（v5 主题在 src/plugins/echarts.ts 注册）。
+//   - :init-options="{ renderer: 'canvas' }"：渲染器不交给缺省值，显式钉 canvas。
+
 /** 2026-10-12 新增：图表指标可切「领取次数 / 有效工时」。默认仍是「领取次数」
  *  （与本轮之前一致）；两档的数据来源是同一份 rows，只是取的字段与单位不同。 */
 type ChartMetric = 'pickup' | 'effective';
@@ -394,6 +413,13 @@ const barOption = computed(() => {
 .chart-title {
   font-weight: 600;
   font-size: 14px;
+}
+
+/* 图表容器：宽跟随卡片，高由模板里的 style 绑定给（360px）。min-width: 0 防 flex
+   子项被内容顶开。 */
+.chart {
+  width: 100%;
+  min-width: 0;
 }
 
 /* 2026-10-12：图表标题 + 指标切换控件同行 */
