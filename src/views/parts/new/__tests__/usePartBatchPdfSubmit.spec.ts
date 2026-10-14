@@ -678,6 +678,60 @@ describe('上传重试（job 粒度）', () => {
     expect(api.pdfFiles.value).toHaveLength(0);
     w.unmount();
   });
+
+  // 2026-10-21：这条守的是 cell 状态的**中间态**，此前全仓一条断言都没有（52 条相关用例
+  // 断言的全是终态 error / done）。`jobStates` 是非响应式 Map、cell 状态 100% 靠命令式
+  // `syncCells()` 推导 ⇒ 少同步一次不报错、也不影响任何终态断言，UI 上却是「整个上传过程
+  // 状态格停在 pending，直到第一个 job 结束才跳 done/error」。写 jobStates 一律经
+  // markJobState / settleJob 就是为了「忘了同步」在代码形状上不可表达，这条让「删掉那次
+  // 同步」本身是红的。
+  it('上传在途时状态格是 uploading（不是一直停在 pending 等收口才跳）', async () => {
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    api.pdfForm.customerL1Id = 'c-root';
+    api.pdfFiles.value = [up(1, 'A-1_件.pdf')];
+    await api.rebuildFromUploads();
+    const row = api.standaloneParts.value[0]!;
+    row.customer_id = 'c-root';
+    mocks.batchCreateParts.mockResolvedValue({
+      created: [{ id: '9001', sourceIndex: 0 }],
+      failed: [],
+    });
+
+    // 受控挂起点：让这次上传停在「已发出、未回来」，那段时间就是 UI 上「上传中」的窗口。
+    // 与既有 `loadGate` 同一手法，只是挂在上传端点上。
+    let release!: () => void;
+    const gate = new Promise<void>((res) => {
+      release = res;
+    });
+    mocks.uploadPartDrawing.mockImplementation(() => gate);
+
+    // 不 await 提交：先让它跑到上传在途，再断言状态格。
+    // 顺带把这个 cell 对象抓住：成功收口会把整张 cell 表清空，「转 done」只能断言在
+    // 这个被摘下来的对象上（它记着最后一次 syncCells 的结果）。
+    const submitting = api.onSubmit();
+    await flushPromises();
+
+    expect(mocks.uploadPartDrawing).toHaveBeenCalledTimes(1);
+    const cell = api.getRowPdfCell(row);
+    expect(cell?.status).toBe('uploading');
+    expect(cell?.progress).toBe(0);
+    // 阶段机与 cell 是两个独立信号：这里一并钉住「有在途」这个语义
+    expect(api.commitStage.value).toBe('uploading');
+
+    release();
+    await submitting;
+    await flushPromises();
+
+    expect(cell?.status).toBe('done');
+    expect(cell?.progress).toBe(100);
+    expect(api.commitStage.value).toBe('done');
+    // 全成功 ⇒ 正常收口：cell 表清空、行摘掉、跳页
+    expect(api.getRowPdfCell(row)).toBeUndefined();
+    expect(api.standaloneParts.value).toHaveLength(0);
+    w.unmount();
+  });
 });
 
 describe('建单之后的异常', () => {

@@ -7,8 +7,8 @@
 //     解析段的「重新解析 / 合并 / 手动新增」与提交段的「建单 / 上传」都要过它们。
 //
 // 为什么它们住在这一层而不是某一段：这两道闸门被解析段与提交段**双向**调用，放进任一
-// 段都会立刻造出 `解析 → 提交` 与 `提交 → 解析` 两条依赖边。放在状态层后，四段的
-// 依赖是单向的：`状态 → 回填 → 解析 → 行 → 提交`（见各段文件头的依赖段）。
+// 段都会立刻造出 `解析 → 提交` 与 `提交 → 解析` 两条依赖边。放在状态层后，依赖是单向的：
+// `状态 → 回填 → 解析 → 行 → 提交 → 上传 job 子系统`（见各段文件头的依赖段）。
 //
 // 客户候选（`l1Customers` / `leafCustomerOptions`）同理：两者是 `customers` 与 `pdfForm`
 // 的纯派生，且回填段的「Excel 部门名 → 客户 id」与页面的两级下拉读的是同一份口径
@@ -35,8 +35,8 @@ import type { BidRow } from '@/utils/bidExcelParser';
 import type { UploadFile } from 'element-plus';
 
 /**
- * 三段共享的响应式状态与纯派生。对外只经 `usePartBatchPdf` 的返回面暴露，
- * 不直接 import 使用（`rowEpoch` 等提交段私有的运行时量除外，见 `PdfBatchState`）。
+ * 各段共享的响应式状态与纯派生。对外只经 `usePartBatchPdf` 的返回面暴露，不直接
+ * import 使用。
  */
 export interface PdfBatchState {
   // ---- shell 传入的环境 ----
@@ -172,8 +172,8 @@ export interface PdfBatchState {
 }
 
 /**
- * 创建共享状态。整个 composable 只调一次；四段工厂拿到的都是同一个对象 ⇒ ref 身份唯一、
- * 各段闭包共享同一份状态。
+ * 创建共享状态。整个 composable 只调一次；各段工厂（含上传 job 子系统）拿到的都是同一个
+ * 对象 ⇒ ref 身份唯一、各段闭包共享同一份状态。
  */
 export function createPdfBatchState(opts: UsePartBatchPdfOptions): PdfBatchState {
   const { customers, successNextTab } = opts;

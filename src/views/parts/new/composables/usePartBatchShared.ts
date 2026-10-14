@@ -106,3 +106,35 @@ export function toMoneyString(n: number | null | undefined): string | undefined 
   if (n == null || !Number.isFinite(n)) return undefined;
   return n.toFixed(2);
 }
+
+/**
+ * 受控并发跑一批 async 函数：任意时刻同时在跑的 `fn` 不超过 `limit` 个。
+ *
+ * 2026-10-21 从 `usePartBatchPdfSubmit.ts` 提到本模块：PDF Tab 内有两个互相独立的消费方
+ * （图纸 / 3D 上传的 `runUploadJobs`、装配件建单的 `createAssemblyGroups`），它们要的
+ * 并发形状逐字相同、瓶颈却不同（前者受字节流约束、后者受服务端写事务约束）—— 约束取值
+ * 由各调用方自带，这里只提供「最多同时跑 N 个」这一件事。
+ *
+ * **异常不在这里兜**：某个 `fn` 抛错会照常冒泡给调用方，它所在的那个 worker 随之退出
+ * （剩下的 item 由其余 worker 接手继续跑；`limit = 1` 时无人接手，它后面的 item 全部不再
+ * 执行）⇒ **每个 `fn` 必须自己 try/catch**（两个调用方都是这么写的，
+ * 因为它们各自的失败语义完全不同：上传失败是「工单已落库、只差图纸」，建单失败是
+ * 「这一行没建出来」，两者都不能用同一个兜底）。共享层若改成吞掉异常，调用方就会拿到
+ * 「这一批全部跑完了」的假象 —— 一个失败的 item 静默消失，而它代表的请求要么没发出去、
+ * 要么结果不明。
+ */
+export async function runWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  fn: (it: T, idx: number) => Promise<void>,
+): Promise<void> {
+  if (items.length === 0) return;
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const i = cursor++;
+      await fn(items[i]!, i);
+    }
+  });
+  await Promise.all(workers);
+}
