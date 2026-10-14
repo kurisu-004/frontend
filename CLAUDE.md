@@ -350,7 +350,11 @@ v2 后端约 40 个事件里，**只有 `SCAN_BANNER` 的 payload 带展示字�
 
 高度走 `:style` 绑定（纯 CSS，canvas 自适应容器），不是 prop。
 
-**守卫是源码契约断言，不是 mount 断言**：图表渲染要真 canvas，node / happy-dom 都没有布局引擎与 canvas 后端，mount 后量到的只有一具空壳；能测出回归的只有「渲染方式 + option 更新语义 + 高度」这几条静态契约。⚠️ **扫描范围必须收到 `<template>` / `<script>` 段**：全文正则会被 `//` 注释里出现的 `<v-chart>` 字面量当成开标签，`[\s\S]*?` 再向后惰性吃到别处的 `/>`，凭空多出一个指不到位置的断言失败。域内 spec（`views/<域>/__tests__/chartContract.spec.ts`）只守本域承载点的传参与逐格高度；「兜底壳归零 + `echarts.use()` 只有一个落点」这两条**跨域**不变量归 `src/plugins/__tests__/echartsContract.spec.ts`。
+**守卫按承载点形态分两种，不是一律禁 mount**。量不到的是**渲染像素与布局尺寸**（node / happy-dom 没有布局引擎与 canvas 后端），这部分只能退回静态断言；但**传参本身是可以 mount + `global.stubs` 断言的**：给 `<v-chart>` 落一个 `props` 列表与真实 vue-echarts 对齐、`template` 留空的 stub，`findComponent({ name: 'VChart' }).props('theme')` 就读得到真传参 —— 形态② 的图（收进组件、有组件边界）走的就是这条，样板见 `views/dashboard/components/__tests__/UpcomingDeliveryChart.spec.ts` 的 C5（theme + initOptions.renderer）。**形态①（页面级，`<v-chart>` 直接写在 tab 模板里）没有组件边界**，mount 它要把整条查询栈连同一堆 Element Plus 替身都拉起来，成本远高于「传参 + 高度」两条静态断言，才退到源码契约断言 `views/<域>/__tests__/chartContract.spec.ts`。
+
+⚠️ 源码扫描有两条硬要求：**范围收到 `<template>` / `<script>` 段** —— 全文正则会被 `//` 注释里出现的 `<v-chart>` 字面量当成开标签，`[\s\S]*?` 再向后惰性吃到别处的 `/>`，凭空多出一个指不到位置的断言失败；**块定位失败必须当场红** —— 定位不到时断言对象是空串，`not.toMatch('')` 恒真，整条断言静默空转。前置断言收在唯一的取段入口上（`markupOf` / `logicOf`），不要散在各用例里手写。
+
+域内 spec 守本域承载点的**传参逐项**、**逐格高度**与「**本域不消费兜底壳**」三条；「兜底壳文件归零 + `echarts.use()` / `echarts.init()` / echarts 值导入只落在注册点」是**跨域**不变量，归 `src/plugins/__tests__/echartsContract.spec.ts` —— 那份扫**整个 `src/`**（域内那份是它的严格子集，故不必在域内重复），扫整文件时 `.vue` 要**先剥 `<!-- -->` 再剥 JS 注释**，否则模板注释里的字面量会造成幻影命中。
 
 ### 共享批次卡片
 
