@@ -106,3 +106,27 @@ export function toMoneyString(n: number | null | undefined): string | undefined 
   if (n == null || !Number.isFinite(n)) return undefined;
   return n.toFixed(2);
 }
+
+/**
+ * 受控并发跑 async 函数；单个 item 抛错不影响其它 item（异常在各 fn 内自兜）。
+ *
+ * 2026-10-21 从 `usePartBatchPdfSubmit.ts` 提到本模块：PDF Tab 内有两个互相独立的消费方
+ * （图纸 / 3D 上传的 `runUploadJobs`、装配件建单的 `createAssemblyGroups`），它们要的
+ * 并发形状逐字相同、瓶颈却不同（前者受字节流约束、后者受服务端写事务约束）—— 约束取值
+ * 由各调用方自带，这里只提供「最多同时跑 N 个」这一件事。
+ */
+export async function runWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  fn: (it: T, idx: number) => Promise<void>,
+): Promise<void> {
+  if (items.length === 0) return;
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const i = cursor++;
+      await fn(items[i]!, i);
+    }
+  });
+  await Promise.all(workers);
+}

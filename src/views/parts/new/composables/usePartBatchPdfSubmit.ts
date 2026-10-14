@@ -10,19 +10,23 @@
 // 重试集合）都在这里；草稿持久化也在这一段 —— 它监听 `commitStage`，且由 `onSubmit` 在
 // 建单前 flush、由收口在成功后 clear。
 //
-// 依赖：共享状态层 + 行段（`effectiveChildren` / `totalAssemblyChildren`）。解析段与
-// 回填段的状态（源、行、Excel 快照）都只经状态层读入，本段不再 import 那两个工厂。
+// 依赖：共享状态层 + 行段（`effectiveChildren` / `totalAssemblyChildren`）+ 上传 job 子系统
+// （`usePartBatchPdfUploads`）。解析段与回填段的状态（源、行、Excel 快照）都只经状态层
+// 读入，本段不再 import 那两个工厂。
+//
+// 「一批上传作业」的登记 / 调度 / 状态格 / 失败清单在上传 job 子系统里（2026-10-21 拆出，
+// 见 `usePartBatchPdfUploads.ts` 文件头）。本段保留的是**阶段机与收口**：三段状态迁移、
+// 建单两路、草稿落库 / 清场、以及收口后的清场与跳页。本段没有一个纯上传的派生被留在外面
+// 复述 —— `getRowPdfCell` / `getRowThreeDCell` 是转发，不是实现。
 
-import { computed, ref, watch, type ComputedRef } from 'vue';
+import { computed, watch, type ComputedRef } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useRouter } from 'vue-router';
 import { batchCreateParts } from '@/api/parts';
 import type { PartBatchCreatePayload, PartBatchResult } from '@/api/parts';
-import { uploadFileObject } from '@/api/files/objects';
 import { createAssembly } from '@/api/assembly';
 import type { AssemblyCreatePayload } from '@/types/assembly';
-import { isPartFileDuplicateError, type PartFileKind } from '@/types/part_file';
-import { toMoneyString } from './usePartBatchShared';
+import { runWithConcurrency, toMoneyString } from './usePartBatchShared';
 import { usePartsNewDraft } from './usePartsNewDraft';
 import type {
   SerializedAssemblyChildRow,
@@ -32,14 +36,11 @@ import type {
 } from './usePartsNewDraft';
 import type { PdfBatchState } from './usePartBatchPdfState';
 import type { UsePartBatchPdfRows } from './usePartBatchPdfRows';
+import { usePartBatchPdfUploads } from './usePartBatchPdfUploads';
 import type {
   AssemblyChildRow,
   AssemblyGroupFailure,
   AssemblyRow,
-  CreatedTargetRef,
-  FileUploadEntry,
-  PdfSource,
-  RowRef,
   StandalonePartRow,
   UploadJob,
   UploadStatusCell,
@@ -79,30 +80,25 @@ export function usePartBatchPdfSubmit(
     commitStage,
     createdTargets,
     itemRowUids,
-    pdfUploadCells,
-    threeDUploadCells,
     uploadJobs,
     failedJobs,
-    runningJobIds,
   } = state;
   const { effectiveChildren, totalAssemblyChildren } = rowSeg;
 
   /**
-   * 2026-10-04 定：并发上限。瓶颈在后端内存 —— `upload_part_file` 把整份 multipart
-   * 读进内存（`&[u8]`）再转存对象存储，单文件上限 300MB（`cos.max_file_size`），
-   * 所以 6 是「几路并发不至于把后端内存打爆」的保守值，不是吞吐最优值。
-   * 不取更小的 3：文件字节现在全过后端，限制在服务端一侧（对象存储直传链路才是
-   * 浏览器侧受限），按浏览器侧的余量取值对后端没有意义。
+   * 上传 job 子系统（登记 / 调度 / 状态格 / 失败清单 / 清场 / 世代号）。它与本段之间
+   * 只有「阶段机」这一个耦合点：本段转 `commitStage`，子系统的任何一个函数都不碰它。
    */
-  const PART_UPLOAD_CONCURRENCY = 6;
+  const uploads = usePartBatchPdfUploads(state, rowSeg);
 
   /**
    * 2026-10-05 定：装配件建单的并发上限（`POST /assemblies`，每组一次请求）。
    *
-   * 不沿用 `PART_UPLOAD_CONCURRENCY`（6）：那个值的瓶颈是**字节流**（整份 multipart 进
-   * 后端内存），装配件建单一个请求只发几 KB JSON，字节维度根本不是约束。装配件建单的
-   * 真实约束在服务端写事务：每组要派 1 个装配件流水号（`t_serial_counter` 上一次 UPSERT）
-   * + 1 条 `t_assembly` + N 条 `t_part` INSERT，组数一多请求就在同一张计数表上排队。
+   * 不沿用上传侧的并发上限（图纸 / 3D 上传是 6，见 `usePartBatchPdfUploads`）：那个值的
+   * 瓶颈是**字节流**（整份 multipart 进后端内存），装配件建单一个请求只发几 KB JSON，
+   * 字节维度根本不是约束。装配件建单的真实约束在服务端写事务：每组要派 1 个装配件流水号
+   * （`t_serial_counter` 上一次 UPSERT）+ 1 条 `t_assembly` + N 条 `t_part` INSERT，
+   * 组数一多请求就在同一张计数表上排队。
    *
    * 取 3 而不是串行：一次批量导入的装配件组数是个位数（合并多页 PDF 才能凑出一组），
    * 串行会把每组的往返时间线性叠加；3 路足够把等待摊薄，又把同一 L1 客户计数表上的
@@ -110,159 +106,14 @@ export function usePartBatchPdfSubmit(
    */
   const ASSEMBLY_CREATE_CONCURRENCY = 3;
 
-  /**
-   * 任意 Blob → File。PdfSource.raw 在合成路径（pdf-lib save()）下是 Blob 而非 File。
-   * 这里统一包成 File 以简化下游类型。
-   */
-  function ensureFile(blob: Blob, filename: string): File {
-    if (blob instanceof File) return blob;
-    return new File([blob], filename, { type: blob.type || 'application/octet-stream' });
-  }
-
-  /** 受控并发跑 async 函数；单个 item 抛错不影响其它 item（异常在各 fn 内自兜）。 */
-  async function runWithConcurrency<T>(
-    items: T[],
-    limit: number,
-    fn: (it: T, idx: number) => Promise<void>,
-  ): Promise<void> {
-    if (items.length === 0) return;
-    let cursor = 0;
-    const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-      while (cursor < items.length) {
-        const i = cursor++;
-        await fn(items[i]!, i);
-      }
-    });
-    await Promise.all(workers);
-  }
-
-  /**
-   * 决定某个 row 的 PDF 单元（用于 UI 显示上传状态）。
-   * `pdfSourceUid` 允许为 null = 该实体没有要传的 PDF（装配件无总装图时顶层就是这种
-   * 情况），此时不占状态格。
-   */
+  /** 转发：某行的 PDF 状态格由 job 子系统按 cell 表推导（无原件的实体不占格）。 */
   function getRowPdfCell(row: { pdfSourceUid: string | null }): UploadStatusCell | undefined {
-    if (!row.pdfSourceUid) return undefined;
-    return pdfUploadCells[`pdf:${row.pdfSourceUid}`];
+    return uploads.getRowPdfCell(row);
   }
-  /** 决定某个 row 的 3D 单元。 */
+  /** 转发：某行的 3D 状态格，同上。 */
   function getRowThreeDCell(row: { three_d_index: number | null }): UploadStatusCell | undefined {
-    if (row.three_d_index === null) return undefined;
-    const f = threeDModelFiles.value[row.three_d_index];
-    if (!f) return undefined;
-    return threeDUploadCells[`3d:${f.uid}`];
+    return uploads.getRowThreeDCell(row);
   }
-
-  /** 收集本批次所有待上传文件（PDF + 3D），按 (kind, srcUid/fileUid) 去重。 */
-  function collectFilesToUpload(): FileUploadEntry[] {
-    const map = new Map<string, FileUploadEntry>();
-    const ensure = (key: string, make: () => FileUploadEntry): FileUploadEntry => {
-      const existing = map.get(key);
-      if (existing) return existing;
-      const created = make();
-      map.set(key, created);
-      return created;
-    };
-    /**
-     * 装一个 PDF 条目并把 row 挂上去（每个实体一个独立切片 ⇒ key 天然唯一）。
-     *
-     * `kind: 'DRAWING'` 对**所有** PDF 一视同仁 —— 它描述的是「原件是一份 PDF 图纸」，
-     * 与这条原件挂到 `t_part` 还是 `t_assembly` 无关。落库时装配件顶层会被换成
-     * `ASSEMBLY_MASTER`（转换点在 `runUploadJobs`），所以这里**不要**按 ref 分流。
-     */
-    const attachPdf = (src: PdfSource, ref: RowRef): void => {
-      const key = `pdf:${src.uid}`;
-      ensure(key, () => ({
-        key,
-        kind: 'DRAWING',
-        filename: src.filename,
-        file: ensureFile(src.raw, src.filename),
-        size: src.raw.size,
-        contentType: src.raw.type || 'application/pdf',
-        rowRefs: [],
-      })).rowRefs.push(ref);
-    };
-
-    // 1) PDF：独立零件行
-    for (const r of standaloneParts.value) {
-      const src = allPdfs.value.find((s) => s.uid === r.pdfSourceUid);
-      if (!src) continue;
-      attachPdf(src, { rowKind: 'standalone', rowUid: r.uid });
-    }
-    // 2) PDF：装配件 —— 每个子件一份单页切片；总装图可选（也是独立的那一页的切片）
-    for (const a of assemblies.value) {
-      for (const c of effectiveChildren(a)) {
-        const src = allPdfs.value.find((s) => s.uid === c.pdfSourceUid);
-        if (!src) continue;
-        attachPdf(src, { rowKind: 'asmChild', rowUid: c.uid, asmUid: a.uid });
-      }
-      // 「无总装图」⇒ 顶层一个 job 都不产生（库里就不会有 ASSEMBLY_MASTER 行）
-      if (!a.masterPdfSourceUid) continue;
-      const master = allPdfs.value.find((s) => s.uid === a.masterPdfSourceUid);
-      if (!master) continue;
-      attachPdf(master, { rowKind: 'asmMaster', rowUid: a.uid });
-    }
-    // 3) 3D 模型：被 row 引用的（three_d_index 指向的文件）
-    const attachThreeD = (ref: RowRef, idx: number): void => {
-      const f = threeDModelFiles.value[idx];
-      const raw = f?.raw as File | undefined;
-      if (!f || !raw) return;
-      const key = `3d:${f.uid}`;
-      ensure(key, () => ({
-        key,
-        kind: '3D_MODEL',
-        filename: f.name,
-        file: raw,
-        size: raw.size,
-        contentType: raw.type || 'application/octet-stream',
-        rowRefs: [],
-      })).rowRefs.push(ref);
-    };
-    for (const r of standaloneParts.value) {
-      if (r.three_d_index !== null)
-        attachThreeD({ rowKind: 'standalone', rowUid: r.uid }, r.three_d_index);
-    }
-    // 装配件子件走 effectiveChildren，与建单口径（buildAssemblyPayload）对齐：被指定为
-    // 总装图的那一页不建出子件，遍历它只会挂出一个没有 job 的 entry。
-    // 2026-10-05：这一处**对外不可观测** —— 不建 job 就不进 jobsByCellKey，syncCells 也不
-    // 会凭空造 cell，composable 的返回面上看不出差别。保留这个写法是为了不给「一个
-    // PdfSource 同时挂 asmChild + asmMaster 两种 ref」留下悬空引用；配套用例锁的是
-    // 用户可见的那条不变式：被排除那一行不占 3D 状态格。
-    for (const a of assemblies.value) {
-      for (const c of effectiveChildren(a)) {
-        if (c.three_d_index !== null) {
-          attachThreeD({ rowKind: 'asmChild', rowUid: c.uid, asmUid: a.uid }, c.three_d_index);
-        }
-      }
-    }
-    return Array.from(map.values());
-  }
-
-  /**
-   * 2026-10-04：行集合世代号，**只在行的增删换时 +1**（新 uid 进表 / 行被移除 / 整表
-   * 被替换）；行内字段编辑不动它，所以用户改个数量不会误触发。
-   *
-   * `flush: 'sync'` 让它在改动发生的那一刻同步递增，于是「谁改的行集合」这件事
-   * 不必逐个入口打点 —— 重新解析 / 手动新增 / 合并 / 拆分 / 删除，以及将来新增的入口，
-   * 全部被这一个收口覆盖。`rowEpoch` 的唯一消费方是 `summarizeUploads` 的世代校验。
-   */
-  const rowEpoch = ref(0);
-  watch(
-    () =>
-      `${standaloneParts.value.map((r) => r.uid).join('|')}#${assemblies.value
-        .map((a) => a.uid)
-        .join('|')}`,
-    () => {
-      rowEpoch.value += 1;
-    },
-    { flush: 'sync' },
-  );
-
-  /**
-   * 本次提交 / 补传开始时的世代号快照。收口时与 `rowEpoch` 比对：不等说明用户在这期间
-   * 换过行集合，本次收口的计数、清场、跳页已经对不上当前表格。
-   */
-  let submitRowEpoch = 0;
 
   /** 已建出实体按表计数（提示文案 / 主按钮文案用；装配件子件计入 `parts`）。 */
   const createdCounts = computed<{ parts: number; assemblies: number; total: number }>(() => {
@@ -275,88 +126,19 @@ export function usePartBatchPdfSubmit(
     return { parts, assemblies, total: parts + assemblies };
   });
 
-  /** 当前是否有任何 job 上传失败（主按钮 disabled + 重试分支的判据）。 */
-  const hasUploadErrors = computed<boolean>(() => failedJobs.size > 0);
+  /** 转发：是否有 job 上传失败（主按钮 disabled + 重试分支的判据）。 */
+  const hasUploadErrors = uploads.hasUploadErrors;
 
-  /** 失败 job 数（按钮文案用，口径与失败清单的行一一对应）。 */
-  const failedJobCount = computed<number>(() => failedJobs.size);
+  /** 转发：失败 job 数（按钮文案用，口径与失败清单的行一一对应）。 */
+  const failedJobCount = uploads.failedJobCount;
 
-  /** cell key → 对应的响应式 cell（PDF / 3D 分表存）。 */
-  function cellOf(jobKey: string, kind: PartFileKind): UploadStatusCell | undefined {
-    return kind === 'DRAWING' ? pdfUploadCells[jobKey] : threeDUploadCells[jobKey];
-  }
-
-  /**
-   * 由 jobStates / failedJobs 重新推导每个 cell 的状态，**不就地覆盖**。
-   *
-   * 同一份文件可能被多个 job 共用一个 cell（多行共享原件时）：任一 job 失败即 error
-   * （该文件确实没传全），但重试时只重跑失败的那个 job，成功过的不会再动。error 文案
-   * 取第一个失败 job 的错误（同一份文件、同一批请求，错误基本一致）。
-   */
-  function syncCells(): void {
-    for (const [jobKey, jobs] of state.jobsByCellKey) {
-      const cell = cellOf(jobKey, jobs[0]!.kind);
-      if (!cell) continue;
-      const firstFailed = jobs.find((j) => failedJobs.has(j.id));
-      if (firstFailed) {
-        cell.status = 'error';
-        cell.progress = 0;
-        cell.error = failedJobs.get(firstFailed.id)!.error;
-        continue;
-      }
-      delete cell.error;
-      if (jobs.every((j) => state.jobStates.get(j.id) === 'done')) {
-        cell.status = 'done';
-        cell.progress = 100;
-      } else if (jobs.some((j) => state.jobStates.get(j.id) === 'uploading')) {
-        cell.status = 'uploading';
-        cell.progress = 0;
-      } else {
-        cell.status = 'pending';
-        cell.progress = 0;
-      }
-    }
-  }
-
-  /** 登记一次提交的全部 job（并按 jobKey 建 cell）。重试不重跑这里。 */
-  function registerUploadJobs(jobs: UploadJob[]): void {
-    uploadJobs.value = jobs;
-    state.jobsByCellKey = new Map();
-    state.jobStates.clear();
-    failedJobs.clear();
-    Object.keys(pdfUploadCells).forEach((k) => delete pdfUploadCells[k]);
-    Object.keys(threeDUploadCells).forEach((k) => delete threeDUploadCells[k]);
-    for (const job of jobs) {
-      const list = state.jobsByCellKey.get(job.jobKey) ?? [];
-      list.push(job);
-      state.jobsByCellKey.set(job.jobKey, list);
-      state.jobStates.set(job.id, 'pending');
-      const bucket = job.kind === 'DRAWING' ? pdfUploadCells : threeDUploadCells;
-      if (!bucket[job.jobKey]) bucket[job.jobKey] = { status: 'pending', progress: 0 };
-    }
-    syncCells();
-  }
-
-  /**
-   * 失败 job 的目标实体标签（失败清单 / 汇总标题用）。
-   * 装配件子件与独立零件都是 `t_part` 行，标「第 X 号零件」；装配件顶层是 `t_assembly`
-   * 行，标「装配件 X」—— 两者的 id 是两套雪花，混标会让用户拿着装配件 id 去零件列表里找。
-   */
-  function jobOwnerLabel(job: UploadJob): string {
-    return job.target === 'assembly' ? `装配件 ${job.ownerId}` : `第 ${job.ownerId} 号零件`;
-  }
-
-  /** 失败 job 清单（每行 = 一个目标实体 × 一份原件），汇总时弹给用户看。 */
-  function failedJobLines(): string[] {
-    return Array.from(failedJobs.values()).map(
-      (f) => `${jobOwnerLabel(f.job)} · ${f.job.entry.filename}：${f.error}`,
-    );
-  }
+  /** 转发：工单已建但 job 列表没登记上（可现场重建补传）。 */
+  const needsUploadRebuild = uploads.needsUploadRebuild;
 
   /**
    * 汇总上传结果：无失败 → 提示 + 清空跳页；有失败 → 弹清单 + 保留现场供重试。
    *
-   * **前提**：行集合自 `submitRowEpoch` 快照以来没被改过（见开头的世代校验）。收口的
+   * **前提**：行集合自本轮上传起跑时的世代快照以来没被改过（见开头的世代校验）。收口的
    * 计数 / 清场 / 跳页全部以「当前表格 == 建单时那张表」为前提，不成立就只能如实告知。
    *
    * 计数口径统一为 **job**（一个目标实体 × 一份原件 = 一项），与下面清单的行一一对应：
@@ -373,7 +155,7 @@ export function usePartBatchPdfSubmit(
     // 会把 `createdTargets` 一并清空、行 uid 全部换新）时，下面的计数 / 清场 / 跳页
     // 都对不上当前表格：走成功收口会把用户刚建好的行静默清掉、跳到零件列表、再弹一条
     // 「成功创建 0 条零件」的假提示，而工单其实已经落库了。
-    if (rowEpoch.value !== submitRowEpoch) {
+    if (!uploads.rowsUnchangedSinceEpoch()) {
       const lost = failedJobs.size > 0 ? `其中 ${failedJobs.size} 项文件未上传成功。\n` : '';
       ElMessageBox.alert(
         `工单已经创建，但提交期间本地表格被改过，本次结果已无法与当前表格对应。\n` +
@@ -383,12 +165,7 @@ export function usePartBatchPdfSubmit(
       );
       return;
     }
-    const unfinished = uploadJobs.value.filter((j) => state.jobStates.get(j.id) !== 'done');
-    for (const job of unfinished) {
-      if (!failedJobs.has(job.id)) {
-        failedJobs.set(job.id, { job, error: '未完成（上传过程被中断）' });
-      }
-    }
+    uploads.settleUnfinishedJobs();
     if (uploadJobs.value.length === 0 && createdTargets.size > 0) {
       ElMessageBox.alert(
         `工单已创建 ${createdCountText()}，但文件一个都没上传（上传任务没能登记）。\n\n可在本页点「重试上传」补传（不会重复建单）。`,
@@ -398,7 +175,7 @@ export function usePartBatchPdfSubmit(
       return;
     }
     if (failedJobs.size > 0) {
-      const lines = failedJobLines();
+      const lines = uploads.failedJobLines();
       const ownerCount = new Set(Array.from(failedJobs.values(), (f) => f.job.ownerId)).size;
       const fileCount = new Set(Array.from(failedJobs.values(), (f) => f.job.jobKey)).size;
       const sample = lines.slice(0, 5).join('\n');
@@ -429,7 +206,9 @@ export function usePartBatchPdfSubmit(
     ElMessage.success(`成功创建 ${segs.join(' + ') || '0 条'}${hint}`);
     // 2026-10-04：草稿在这里才清 —— 还有上传失败就必须留着（工单已落库，图样要靠本页
     // 的 job 现场补传）。注意草稿对 Tab 2 是**只写**的（`pdf_tab` 段没有回读路径，
-    // 刷新后表格本来就是空的），清掉它不代表行可恢复。
+    // 刷新后表格本来就是空的），清掉它不代表行可恢复。⚠️ **顺序承重**：`saver.cancel()`
+    // 必须在 `draft.clear()` 之前 —— 反过来就是「先清空、再让一个已排期的 saver 把清空
+    // 前的现场写回盘上」。
     draft.saver.cancel();
     draft.clear();
     allPdfs.value = [];
@@ -441,76 +220,11 @@ export function usePartBatchPdfSubmit(
     // 2026-10-03：Excel 文件已清空 → 解析结果同步作废（下一批是新数据）。
     excelByDrawingNo.value = null;
     threeDModelFiles.value = [];
-    Object.keys(pdfUploadCells).forEach((k) => delete pdfUploadCells[k]);
-    Object.keys(threeDUploadCells).forEach((k) => delete threeDUploadCells[k]);
-    uploadJobs.value = [];
-    state.jobsByCellKey = new Map();
-    state.jobStates.clear();
-    failedJobs.clear();
-    runningJobIds.clear();
+    uploads.clearAllJobs();
     createdTargets.clear();
     itemRowUids.value = [];
     successNextTab.value = 'manual';
     router.push('/parts?status=PENDING');
-  }
-
-  /**
-   * 跑一批 job（受控并发）。成败记在 job 上（jobStates / failedJobs）再由 syncCells
-   * 推导 cell 状态；单个 job 抛错只记失败、不影响其它 job，也不外抛。
-   *
-   * 三条链路（装配件顶层总装图 / 子件与独立零件的图纸 / 3D 模型）同打
-   * `POST /api/v2/files/objects`；owner 与 kind 是**两个独立维度**，都按
-   * `job.target` 分流（装配件顶层 `target='assembly'` ↔ `owner_kind='ASSEMBLY'` +
-   * `kind='ASSEMBLY_MASTER'`；独立零件与装配件子件都是 `t_part` 行，`target='part'`
-   * ↔ `owner_kind='PART'`，kind 取 `job.kind`）。
-   *
-   * ⚠️ **owner_kind='ASSEMBLY' 时 kind 必须由 `'DRAWING'` 转成 `'ASSEMBLY_MASTER'`**，
-   * 不能原样传 `job.kind`（PDF 条目的 `entry.kind` 恒为 `'DRAWING'`，因为它描述的是
-   * 「原件是什么」而不是「落到 t_part_file 的哪一格」）。后端 `upload_file_for_owner`
-   * 把请求里的 `kind` **原样**写进 `t_part_file.kind`，不做 owner/kind 一致性改写 ⇒
-   * 传 `'DRAWING'` 会静默落成一张「装配件的零件图纸」行：读侧
-   * （`useAssemblyDetail`）按 `kind === 'ASSEMBLY_MASTER'` 挑总装图，挑不到；唯一索引
-   * `uk_t_part_file_single (part_id, kind)` 的 kind 维度也跟着错位。
-   *
-   * 已在途的 job 直接跳过（`runningJobIds`）：同一次上传请求重复发出去既浪费带宽，
-   * 又会撞后端唯一索引。
-   *
-   * 命中 `isPartFileDuplicateError`（后端说这个 owner 的这个 kind 已有文件）按**成功**
-   * 收：该 kind 下已有文件就说明那份文件已经在服务端，此刻把它记成失败会让每次重试
-   * 都稳定再拿一次同一个码，UI 永远停在假错误里（成因是上一次上传「已落库但响应
-   * 丢失」）。装配件总装图与零件图纸同落 `t_part_file`（`owner_kind` 不同、kind 各是
-   * 自己那一个），所以复用同一个 21108 归一。
-   */
-  async function runUploadJobs(jobs: UploadJob[]): Promise<void> {
-    const runnable = jobs.filter((j) => !runningJobIds.has(j.id));
-    if (runnable.length === 0) return;
-    await runWithConcurrency(runnable, PART_UPLOAD_CONCURRENCY, async (job) => {
-      runningJobIds.add(job.id);
-      state.jobStates.set(job.id, 'uploading');
-      syncCells();
-      try {
-        const isAssembly = job.target === 'assembly';
-        await uploadFileObject(
-          isAssembly ? 'ASSEMBLY' : 'PART',
-          job.ownerId,
-          isAssembly ? 'ASSEMBLY_MASTER' : job.kind,
-          job.entry.file,
-        );
-        state.jobStates.set(job.id, 'done');
-        failedJobs.delete(job.id);
-      } catch (e) {
-        if (isPartFileDuplicateError(e)) {
-          state.jobStates.set(job.id, 'done');
-          failedJobs.delete(job.id);
-        } else {
-          state.jobStates.set(job.id, 'error');
-          failedJobs.set(job.id, { job, error: (e as Error).message ?? '上传失败' });
-        }
-      } finally {
-        runningJobIds.delete(job.id);
-        syncCells();
-      }
-    });
   }
 
   const draft = usePartsNewDraft();
@@ -634,18 +348,6 @@ export function usePartBatchPdfSubmit(
     };
   }
 
-  /**
-   * 2026-10-04：工单已建、但上传 job 列表没登记上（构造 job 抛错 / 登记被打断）。
-   *
-   * 这时 `failedJobs` 是空的，只按「有失败 job」判可点会让主按钮显示「提交创建（N 个
-   * 零件）」却永久 disabled —— UI 在邀请一个点不动的动作，而用户看到自己填好的行唯一
-   * 合理的动作就是再点一次，那会把工单再建一遍。出路是现成的：`createdTargets` 与
-   * `itemRowUids` 还在手上，现场重建 job 列表即可（不碰建单）。
-   */
-  const needsUploadRebuild = computed<boolean>(
-    () => createdTargets.size > 0 && uploadJobs.value.length === 0,
-  );
-
   /** 是否可以点主按钮：idle 态有内容可提交；done 态还有失败 job 或待重建的 job 列表。 */
   const canSubmit = computed<boolean>(() => {
     if (commitStage.value === 'done') return hasUploadErrors.value || needsUploadRebuild.value;
@@ -691,10 +393,10 @@ export function usePartBatchPdfSubmit(
       ElMessage.warning('该文件没有待重试的记录，请重新提交');
       return;
     }
-    submitRowEpoch = rowEpoch.value;
+    uploads.beginUploadEpoch();
     pdfSubmitting.value = true;
     try {
-      await runUploadJobs(jobs);
+      await uploads.runUploadJobs(jobs);
     } finally {
       pdfSubmitting.value = false;
     }
@@ -890,54 +592,6 @@ export function usePartBatchPdfSubmit(
   }
 
   /**
-   * 本次提交要上传的「目标实体 × 原件」对应关系（建单成功后调用一次）。
-   *
-   * 分流分两层，两层的依据不同，别混：
-   *  - **owner 维度**在这里分流（`ref.target` 决定上传目标是 `t_assembly` 还是
-   *    `t_part` 行）：同一份原件被多个 row 引用时（共享一个 UI cell），顶层传
-   *    `ASSEMBLY`、子件传 `PART`；
-   *  - **kind 维度**不在这里改写：job 的 `kind` 取 `entry.kind`，描述的是「这份原件是
-   *    PDF 图纸还是 3D 模型」，`registerUploadJobs` / `syncCells` 要靠它把 job 分派到
-   *    PDF / 3D 两张 cell 表（改成 `ASSEMBLY_MASTER` 会让总装图的 cell 落进 3D 表）。
-   *    落库用的 kind 由 `runUploadJobs` 在发请求前按 target 定：装配件顶层
-   *    `'DRAWING'` → `'ASSEMBLY_MASTER'`。
-   */
-  function buildUploadJobs(refs: CreatedTargetRef[]): UploadJob[] {
-    const entries = collectFilesToUpload();
-    const byRow = new Map<string, FileUploadEntry[]>();
-    for (const e of entries) {
-      for (const ref of e.rowRefs) {
-        const list = byRow.get(ref.rowUid) ?? [];
-        list.push(e);
-        byRow.set(ref.rowUid, list);
-      }
-    }
-    const jobs: UploadJob[] = [];
-    for (const ref of refs) {
-      for (const entry of byRow.get(ref.rowUid) ?? []) {
-        // 总装图槽位只收 PDF：`attachPdf` 对所有 PDF 统一记 `kind='DRAWING'`（它描述
-        // 原件类型，与 owner 无关），顶层本来就不挂 3D（`collectFilesToUpload` 只给
-        // asmChild / standalone 挂）。这一句是防线：万一将来给顶层挂了 3D，绝不能把
-        // 3D 文件发到总装图槽位上去 —— 那里只接 PDF（后端 `allowed_exts("ASSEMBLY_MASTER")`
-        // 与 `allowed_exts("DRAWING")` 同为 `["pdf"]`）。
-        if (ref.target === 'assembly' && entry.kind !== 'DRAWING') continue;
-        jobs.push({
-          id: `${entry.key}:${ref.target}:${ref.id}`,
-          jobKey: entry.key,
-          target: ref.target,
-          ownerId: ref.id,
-          kind: entry.kind,
-          entry,
-        });
-      }
-    }
-    // 同一份原件被多个 row 共享时（合成的多页独立零件等），这里会为每个实体各产出
-    // 一个 job。这是建单与文件上传彻底解耦的已知代价：请求数比「建单时各带一份绑定」高，
-    // 但上传失败不再需要回滚工单。
-    return jobs;
-  }
-
-  /**
    * 把 `createdTargets` 里的那些行从本地表格移走。
    *
    * 这些行对应的工单已经是服务端里的真实记录了，留在表内只会诱导「再点一次提交」
@@ -1092,7 +746,7 @@ export function usePartBatchPdfSubmit(
     // 工单的 id 就丢了，job 现场重建与「重试只重传不重建」两个不变量同时失效。
     createdTargets.clear();
 
-    submitRowEpoch = rowEpoch.value;
+    uploads.beginUploadEpoch();
     pdfSubmitting.value = true;
     commitStage.value = 'creating';
     try {
@@ -1134,7 +788,7 @@ export function usePartBatchPdfSubmit(
       commitStage.value = 'uploading';
       let jobs: UploadJob[];
       try {
-        jobs = buildUploadJobs(rebuildCreatedTargets());
+        jobs = uploads.buildUploadJobs(uploads.rebuildCreatedTargets());
       } catch (e) {
         // 工单已落库，但一条上传都还没发出去（job 登记前就抛了）⇒ 封住「再提交一次
         // 就多建一批工单」的口子：转 done（canSubmit 只剩「重建 job 补传」这一条出路），
@@ -1148,8 +802,8 @@ export function usePartBatchPdfSubmit(
         );
         return;
       }
-      registerUploadJobs(jobs);
-      await runUploadJobs(jobs);
+      uploads.registerUploadJobs(jobs);
+      await uploads.runUploadJobs(jobs);
 
       commitStage.value = 'done';
       summarizeUploads();
@@ -1185,20 +839,6 @@ export function usePartBatchPdfSubmit(
   }
 
   /**
-   * 由 `createdTargets` 现场还原「目标实体 ↔ 本地行」。
-   *
-   * `buildUploadJobs` 抛错时 job 列表没登记上，但记账还在，所以重建不需要重新建单、
-   * 也不需要后端再返回一次 `created`。
-   */
-  function rebuildCreatedTargets(): CreatedTargetRef[] {
-    return Array.from(createdTargets.entries()).map(([rowUid, v]) => ({
-      rowUid,
-      target: v.target,
-      id: v.id,
-    }));
-  }
-
-  /**
    * 重试上传（**不重复建工单**）。done 态的两种出路：
    *  - 有失败 job → 只重跑 `failedJobs` 里的那些；
    *  - job 列表压根没登记上 → 用 `createdTargets` 现场重建再全跑。
@@ -1214,15 +854,15 @@ export function usePartBatchPdfSubmit(
       ElMessage.warning('当前没有可重试的上传');
       return;
     }
-    submitRowEpoch = rowEpoch.value;
+    uploads.beginUploadEpoch();
     pdfSubmitting.value = true;
     try {
       if (failed.length > 0) {
-        await runUploadJobs(failed);
+        await uploads.runUploadJobs(failed);
       } else {
         let jobs: UploadJob[];
         try {
-          jobs = buildUploadJobs(rebuildCreatedTargets());
+          jobs = uploads.buildUploadJobs(uploads.rebuildCreatedTargets());
         } catch (e) {
           ElMessageBox.alert(
             `补传仍未能开始：\n${(e as Error).message ?? '上传失败'}\n\n工单已创建，可到零件 / 装配件详情页补传。`,
@@ -1241,8 +881,8 @@ export function usePartBatchPdfSubmit(
           );
           return;
         }
-        registerUploadJobs(jobs);
-        await runUploadJobs(jobs);
+        uploads.registerUploadJobs(jobs);
+        await uploads.runUploadJobs(jobs);
       }
     } finally {
       pdfSubmitting.value = false;
