@@ -21,8 +21,10 @@
 //     DESC, process_id ASC`），消费侧**不要**再排一遍。
 //   - staleTime 30s / gcTime 5min（**gcTime 取有限值**：本域纯只读、无 WS 失效通道）。
 //   - 不写 retry：信任 `main.ts` 全局 `queries.retry: 0`。
-//   - 失效：切工人换的是整条 queryKey（不复用缓存），本域零写点故当前无 invalidate
-//     调用方；将来走 `qk.statisticsPrefix`。
+//   - 失效：切工人换的是整条 queryKey（不复用缓存）。本域自身零写点，故域内没有
+//     invalidate；**域外**有唯一调用方（序列号一键释放，
+//     `views/parts/list/composables/useSerialRelease.ts`，2026-10-19）—— 本 tab 的行 VO 带
+//     `serial_no`，其可空语义正是「流水号已被释放」，那次释放确实要把本 tab 刷掉。
 //
 // ⚠️ 「工人未选」不是错误态：`ProductionStats.vue` 的 activeTab watcher 会在
 // `selectedWorkerId` 为空时把 tab 弹回 overview，所以正常操作路径下不会长时间停在这个

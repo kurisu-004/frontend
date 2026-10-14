@@ -74,6 +74,14 @@ const AFFECTS_DASHBOARD: ReadonlySet<DashboardEventType> = new Set<DashboardEven
   // COMPLETED，常驻大屏收不到写操作方的 invalidate，只能靠这两个事件。
   'PART_FORCE_COMPLETED',
   'ASSEMBLY_FORCE_COMPLETED',
+  // 2026-10-19：终态序列号一键释放（`POST /serials/release-terminal`）的汇总事件。
+  // **这是一条纯汇总事件**（payload 只有 assembly_count / part_count 两个计数，不带任何
+  // 展示字段、也没有被释放行的 id 列表），所以它不像 PART_FORCE_COMPLETED 那样能
+  // 「让某一行消失」，但它同样改了 dashboard 关心的数据：工单列表里终态工单的
+  // serial_no 会变成空。不进白名单的话，常驻大屏（另一个标签页，且三 query 都是
+  // `gcTime: POSITIVE_INFINITY` + 无 refetchInterval）会**静默停在释放前的状态** ——
+  // 界面上还显示着一个实际已回池、随时会被新工单复用的号。
+  'TERMINAL_SERIALS_RELEASED',
 ]);
 
 /** dashboard 域失效事件数量（与 useDashboardInvalidation.spec.ts 的 T1 用例对齐；

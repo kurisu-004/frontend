@@ -17,13 +17,17 @@
 //   - queryFn Zod 守门：`overviewOutSchema.parse(await fetchOverview(params))`。
 //     守门点在 queryFn 而非 api 层 —— parse 返回深拷贝，在 api 层再 parse 一次等于
 //     每屏数据被校验并克隆两遍（见 CLAUDE.md「queryFn Zod 守门」）。
-//   - staleTime / gcTime：30s / 5min，**gcTime 取有限值**。statistics 是纯只读域、
-//     零写点，没有 dashboard 域「靠 WS 事件失效才敢把 GC 设成无限」的前提；GC 设无限
-//     会让「切走 5 分钟回来」命中一份半小时前的报表。
+//   - staleTime / gcTime：30s / 5min，**gcTime 取有限值**。statistics 域**自身**零写点
+//     （三个端点全是只读、无 WS 失效通道），没有 dashboard 域「靠 WS 事件失效才敢把 GC
+//     设成无限」的前提；GC 设无限会让「切走 5 分钟回来」命中一份半小时前的报表。
 //   - 不写 retry：信任 `main.ts` 全局 `queries.retry: 0`。
 //   - 错误桥接走 `watch(error) → ElMessage.error`，不在 setup 抛错。
-//   - 失效：本域零写点，当前没有 invalidate 调用方；将来该域出现写操作时用
-//     `qk.statisticsPrefix` 一把全失效。
+//   - 失效：**全仓当前唯一的 `qk.statisticsPrefix` 调用方在域外** —— 序列号一键释放
+//     （`views/parts/list/composables/useSerialRelease.ts`，2026-10-19）。它释放掉的正是
+//     本域行 VO 里的 `serial_no`，而该键可空的语义就是「流水号已被释放」（见
+//     `./statisticsSchema.ts` 里 `workerPartItemSchema.serial_no` 的注释）。
+//     statistics 域**自身**仍然零写点，将来域内真出现写端点时同样走 `qk.statisticsPrefix`
+//     一把全失效。
 
 import { computed, toValue, watch, type MaybeRefOrGetter } from 'vue';
 import { useQuery } from '@tanstack/vue-query';

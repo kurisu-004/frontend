@@ -3,7 +3,7 @@
 // 2026-09-29 新增：useDashboardInvalidation WS 事件 → invalidate 回归保护。
 //
 // 覆盖：
-//   - I1：26 个 AFFECTS_DASHBOARD 事件命中 → 触发 debounced invalidate
+//   - I1：27 个 AFFECTS_DASHBOARD 事件命中 → 触发 debounced invalidate
 //   - I2：连续 5 个 AFFECTS_DASHBOARD 事件 → debounce 500ms 内合并 → 1 次 invalidate
 //   - I3：maxWait 1500ms flush —— 持续超过 1500ms 必须强制 invalidate
 //   - I4：非 AFFECTS_DASHBOARD 事件（如 DELIVERY_NOTE_CREATED）不触发 invalidate
@@ -84,7 +84,7 @@ vi.mock('@/api/dashboard', () => ({
 import { useDashboardInvalidation, AFFECTS_DASHBOARD_SIZE } from '../useDashboardInvalidation';
 import { qk } from '@/composables/queries/keys';
 
-// 26 个 AFFECTS_DASHBOARD 事件类型白名单（与 useDashboardInvalidation.ts 同源）
+// 27 个 AFFECTS_DASHBOARD 事件类型白名单（与 useDashboardInvalidation.ts 同源）
 const AFFECTS_DASHBOARD_EVENTS: string[] = [
   'PART_TO_SHIP',
   'PART_TO_INSPECTION',
@@ -112,6 +112,11 @@ const AFFECTS_DASHBOARD_EVENTS: string[] = [
   'ASSEMBLY_UPDATED',
   'PART_FORCE_COMPLETED',
   'ASSEMBLY_FORCE_COMPLETED',
+  // 2026-10-19 新增：终态序列号一键释放的汇总事件（payload 只有两个计数）。
+  // 它进白名单是因为 dashboard 工单列表里终态工单的 serial_no 会随之变空，
+  // 而常驻大屏（另一标签页 + gcTime 无限 + 无 refetchInterval）收不到写方的 invalidate
+  // ⇒ 不进白名单就会静默停在释放前的状态、继续展示一个实际已回池的号。
+  'TERMINAL_SERIALS_RELEASED',
 ];
 
 let testApp: ReturnType<typeof createApp>;
@@ -156,9 +161,9 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
     vi.useRealTimers();
   });
 
-  it('I1：AFFECTS_DASHBOARD 集合大小为 26（与 useDashboardInvalidation 同源）', () => {
-    expect(AFFECTS_DASHBOARD_SIZE).toBe(26);
-    expect(AFFECTS_DASHBOARD_EVENTS).toHaveLength(26);
+  it('I1：AFFECTS_DASHBOARD 集合大小为 27（与 useDashboardInvalidation 同源）', () => {
+    expect(AFFECTS_DASHBOARD_SIZE).toBe(27);
+    expect(AFFECTS_DASHBOARD_EVENTS).toHaveLength(27);
   });
 
   it('I2：AFFECTS_DASHBOARD 内事件触发 invalidate', async () => {
@@ -280,7 +285,7 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
     scope.stop();
   });
 
-  it('I7：26 个 AFFECTS_DASHBOARD 事件全部触发 invalidate（白名单回归保护）', async () => {
+  it('I7：27 个 AFFECTS_DASHBOARD 事件全部触发 invalidate（白名单回归保护）', async () => {
     vi.useFakeTimers();
     for (const evType of AFFECTS_DASHBOARD_EVENTS) {
       const invalidateSpy = vi.spyOn(testQueryClient, 'invalidateQueries');

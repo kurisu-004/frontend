@@ -22,7 +22,10 @@
 //   - staleTime 30s / gcTime 5min（**gcTime 取有限值**：本域纯只读、无 WS 失效通道，
 //     没有 dashboard 域把 GC 设成无限的前提）。
 //   - 不写 retry：信任 `main.ts` 全局 `queries.retry: 0`。
-//   - 失效：本域零写点，当前没有 invalidate 调用方；将来走 `qk.statisticsPrefix`。
+//   - 失效：唯一的 `qk.statisticsPrefix` 调用方在**域外**（序列号一键释放，
+//     `views/parts/list/composables/useSerialRelease.ts`，2026-10-19）—— 它释放掉的正是
+//     本域行 VO 的 `serial_no`，其可空语义就是「流水号已被释放」。本域自身零写点，将来
+//     域内出现写端点时同样走 `qk.statisticsPrefix` 一把全失效。
 
 import { computed, toValue, watch, type MaybeRefOrGetter } from 'vue';
 import { useQuery } from '@tanstack/vue-query';

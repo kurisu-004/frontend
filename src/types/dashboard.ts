@@ -58,14 +58,21 @@ export type DashboardEventType =
   // `POST /prod/assemblies/{id}/force-complete`，两者都绕过状态机直接写 COMPLETED，
   // 必须各自发事件，否则常驻大屏上的该行不会消失。
   | 'PART_FORCE_COMPLETED'
-  | 'ASSEMBLY_FORCE_COMPLETED';
+  | 'ASSEMBLY_FORCE_COMPLETED'
+  // 2026-10-19：终态序列号一键释放（`POST /serials/release-terminal`）的**汇总事件**。
+  // payload 只有下面两个计数，不带被释放行的 id 列表、不带任何展示字段 —— 消费方只能
+  // 靠 event_type 触发失效后重取（`useDashboardInvalidation` 白名单），不能指望事件带
+  // 全量快照去就地改某一行。
+  | 'TERMINAL_SERIALS_RELEASED';
 
-// 2026-10-13：`DashboardEventPayload` **只剩 id 类键**。
+// `DashboardEventPayload` **不带任何展示字段**，只有 id 类键与少量计数。
 // 旧版在这里声明过 serial_no / drawing_no / name / customer_path / is_urgent /
 // planned_delivery_date / worker_name / shelf_code 八个展示字段 —— 那是 v1 遗留事件
 // （旧横幅支持的 8 个 kind）的契约，v2 后端零产出方，且约 40 个 v2 事件的 payload 里
 // 一个展示字段都不带。带展示字段的唯一事件是 SCAN_BANNER，而它的 payload 由域内
 // `bannerSchema.ts` 单独守门、单独派生类型，不在本壳里声明。
+// 判据落在「**有没有展示字段**」上，而不是「是不是只有 id 类键」—— 计数键不是展示文案
+// （没有消费者把它渲染成一句话），所以 SCAN_BANNER 仍是唯一的展示事件。
 export interface DashboardEventPayload {
   /** PART_FORCE_COMPLETED 携带的被强推工单 id（雪花 ID 字符串）。该事件绕过状态机
    *  直写 COMPLETED，不带任何展示字段 —— 消费方要按行定位只能靠这个 id。 */
@@ -79,6 +86,10 @@ export interface DashboardEventPayload {
   to_worker_id?: string | null;
   // 装配体事件携带的字段
   assembly_id?: string | null;
+  // TERMINAL_SERIALS_RELEASED 携带的两个计数：本次释放的装配件数与零件数（JSON number）。
+  // 只用于让消费方知道「变了多少」，定位到具体行仍要重取。
+  assembly_count?: number;
+  part_count?: number;
 }
 
 export interface DashboardEvent {

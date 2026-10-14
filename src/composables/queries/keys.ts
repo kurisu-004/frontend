@@ -668,9 +668,12 @@ export const qk = {
   // `inspection` / `assembly` / `production-queue` / `production-scan` 几段的
   // 「根命名空间」取舍：键的根只要求「同根前缀匹配」才有意义，挂了才有共享写点。
   // statistics 域是**纯只读域**（后端三个端点全是 `pool.acquire()`、不开事务、不发 WS
-  // 广播），与零件域**零共享写点** ⇒ 挂 parts 下只会让全仓最热的 `qk.partsPrefix`
-  // 一把全刷把三个 tab 的报表缓存全部连带重拉（报表查询本身不便宜，概览页一次就
-  // 返 4 段图表数据）。
+  // 广播）——「纯只读」说的是**本域自身没有写端点**，不等于全仓没有东西会改它读的数据：
+  // `qk.statisticsPrefix` 当前的唯一失效调用方在**域外**（序列号一键释放，
+  // `views/parts/list/composables/useSerialRelease.ts`，2026-10-19），而那个写点同时打
+  // `qk.partsPrefix`。仍然**两边都不挂**：挂 parts 下会让全仓最热的 `qk.partsPrefix` 一把
+  // 全刷时把三个 tab 的报表缓存连带重拉（报表查询本身不便宜，概览页一次就返 4 段图表
+  // 数据），而零件域的写点大多与统计口径无关；宁可选「写点显式列前缀」这一侧。
   //
   // 三条读键，三个端点一一对应（都是**参数键**：`date_from` / `date_to` 是后端必填的
   // `NaiveDate`，不进键则切日期会拿上一段区间的报表冒充当前区间）：
@@ -678,11 +681,13 @@ export const qk = {
   //   - statisticsWorkers(params)                     —— GET /statistics/workers
   //   - statisticsWorkerDetail(workerId, params)      —— GET /statistics/workers/{id}
   //
-  // 失效编排点：**当前没有任何写点**（本域只有读）。三条失效路径都预留：将来该域出现
-  // 写操作时，走 `qk.statisticsPrefix` 一把全失效即可（详情键额外可被
-  // `statisticsWorkerDetailPrefix` 精确失效，但那属于将来写点的编排，届时补）。
-  // 与 CLAUDE.md「跨页面写操作不做穷举失效」一致，当前新鲜度完全靠 30s 有限
-  // staleTime + 页面自身的显式 refetch 兜底。
+  // 失效编排点：唯一调用方是**域外**的序列号一键释放（`views/parts/list/composables/
+  // useSerialRelease.ts`，2026-10-19）—— 它释放掉的 `serial_no` 会让本域行 VO 从「有号」
+  // 变「无号」，而 `serial_no` 可空的语义正是「流水号已被释放」。三条失效路径都预留：
+  // 将来本域**自身**出现写端点时，走 `qk.statisticsPrefix` 一把全失效即可（详情键额外
+  // 可被 `statisticsWorkerDetailPrefix` 精确失效，但那属于将来写点的编排，届时补）。
+  // 与 CLAUDE.md「跨页面写操作不做穷举失效」一致，其余新鲜度靠 30s 有限 staleTime +
+  // 页面自身的显式 refetch 兜底。
   // ============================================================
   /** 车间生产总览键（`GET /api/v2/statistics/overview`，tab1 的唯一数据源：
    *  KPI + 4 段图表）。params = `{ date_from, date_to }`，两个键都是后端必填的
@@ -699,9 +704,10 @@ export const qk = {
    *  + queryFn 二次守卫拦掉，理由同 `deliveryNoteDetail` / `partDetail`）。 */
   statisticsWorkerDetail: (workerId: string, params: StatisticsQuery | null) =>
     ['statistics', 'worker-detail', workerId, params] as const,
-  /** statistics 域前缀 —— 域内将来出现写操作后一把全失效（任意 params / 任意
-   *  workerId 形态都命中）。当前域内零写点（后端三个端点全是只读），本键预留给
-   *  写点接入时使用，**不要**在调用点拼字面量数组。 */
+  /** statistics 域前缀 —— 一把全失效（任意 params / 任意 workerId 形态都命中）。
+   *  本域自身零写点（后端三个端点全是只读），当前的唯一调用方在**域外**：序列号一键释放
+   *  （`views/parts/list/composables/useSerialRelease.ts`，2026-10-19）。
+   *  **不要**在调用点拼字面量数组。 */
   statisticsPrefix: ['statistics'] as const,
   // ============================================================
   // 2026-10-13 新增：mail-digest 域（交期汇总邮件定时任务）queryKey 工厂。
