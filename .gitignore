@@ -10,8 +10,9 @@ dist
 .playwright-cli
 .worktrees/
 
-# 2026-09-20 PR step-viewer-integration：occt-wasm 的 wasm + js 由 postinstall hook
-# 生成到 public/，vite 直接从根路径 fetch。文件大（22M），不入 git。
+# occt-wasm 的 .wasm / .js 历史上由 postinstall hook 生成到 public/（22MB，不入 git）。
+# 那条生成链路已下线（wasm 改由 OcctStepLoader.ts 的 `?url` import 走资源图，见
+# docs/occt-wasm-asset-pipeline.md），两条 ignore 保留仅为防误提交。
 /public/occt-wasm.wasm
 /public/occt-wasm.js
 

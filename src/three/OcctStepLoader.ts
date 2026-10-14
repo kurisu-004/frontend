@@ -33,8 +33,10 @@ import { OcctKernel, type ShapeHandle } from 'occt-wasm';
 // ⇒ nginx 的 `location /assets/`（1y + immutable）能对它生效，不用再担心「同名文件换内容后
 // 客户端拿旧字节」。
 //
-// ⚠️ 传的是 occt-wasm 的 `wasm` 选项（5.4.0 起的正式名，`wasmUrl` 已标 deprecated），
-// 依赖 lockfile 里 pin 的 5.4.0。守卫见 `src/three/__tests__/occtWasmAssetPipeline.spec.ts`。
+// ⚠️ 传的是 occt-wasm 的正式选项 `wasm`（`wasmUrl` / `wasmPath` 在 5.x 全系都已标
+// @deprecated，5.0.0 起就有 `wasm`）。依赖声明见 package.json 的 `occt-wasm: ^5.4.0` ——
+// 该下限是「本仓只在 lockfile 实装的 5.4.0 上构建/验证过」，不是功能下限。守卫见
+// `src/three/__tests__/occtWasmAssetPipeline.spec.ts`。
 import occtWasmUrl from 'occt-wasm/dist/occt-wasm.wasm?url';
 import type { LoadedShape, TopologyNode, TopologyStats } from './types';
 

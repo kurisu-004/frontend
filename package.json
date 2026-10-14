@@ -28,7 +28,7 @@
     "hash-wasm": "^4.12.0",
     "hucre": "^1.2.0",
     "jsbarcode": "^3.12.3",
-    "occt-wasm": "^5.3.2",
+    "occt-wasm": "^5.4.0",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^6.2.108",
     "pinia": "^3.0.4",
