@@ -11,19 +11,29 @@
 //      少了 `vite-preload-helper` 那条，入口为了静态引用这个 helper 而静态依赖整块
 //      occt-wasm ⇒ `index.html` 的 modulepreload 多出 110KB（gzip 36KB）的低频 3D 代码。
 //
-// ⚠️ 这是**构建产物层**的判据，node/happy-dom 环境跑不了真实的 vite build
+//   B. wasm 只产出一份，且由代码显式定位。
+//      `occt-wasm.js`（emscripten 产物）内含 `new URL("occt-wasm.wasm", import.meta.url)`，
+//      vite 扫到就会 emit 一份带 hash 的；曾经还有一条 postinstall 把同一份文件拷进
+//      public/ 供写死路径定位用 —— 两个来源指向同一个文件、产出两份 21MB。
+//
+// ⚠️ 两条都是**构建产物层**的判据，node/happy-dom 环境跑不了真实的 vite build
 // （occt-wasm 是 emscripten 主线程 wasm，见 `components/cad-viewer/__tests__/StepViewer.spec.ts`
 // 的既有登记）。所以这里守的是「配置与代码不许退回旧形态」，真正的产物核对靠
 // `npx vite build` 后人工比对 `index.html` 的 modulepreload 列表与 `find dist -name '*.wasm'`。
 // 仓内口径与实测数字见 `docs/occt-wasm-asset-pipeline.md`。
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('../../..', import.meta.url));
 const VITE_CONFIG = readFileSync(join(ROOT, 'vite.config.ts'), 'utf8');
+const LOADER = readFileSync(join(ROOT, 'src/three/OcctStepLoader.ts'), 'utf8');
+const PKG = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as {
+  scripts: Record<string, string>;
+};
+
 /**
  * 剥掉整行 `//` 注释。
  *
@@ -95,5 +105,33 @@ describe('A. 入口不得静态依赖 occt-wasm chunk', () => {
     const groups = groupsBlock();
     expect(groups).not.toMatch(/test:\s*\//);
     expect(groups.match(/test:\s*\(id:\s*string\)\s*=>/g)).toHaveLength(3);
+  });
+});
+
+describe('B. wasm 只产出一份，且由代码显式定位', () => {
+  it('OcctStepLoader 用 ?url import 拿带 hash 的 wasm URL', () => {
+    expect(LOADER).toContain("import occtWasmUrl from 'occt-wasm/dist/occt-wasm.wasm?url'");
+    // `wasm` 是 occt-wasm 5.4.0 起的正式选项名，`wasmUrl` 已标 deprecated。
+    expect(LOADER).toContain('OcctKernel.init({ wasm: occtWasmUrl })');
+  });
+
+  it('不再有写死的根路径 wasm URL（那条要求 public/ 里有一份无 hash 拷贝）', () => {
+    expect(LOADER).not.toContain('/occt-wasm.wasm`');
+    expect(LOADER).not.toContain('wasmUrl:');
+    expect(LOADER).not.toContain('window.location.origin');
+  });
+
+  it('public/ 拷贝链路已整条下线：postinstall 钩子与拷贝脚本都不存在', () => {
+    expect(PKG.scripts.postinstall).toBeUndefined();
+    expect(existsSync(join(ROOT, 'scripts/copy-occt-wasm.mjs'))).toBe(false);
+  });
+
+  it('public/ 下没有 occt-wasm 的任何一份拷贝', () => {
+    expect(existsSync(join(ROOT, 'public/occt-wasm.wasm'))).toBe(false);
+    expect(existsSync(join(ROOT, 'public/occt-wasm.js'))).toBe(false);
+  });
+
+  it('vite.config 里不再有「从 public 根路径 fetch wasm」的旧注释', () => {
+    expect(stripFullLineComments(VITE_CONFIG)).not.toContain('${origin}/occt-wasm.wasm');
   });
 });

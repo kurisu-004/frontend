@@ -19,6 +19,23 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { OcctKernel, type ShapeHandle } from 'occt-wasm';
+// 2026-10-21 新增：wasm 二进制的 URL 走资源图（`?url`）拿，不再从 public/ 根路径直接 GET。
+//
+// 成因：同一个文件此前有**两条产出路径**，各产一份 21MB。
+//   ① vite 从 import graph emit —— `occt-wasm/dist/occt-wasm.js`（emscripten 产物）内部写着
+//      `new URL("occt-wasm.wasm", import.meta.url)`，vite 扫到这行就把 wasm 当资源 emit 一份
+//      带 hash 的；
+//   ② postinstall 钩子（`scripts/copy-occt-wasm.mjs`，已下线）把同一份文件拷进 public/。
+// 而运行时用的是 ② —— 代码此前显式传了写死的根路径，emscripten 的 `locateFile` 分支恒生效，
+// 它自己那行 `new URL` 走不到，所以 ① 是纯死重。
+//
+// 改走 `?url` 后两条来源收敛到同一个文件路径，vite 侧只 emit 一份，且拿到的 URL 带内容 hash
+// ⇒ nginx 的 `location /assets/`（1y + immutable）能对它生效，不用再担心「同名文件换内容后
+// 客户端拿旧字节」。
+//
+// ⚠️ 传的是 occt-wasm 的 `wasm` 选项（5.4.0 起的正式名，`wasmUrl` 已标 deprecated），
+// 依赖 lockfile 里 pin 的 5.4.0。守卫见 `src/three/__tests__/occtWasmAssetPipeline.spec.ts`。
+import occtWasmUrl from 'occt-wasm/dist/occt-wasm.wasm?url';
 import type { LoadedShape, TopologyNode, TopologyStats } from './types';
 
 export type OcctFormat = 'step' | 'stl' | 'brep';
@@ -173,10 +190,10 @@ function resetKernelState(): void {
 
 async function getKernel(): Promise<OcctKernel> {
   if (kernelPromise) return kernelPromise;
-  kernelPromise = OcctKernel.init({
-    // 浏览器：locateFile 让 emscripten 从 /occt-wasm.wasm 拉 wasm（vite 走 /）
-    wasmUrl: `${typeof window !== 'undefined' ? window.location.origin : ''}/occt-wasm.wasm`,
-  }).catch((e) => {
+  // wasm URL 由上面的 `?url` import 在构建期算好：dev 下是 dev server 直接服务的源文件路径，
+  // 生产下是 `/assets/occt-wasm-<hash>.wasm`。emscripten 收到字符串就装 `locateFile`，
+  // 自己那行 `new URL(..., import.meta.url)` 不再参与定位。
+  kernelPromise = OcctKernel.init({ wasm: occtWasmUrl }).catch((e) => {
     kernelPromise = null;
     throw new OcctLoadError(
       `occt-wasm 初始化失败: ${e instanceof Error ? e.message : String(e)}`,

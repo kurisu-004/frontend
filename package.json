@@ -13,8 +13,7 @@
     "lint": "eslint . --max-warnings=0",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
-    "format:check": "prettier --check .",
-    "postinstall": "node scripts/copy-occt-wasm.mjs"
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.1",
