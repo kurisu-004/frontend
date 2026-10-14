@@ -25,6 +25,10 @@
 // 2026-10-18：检具版 C 列也落位（键名 `customer_path`，与零件版 C 列同落一个
 // `PrintSheetRow.l2Customer`），手写列只剩 G / H；新增一条「同一组行数据在两套契约下 C 列
 // 都拿到同一个客户路径值」。
+//
+// 2026-10-18 另补检具模板的**保真项守卫**三条（此前「只改 C5 一格、版式原样」这条承诺零断言）：
+// 数据区最后一行的 A..I 清空后仍带 `s=` / 打印区列宽与打印设置逐项等于写死快照 / C5 的实参
+// 写穿 `cells` 侧表（带样式模板上漏出 `{{...}}` 字面量的那条成因）。
 
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -35,6 +39,7 @@ import {
   DELIVERY_NOTE_TEMPLATE_CONTRACT,
   GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT,
 } from '../deliveryNoteTemplateContract';
+import { colIndexOf } from '../deliveryNoteTemplate';
 
 // ⚠️ 必须从 Buffer 构造 Uint8Array（不能用 `buf.buffer`：node 的 Buffer 可能落在
 // 8MB 池化 ArrayBuffer 的一段上，`.buffer` 拿到的是**整个池**，字节不是 xlsx）。
@@ -51,6 +56,46 @@ const GAUGE_TEMPLATE = new Uint8Array(readFileSync(GAUGE_TEMPLATE_FILES[0]));
 
 /** 模板原件里带样式索引（`s=`）的 cell 数 —— 渲染产物必须一条不少地对上（2026-10-08 实测）。 */
 const TEMPLATE_STYLED_CELLS = 172;
+
+/** 两份检具模板的打印设置实测值（A4 横向 + 定制页边距）。两份逐项相同 ⇒ 只有这一份。 */
+const GAUGE_PAGE_SETUP = {
+  paperSize: 'a4',
+  orientation: 'landscape',
+  horizontalDpi: 600,
+  verticalDpi: 300,
+  margins: {
+    left: 0.271527777777778,
+    right: 0.271527777777778,
+    top: 0,
+    bottom: 0,
+    header: 0.118055555555556,
+    footer: 0.161111111111111,
+  },
+} as const;
+
+/**
+ * 两份检具模板的版式快照（2026-10-18 实测写死）：打印区列宽 + 打印设置。
+ *
+ * 与上面那条「带 `s=` 的 cell 数」用例不同，那条是**自指比较**（产物 vs 模板原件）⇒
+ * 模板侧变了它跟着一起变、抓不到。这里改成把定值写死：模板列宽 / 打印设置被换掉（或 hucre
+ * 升版后 round-trip 丢掉它们）时当场红。
+ *
+ * 断言落在**渲染产物**上（不是模板原件）：这两项的承诺本来就是「渲染不改版式」，钉产物
+ * 一次把「模板的值」与「round-trip 保住」两半都盖住。
+ *
+ * 列宽只钉打印区 A..I（契约 `dataColumns` 的范围）—— 其后 hucre 补齐到 16384 列的默认
+ * 宽度与排版无关。两份模板的列宽**彼此不同**（与契约文件头「不一致」清单一致）⇒ 各存一份。
+ */
+const GAUGE_LAYOUT_SNAPSHOT = {
+  'templates/delivery_note_gauge_bailuda.xlsx': {
+    columnWidths: [6, 22, 34.25, 16, 18.375, 5.125, 12.375, 14.875, 16.25],
+    pageSetup: GAUGE_PAGE_SETUP,
+  },
+  'templates/delivery_note_gauge_xingnan.xlsx': {
+    columnWidths: [7.25, 24.5, 28.75, 16, 18.625, 6.125, 13.25, 15.375, 15.25],
+    pageSetup: GAUGE_PAGE_SETUP,
+  },
+} as const;
 
 // ============================================================
 // 最小 zip 读取器（仅本文件用；纯内存，不落临时文件）
@@ -123,6 +168,17 @@ function rowXml(sheetXml: string, excelRow: number): string {
   const hit = sheetXml.match(new RegExp(`<row r="${excelRow}"[^>]*>[\\s\\S]*?</row>`));
   if (!hit) throw new Error(`sheet XML 里没有第 ${excelRow} 行`);
   return hit[0];
+}
+
+/** 列字母区间（'A'..'I' → 9 个字母）。⚠️ **不能**用 `Object.values(contract.columns)` 代替：
+ *  检具版 G / H 两列是留给送货厂家手写的、刻意不在 `columns` 里，而数据区清空与边框保真
+ *  的范围是 `dataColumns`（A..I）。 */
+function columnLetters(first: string, last: string): string[] {
+  const out: string[] = [];
+  for (let code = first.charCodeAt(0); code <= last.charCodeAt(0); code += 1) {
+    out.push(String.fromCharCode(code));
+  }
+  return out;
 }
 
 /** 故意造一个畸形页脚实参（绕过类型去够运行时守卫）。
@@ -613,6 +669,84 @@ describe('renderDeliveryNoteWorkbook（检具版）', () => {
     expect(templateStyled).toBeGreaterThan(0);
     expect(styledCellCount(partOf(out, 'xl/worksheets/sheet1.xml'))).toBe(templateStyled);
   });
+
+  // ---- 检具模板的保真项（2026-10-18：此前这三条承诺零断言）----
+  //
+  // 承诺是「只改 C5 一格、列宽 / 行高 / 打印设置 / 样式原样」。三条各守一半：下面 ① 守边框
+  // （样式）、② 守列宽与打印设置、③ 守 C5 那一格写穿 cells 侧表；行高由 rowDefs 承载，
+  // 与列宽同属 `openXlsx → saveXlsx` 的 round-trip 模型，见 ② 的注释。
+  it.each(GAUGE_TEMPLATE_FILES)(
+    '数据区最后一行的 A..I 九格被整块清空后仍带 s=（清的是值、不是边框）：%s',
+    async (file) => {
+      const out = await renderDeliveryNoteWorkbook(
+        new Uint8Array(readFileSync(file)),
+        [{ sheetName: 'S', rows: [row(0)] }],
+        GAUGE_FOOTER,
+        G,
+      );
+      const sheetXml = partOf(out, 'xl/worksheets/sheet1.xml');
+      // 数据区最后一行（Excel 行号 = dataStartRow + dataRowCount）：只填了 1 条数据，其余 24
+      // 行整块清空过。这 9 格的**值**是空的，**样式索引**必须还在 —— 样式挂在 cells 侧表上，
+      // setCell 只改 value。少一格 s= 就是打印时边框缺一段。
+      const lastExcelRow = G.dataStartRow + G.dataRowCount;
+      const cleared = rowXml(sheetXml, lastExcelRow);
+      for (const letter of columnLetters(G.dataColumns.first, G.dataColumns.last)) {
+        const cell = cleared.match(new RegExp(`<c r="${letter}${lastExcelRow}"[^>]*>`))?.[0];
+        expect(cell, `列 ${letter} 在清空行里没写出来`).toBeDefined();
+        expect(cell, `列 ${letter} 的样式索引丢了`).toMatch(/\ss="\d+"/);
+      }
+    },
+  );
+
+  it.each(GAUGE_TEMPLATE_FILES)(
+    '渲染不改版式：打印区列宽与打印设置逐项等于写死的模板快照：%s',
+    async (file) => {
+      const snapshot = GAUGE_LAYOUT_SNAPSHOT[file];
+      const out = await renderDeliveryNoteWorkbook(
+        new Uint8Array(readFileSync(file)),
+        [{ sheetName: 'S', rows: [row(0)] }],
+        GAUGE_FOOTER,
+        G,
+      );
+      const sheet = (await readBack(out)).sheets[0]!;
+      // 列宽只取打印区 A..I（契约 dataColumns 的范围）；其后 hucre 补齐到 16384 列的默认
+      // 宽度与排版无关，不逐条钉。
+      const widths = (sheet.columns ?? [])
+        .slice(0, columnLetters(G.dataColumns.first, G.dataColumns.last).length)
+        .map((c) => c.width);
+      expect(widths).toEqual(snapshot.columnWidths);
+      expect(sheet.pageSetup).toEqual(snapshot.pageSetup);
+    },
+  );
+
+  // C5 的实参必须**写穿 cells 侧表**：开了 readStyles 之后值与样式分挂两处，saveXlsx 是
+  // 「先按 rows 建网格、再用 cells 逐格覆盖」（cells 赢）。只改 rows 的话，侧表里那条模板
+  // 旧值会把新值盖回去 —— 而带样式模板里这正是数据区漏出 `{{...}}` 字面量的成因。
+  // 这里先把侧表那条值改成别的（rows 不动），渲染后 C5 必须仍是实参。
+  it.each(GAUGE_TEMPLATE_FILES)(
+    'C5 的实参写穿 cells 侧表：侧表被改成陈旧值时产物仍拿实参：%s',
+    async (file) => {
+      const { openXlsx, saveXlsx } = await import('hucre');
+      const wb = await openXlsx(new Uint8Array(readFileSync(file)), { readStyles: true });
+      const c5col = colIndexOf(G.columns.customer_path);
+      const stale = '侧表陈旧值';
+      const cell = wb.sheets[0]!.cells!.get(`${G.dataStartRow},${c5col}`);
+      expect(cell, '模板 C5 必须有 cells 侧表条目（没有的话这条用例会空转）').toBeDefined();
+      cell!.value = stale;
+      // 前提钉住：这一路**只**动了侧表，`rows` 侧仍是模板里的占位符。
+      expect(wb.sheets[0]!.rows[G.dataStartRow]![c5col]).toBe('{{customer_path}}');
+
+      const out = await renderDeliveryNoteWorkbook(
+        await saveXlsx(wb),
+        [{ sheetName: 'S', rows: [rowWithPath(0)] }],
+        GAUGE_FOOTER,
+        G,
+      );
+      const written = (await readBack(out)).sheets[0]!.rows[G.dataStartRow]![c5col];
+      expect(written).toBe('终端BG / 手机部 / 影像组');
+      expect(String(written)).not.toBe(stale);
+    },
+  );
 
   // ⚠️ 本组用例守的是「运行时兜底」。**主要防线是编译期**：两条 `@ts-expect-error` 在
   // `npm run typecheck` 下把「检具契约配零件页脚 / 零件契约配检具页脚」钉成编译错误 ——

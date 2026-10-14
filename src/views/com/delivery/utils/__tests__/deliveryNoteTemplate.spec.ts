@@ -14,8 +14,9 @@
 //   · 检具版一批：两份内置检具模板逐格通过 + 三类坏模板各出一差异（改坏 row5 占位符 /
 //     删掉 I2 的 {{delivery_date}} / A 列中间一格不是 {{no}}）。
 //
-// 2026-10-18 追加：`detectTemplateContract` 的四条（零件版 / 两份检具版 / 四锚点全坏判不出 /
-// 缺 sheet）。它与逐格校验是**两条独立判据**，都绿不代表探测器对，所以各有各的用例。
+// 2026-10-18 追加：`detectTemplateContract` 的**四条锚点**（六个用例：零件版 / 两份检具版 /
+// 页脚锚点兜底 / 四锚点全坏判不出 / 缺 sheet）。它与逐格校验是**两条独立判据**，都绿不代表
+// 探测器对，所以各有各的用例。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';

@@ -278,8 +278,8 @@ const GAUGE_ANCHORS = {
  *
  * 四个锚点、判别顺序与**互斥理由**（两两不可能同时命中）：
  *   1. 零件版 B3 === `{{order_no}}` —— 检具版 row 3 是表头、B 列是「订单编号」；
- *   2. 检具版 B5 === `{{order_no}}` —— 零件版 row 5 是数据区但**没有**占位符（只有 row 3
- *      带），所以零件版即便把数据行往下挪也不会命中这一条；
+ *   2. 检具版 B5 === `{{order_no}}` —— 零件版契约把数据首行钉死在 row 3（`dataStartRow = 2`），
+ *      模板 row 5 是「空但有样式」的数据行；
  *   3. 零件版 F15 含 `{{driver_name}}` —— 检具版 F15 在数据区之内、不含该占位符；
  *   4. 检具版 I2 含 `{{delivery_date}}` —— 零件版 I2 是表头「预估交期」，页脚那三个日期
  *      占位符在 A17。
@@ -295,6 +295,8 @@ const GAUGE_ANCHORS = {
  * `assertTemplateMatches` 的「一条差异」是两条不同的失败语义，本函数不越界去造差异文案。
  */
 export function detectTemplateContract(wb: Workbook): DeliveryNoteTemplateContract | null {
+  // 取 sheet 借**零件契约**的 `sheetIndex`：两套契约的 `sheetIndex` 同为 0，取哪一份结果一样，
+  // 这里与下面的锚点表同源即可。⚠️ 两者一旦分家（某套版式改用别的 sheet），这里要跟着改。
   const sheet = wb.sheets[DELIVERY_NOTE_TEMPLATE_CONTRACT.sheetIndex];
   if (!sheet) return null;
   const at = (a: { row: number; col: number }): string => cellText(sheet, a.row, a.col);

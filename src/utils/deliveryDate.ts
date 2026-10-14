@@ -84,8 +84,8 @@ export function formatDeliveryMonthDay(s: DeliveryDate): string {
  * ⚠️ 入参是 **`Date` 而非 ISO 串**：这个格装的是**导出当天**（不是某个 ISO 日期串），
  * 「今天」由调用方在本地零点构造，函数只取日历分量、不做任何日期算术 ⇒ 不存在
  * `parseLocalIso` 那条 UTC / 本地零点漂移问题（成因见文件头）。
- * 与 `formatDeliveryMonthDay` 是**并列的两条口径**（后者带年份但吃 ISO 串、前者不带年份但吃
- * Date），刻意互不复用：复用一个就得给它加分支或造中转形态，两种调用点都跟着变绕。
+ * 与 `formatDeliveryMonthDay` 是**并列的两条口径**（本函数带年份但吃 Date、那条不带年份但吃
+ * ISO 串），刻意互不复用：复用一个就得给它加分支或造中转形态，两种调用点都跟着变绕。
  */
 export function formatChineseDeliveryDate(d: Date): string {
   return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
