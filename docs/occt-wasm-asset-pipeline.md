@@ -14,7 +14,7 @@
 | occt-wasm 的 JS                    | 独立 chunk `assets/occt-wasm-<hash>.js`（约 110KB），只被 3D 预览那条懒路径静态引用          |
 | three.js 的 JS                     | 独立 chunk `assets/three-<hash>.js`（约 505KB）                                              |
 | wasm 二进制                        | **只有一份** `assets/occt-wasm-<hash>.wasm`（约 21MB，带内容 hash）                          |
-| `public/` 下的 occt-wasm 拷贝      | **没有**（整条 postinstall 拷贝链路已下线）                                                  |
+| `public/` 下的 occt-wasm 拷贝      | **不再产出**（整条 postinstall 拷贝链路已下线）；旧机器上手动删一次即可，见文末              |
 
 `vite-preload-helper` 那条 group 的 `includeDependenciesRecursively` 保持默认（true）即可：
 实测产物里那个 1.2KB 的 helper chunk **一条 import 都没有**，`rolldown-runtime` 也没有被它
@@ -86,6 +86,40 @@ OcctKernel.init({ wasm: occtWasmUrl });
 的理由已改成 `vite.config.ts` import 了 `scripts/pdfjsCmapsPlugin.ts`（COPY 本身仍必需）；
 `.gitignore` 里 `/public/occt-wasm.wasm` / `/public/occt-wasm.js` 两条 ignore 保留，理由
 改成「生成链路已下线，保留仅为防误提交」。
+
+## 判据为什么取「代码与配置」，不取「public/ 目录当前状态」
+
+「产物里 wasm 只有一份」的**充分条件**是「没有任何代码 / 配置再往 `public/` 产出或定位这份
+wasm」。这个条件完全由仓库内容决定，所以守卫守它：
+
+- `src/**`、`vite.config.ts`、`index.html`、`scripts/**` 里没有任何字符串字面量指向
+  `/occt-wasm.wasm`、`public/occt-wasm.wasm`、`${origin}/occt-wasm.wasm`（用 TS 词法扫描器
+  逐个 token 判，注释里提到这些名字不算 —— 仓内正当地引用着它们）；
+- `package.json` 里没有任何脚本提到 `occt-wasm`（判据不只看 `postinstall` 这一个键：钩子换名成
+  `prepare` / `preinstall` 同样在 `npm ci` 时自动跑）；
+- `.gitignore` 仍 ignore 那两个残留路径 ⇒ 残留即使没删也不可能被 `git add -A` 带进仓库。
+
+⚠️ **`public/` 目录当前有没有留着一份拷贝不是判据**：那是本机环境状态。生成链路下线后，
+旧机器上已存在的那份既不会被重新生成、也不会被自动清掉，拿它当断言会让守卫在「用户环境不
+干净」时报红 —— 而那不是代码的问题。对应的判据见下一节。
+
+## 旧机器上的残留清理（一次性人工动作）
+
+从旧版本升级上来的机器上，`public/` 下可能还留着当年 postinstall 生成的那两份：
+
+```
+public/occt-wasm.wasm   # 约 21MB
+public/occt-wasm.js     # 约 123KB
+```
+
+它们从未入 git（被 `.gitignore` 挡着），没有任何代码再引用，删掉即可：
+
+```bash
+rm -f public/occt-wasm.wasm public/occt-wasm.js
+```
+
+删不删都不影响构建产物（没有任何代码会去读它们），也不影响单测（判据不取目录状态，见上一
+节）。留着只是白占 21MB 磁盘。
 
 ## 怎么复核（产物层）
 
