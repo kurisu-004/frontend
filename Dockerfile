@@ -6,10 +6,9 @@ FROM node:24-alpine AS builder
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-# 2026-10-04 修：package.json 的 postinstall 要跑 scripts/copy-occt-wasm.mjs
-# （把 occt-wasm 的 .wasm/.js 拷进 public/），所以 npm ci 之前必须先把 scripts/ 放进上下文。
-# 原先只 COPY package*.json 就 npm ci，脚本不在镜像里 → MODULE_NOT_FOUND，
-# 只要不命中 buildkit 旧 npm ci 层（即 --no-cache）就必然构建失败。
+# vite.config.ts import 了 scripts/pdfjsCmapsPlugin.ts（构建期把 pdfjs 的 cmaps 按原名
+# 产出到 dist/cmaps/），配置文件在 npm ci 之后才被 vite 求值 ⇒ npm ci 之前必须先把
+# scripts/ 放进上下文，否则那份 import 直接解析不到。
 COPY scripts/ ./scripts/
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --no-audit --no-fund

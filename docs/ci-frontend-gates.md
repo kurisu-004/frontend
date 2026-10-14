@@ -56,16 +56,29 @@
 
 ## format:check 在 CI 里能过的前置事实（别改坏）
 
-`npm ci` 会触发 `postinstall`（`scripts/copy-occt-wasm.mjs`），把 **125KB 的压缩产物
+⚠️ **2026-10-21 更新**：本节原先登记的「`npm ci` 触发 postinstall 把 `public/occt-wasm.js`
+与 `public/occt-wasm.wasm` 复制进 `public/`」这条链路**已整条下线**（wasm 改由
+`src/three/OcctStepLoader.ts` 的 `?url` import 走资源图，见
+[`occt-wasm-asset-pipeline.md`](occt-wasm-asset-pipeline.md)）—— `npm ci` 现在不再往仓库里
+放任何生成物。下面那段保留作**判据的由来**（过去确实存在过这样两条被忽略的生成物），
+描述的是当时的状态，不是当前存在的生成物。
+
+<details>
+<summary>历史判据：当时 <code>public/occt-wasm.js</code> / <code>.wasm</code> 为何不会被 prettier 校验</summary>
+
+`npm ci` **曾经**会触发 `postinstall`（`scripts/copy-occt-wasm.mjs`），把 **125KB 的压缩产物
 `public/occt-wasm.js` 与 22MB 的 `public/occt-wasm.wasm`** 复制进 `public/`。
-两者都在 `.gitignore` 里，而 **Prettier 3.x 默认遵守 `.gitignore`**，故不会进校验：
+两者当时都在 `.gitignore` 里，而 **Prettier 3.x 默认遵守 `.gitignore`**，故不会进校验：
 
 ```
 $ npx prettier --file-info public/occt-wasm.js
 { "ignored": true, "inferredParser": null }
 ```
 
-`src/auto-imports.d.ts` / `src/components.d.ts` 同理（`.gitignore` 里，`.prettierignore` 也列了）。
+</details>
+
+`src/auto-imports.d.ts` / `src/components.d.ts` 是当前**仍然成立**的同类（`.gitignore` 里，
+`.prettierignore` 也列了）。
 
 ⚠️ **若将来新增「未进 `.gitignore` 的生成物」（尤其是压缩过的 `.js`）到仓库里，`format:check` 会立刻红** ——
 那不是代码写错了，是生成物混进了校验范围。处置是把该路径补进 `.gitignore`（首选，prettier 会自动跳过）
