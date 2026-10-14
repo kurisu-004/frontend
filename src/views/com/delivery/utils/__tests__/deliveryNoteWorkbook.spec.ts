@@ -29,6 +29,14 @@
 // 2026-10-18 另补检具模板的**保真项守卫**三条（此前「只改 C5 一格、版式原样」这条承诺零断言）：
 // 数据区最后一行的 A..I 清空后仍带 `s=` / 打印区列宽与打印设置逐项等于写死快照 / C5 的实参
 // 写穿 `cells` 侧表（带样式模板上漏出 `{{...}}` 字面量的那条成因）。
+//
+// ⚠️ 2026-10-18 换模板基准（百路达那份改成客户手工维护的版本）后，两条守卫的**锚点**跟着换，
+// 性质不变：
+//   · 「清空不得越界到数据区之后」改成**自带哨兵**（GAUGE_TAIL_SENTINELS，哨兵由用例写进
+//     内存副本）—— 原先拿模板尾部那行说明文案当锚点，而客户维护的模板不保证有它。
+//   · 「带 `s=` 的格数」从「与模板原件**同值**」放宽成「**不少于**模板原件」+ 一条位置级的
+//     正向断言 —— hucre round-trip 只增不减，增量由模板里数据区之外的列宽 / 行定义决定，
+//     绑死相等会让任何一份非本仓生成的模板假红。
 
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -224,6 +232,25 @@ function row(i: number) {
 function rowWithPath(i: number) {
   return { ...row(i), l2Customer: '终端BG / 手机部 / 影像组' };
 }
+
+/**
+ * 检具版「整块清空不得越界」守卫的**自带哨兵**（0-based 行列号，位置全在数据区之外）。
+ *
+ * 为什么不用模板自己的内容当锚点：数据区之后那两行是**客户版式自带的说明区**，它有没有内容、
+ * 写的是什么，随客户手工维护模板而变（百路达那份当前就是空的）。拿模板原文当锚点时，模板
+ * 一改这条守卫就退化成「两个空数组比较、永远绿」。哨兵由用例自己写进内存副本
+ * （openXlsx → 改值 → saveXlsx），守卫因此与模板内容彻底解耦。
+ *
+ * 位置刻意贴着清空范围的**后一行**而不是随便挑一行：清空范围只要多写一行，第一个哨兵
+ * 当场被清掉（少写几行则由整块尾部快照比对抓住）。
+ */
+const GAUGE_DATA_END_ROW =
+  GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT.dataStartRow +
+  GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT.dataRowCount;
+const GAUGE_TAIL_SENTINELS = [
+  { row: GAUGE_DATA_END_ROW, col: 1, text: '哨兵-清空边界后第一行' },
+  { row: GAUGE_DATA_END_ROW + 1, col: 0, text: '哨兵-清空边界后第二行' },
+] as const;
 
 /** 检具版页脚实参：判别位 `kind` **必填**（契约与页脚在编译期绑定，见 FooterFor），
  *  且检具版只消费 `deliveryDate` —— 不再带零件版那四个永不消费的字段。 */
@@ -484,6 +511,14 @@ describe('renderDeliveryNoteWorkbook（检具版）', () => {
     sh.rows[7]![7] = 'OK';
     sh.rows[8]![6] = '返修';
     sh.rows[8]![7] = 'NG';
+    // 数据区**之外**再塞两个哨兵（见 GAUGE_TAIL_SENTINELS）：它们是这条「清空不越界」守卫
+    // 的锚点，由用例自己写进去 ⇒ 守卫与模板尾部有没有那几行说明文案无关。
+    // ⚠️ 本例的 `openXlsx` **不开** readStyles：那一路的 `rows` 是稠密矩形，只到「最后一行有
+    // 值」的位置为止（模板尾部是空的 ⇒ 行数组根本不存在），所以要先补出那一行再写哨兵。
+    for (const sent of GAUGE_TAIL_SENTINELS) {
+      const line = (sh.rows[sent.row] ??= []);
+      line[sent.col] = sent.text;
+    }
     const dirty = await saveXlsx(wb);
 
     const out = await renderDeliveryNoteWorkbook(
@@ -506,16 +541,21 @@ describe('renderDeliveryNoteWorkbook（检具版）', () => {
         );
       }
     }
-    // 清空范围不得越界到数据区末尾（0-based row 29 = Excel row 30「填写说明」）之后：**渲染前
-    // 后的尾部整行快照必须逐格相同** —— 只钉一格的话，清空行数多写 / 少写几行都测不出来。
-    const tailFrom = G.dataStartRow + G.dataRowCount;
-    const tailOf = (sheet: { rows: unknown[][] }) => sheet.rows.slice(tailFrom).map((r) => [...r]);
+    // 清空范围不得越界到数据区之后：**渲染前后的尾部整行快照必须逐格相同** —— 只钉一格的话，
+    // 清空行数多写 / 少写几行都测不出来。快照锚在**用例自带的哨兵**上而不是模板的说明文案
+    // 上：客户手工维护模板时增删说明区不算版式变更，拿模板原文当锚点会让这条空转。
+    const tailOf = (sheet: { rows: unknown[][] }) =>
+      sheet.rows.slice(GAUGE_DATA_END_ROW).map((r) => [...r]);
     const tailBefore = tailOf((await readBack(dirty)).sheets[0]!);
     const tailAfter = tailOf(s);
     expect(tailAfter).toEqual(tailBefore);
-    // 快照为空的话这条用例会空转（什么都没比）⇒ 单独钉住「尾部确实有内容」
-    expect(tailAfter.length).toBeGreaterThan(0);
-    expect(String(tailAfter[0]![1] ?? '')).toContain('备注主要填写');
+    // 两个哨兵逐字未变（第一个正好贴在清空范围的边界行上：清空多写一行就会被清掉）
+    for (const sent of GAUGE_TAIL_SENTINELS) {
+      expect(
+        String(tailAfter[sent.row - GAUGE_DATA_END_ROW]![sent.col] ?? ''),
+        `数据区之后第 ${sent.row - GAUGE_DATA_END_ROW + 1} 行第 ${sent.col + 1} 列的哨兵被越界清空了`,
+      ).toBe(sent.text);
+    }
   });
 
   it('26 条按检具容量切成两组 ⇒ 第一张填满 25 行、第二张承接第 26 条', async () => {
@@ -654,20 +694,33 @@ describe('renderDeliveryNoteWorkbook（检具版）', () => {
     ).rejects.toThrow(/I5/);
   });
 
-  it('渲染后模板的单元格样式仍在（字节级：带 s= 的 cell 数与模板原件同值）', async () => {
+  it('渲染后模板的单元格样式仍在（字节级：产物带 s= 的格数不少于模板原件）', async () => {
     const out = await renderDeliveryNoteWorkbook(
       GAUGE_TEMPLATE,
       [{ sheetName: 'S', rows: [row(0), row(1)] }],
       GAUGE_FOOTER,
       G,
     );
-    // 与**模板原件**比而不是写死数字：百路达 / 杏南两份模板的带样式格子数本身不同（不相等；
-    // 具体值不写在这里 —— 没有断言背书的数字迟早过期），写死会在换模板时假红。
-    // `readStyles` 被「优化」掉时两边一起塌成 0 ⇒ 先用
-    // `toBeGreaterThan(0)` 钉住模板侧确实有样式，否则「0 == 0」让这条守卫永远绿。
+    // 判据是「**不少**」而不是「恰好相等」：hucre round-trip **只增不减** —— 模板里数据区
+    // **之外**的行 / 列（显式列宽定义、尾部那几行）经 round-trip 会被补出模板侧表里没有的空格，
+    // 增量完全由模板自身决定（百路达那份实测 274 → 372）。绑「恰好相等」的话，任何一份不是
+    // 本仓生成的模板（客户用 Excel / WPS 手工另存过）都会红，而模板本身并没有坏。
+    // `readStyles` 被「优化」掉时两边一起塌成 0 ⇒ 先用 `toBeGreaterThan(0)` 钉住模板侧确实
+    // 有样式，否则「0 ≤ 0」让这条守卫永远绿。
     const templateStyled = styledCellCount(partOf(GAUGE_TEMPLATE, 'xl/worksheets/sheet1.xml'));
     expect(templateStyled).toBeGreaterThan(0);
-    expect(styledCellCount(partOf(out, 'xl/worksheets/sheet1.xml'))).toBe(templateStyled);
+    const outXml = partOf(out, 'xl/worksheets/sheet1.xml');
+    expect(styledCellCount(outXml)).toBeGreaterThanOrEqual(templateStyled);
+    // 与「不少」配对的正向断言：数据区最后一行的 A..I 九格被整块清空后仍带 s=（清的是**值**、
+    // 不是边框）。上面那条是自指比较、只管总量，这条把承诺落到**具体位置**上；同一性质在
+    // 下面保真项的 each 用例里对两份模板各跑一遍（那边是逐模板钉的版本）。
+    const lastExcelRow = G.dataStartRow + G.dataRowCount;
+    const cleared = rowXml(outXml, lastExcelRow);
+    for (const letter of columnLetters(G.dataColumns.first, G.dataColumns.last)) {
+      const cell = cleared.match(new RegExp(`<c r="${letter}${lastExcelRow}"[^>]*>`))?.[0];
+      expect(cell, `列 ${letter} 在清空行里没写出来`).toBeDefined();
+      expect(cell, `列 ${letter} 的样式索引丢了`).toMatch(/\ss="\d+"/);
+    }
   });
 
   // ---- 检具模板的保真项（2026-10-18：此前这三条承诺零断言）----
