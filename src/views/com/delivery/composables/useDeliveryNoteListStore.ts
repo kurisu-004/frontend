@@ -340,9 +340,15 @@ export const useDeliveryNoteListStore = defineStore('delivery-note-list', () => 
 
   /** 关闭过渡结束（el-dialog 的 `closed`）⇒ 丢掉 target 快照，下次 `onDeliver` 重新取
    *  行上的 version。`onDeliver` 每次打开都整体覆写 target，所以即便这一次 closed 丢了
-   *  （例如组件被卸载），也不会有脏快照被下一次提交读到。 */
+   *  （例如组件被卸载），也不会有脏快照被下一次提交读到。
+   *
+   *  ⚠️ **陈旧守卫（2026-10-16 补）**：`closed` 比关闭**晚约 300ms** 才到，若这段窗口里
+   *  又 `onDeliver(rowB)`（键盘路径可达：确认后对话框关闭中，用户立刻在另一行按了
+   *  「送货」），A 的那次 `closed` 会把 B 的快照连同显隐一起抹掉 ⇒ B 的对话框凭空消失、
+   *  标题空成「一键送货 — 」。判据是「此刻对话框是否已开」：`open === true` 说明这一下
+   *  `closed` 属于上一张单据，直接忽略。正常关闭路径上 `open` 已是 false，守卫不挡。 */
   function onDeliverDialogClosed(): void {
-    deliverDialogOpen.value = false;
+    if (deliverDialogOpen.value) return;
     deliverTarget.value = null;
   }
 

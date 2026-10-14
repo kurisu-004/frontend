@@ -12,7 +12,8 @@
 //   - 一键送货的司机流程（2026-10-16）：选司机 ⇒ driver POST 先、pickup 后且用 driver
 //     响应里的**新** version；沿用本单司机 ⇒ 只发 pickup 一条；零 ElMessageBox；
 //     失败路径也失效本域（driver 成功 + pickup 失败 ⇒ 本端 version / 司机名已过期）。
-//   - 对话框快照的清理时机：关闭那一刻**不清**（leave 过渡期间回显还在用），等 `closed`。
+//   - 对话框快照的清理时机：关闭那一刻**不清**（leave 过渡期间回显还在用），等 `closed`；
+//     且 `closed` 要有陈旧守卫（迟到的上一次 closed 不抹掉已开的新一张单）。
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { createApp, nextTick } from 'vue';
@@ -440,6 +441,26 @@ describe('onDeliver 一键送货：司机流程', () => {
     apiPostMock.mockClear();
     await store.actions.onDeliverConfirm('W2');
     expect(apiPostMock).not.toHaveBeenCalled();
+  });
+
+  // ⚠️ `closed` 比关闭晚约 300ms 到：A 关闭中若 `onDeliver(rowB)` 抢跑，A 的那次 closed
+  // 会把 B 的快照连同显隐一起抹掉（B 的对话框凭空消失、标题空成「一键送货 — 」）。
+  // 鼠标路径基本不可达（overlay 还在 DOM 里吃点击），键盘路径可达。
+  it('关闭过渡中又开了下一张单 ⇒ 上一张的 closed 不抹掉新快照、也不关掉新对话框', async () => {
+    const store = boot();
+    store.query.restoreState();
+    await settle();
+
+    store.actions.onDeliver(noteRow({ id: 'N1', delivery_note_no: 'DN-A' }));
+    store.actions.onDeliverDialogClose(false); // A 开始 leave 过渡（closed 还没到）
+    store.actions.onDeliver(noteRow({ id: 'N2', delivery_note_no: 'DN-B' })); // 抢跑开 B
+    expect(store.actions.deliverTarget?.delivery_note_no).toBe('DN-B');
+
+    store.actions.onDeliverDialogClosed(); // ← A 的那次 closed 迟到
+
+    expect(store.actions.deliverTarget?.id).toBe('N2');
+    expect(store.actions.deliverTarget?.delivery_note_no).toBe('DN-B');
+    expect(store.actions.deliverDialogOpen).toBe(true);
   });
 });
 

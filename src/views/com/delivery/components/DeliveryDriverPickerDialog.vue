@@ -9,7 +9,9 @@
     · 单据上已有司机名 → 回显「本单已指定：X」，允许**不选直接确认**；此时 emit 空串，
       调用方只发 pickup、不重发 `POST /{id}/driver`（没必要为了同一件事再推进一次 version）；
       选了别人就是「改绑」，下拉 **clearable** 让用户能退回沿用（`emit` 仍回到空串口径）；
-    · 单据上没有司机名 → **确认按钮 disabled**，必须选一个（后端没有兜底司机）。
+    · 单据上没有司机名 → **确认按钮 disabled**，必须选一个（后端没有兜底司机）；
+      选上之后提示点名「本次将指定为 X」，clearable 让这一格也能退回未选
+      （退回后确认按钮重新 disabled）。
 
   emit 的 `driverId` 就是上面那个字符串：非空 = 本次要改绑的司机 id，空串 = 沿用本单司机。
   两条 POST 的编排（driver 先、pickup 用 driver 响应里的新 version）在 store 里 ——
@@ -57,12 +59,17 @@
       </el-select>
     </div>
 
-    <!-- ⚠️ **三态都要有文案**（2026-10-16 补）：「单据已有司机 + 用户又选了别人」这一格
-         原本命中不到任何分支，渲染成空 div —— 唯一那条「不选则沿用」的指引凭空消失，
-         配合当时没有 clearable，用户就再也回不到沿用模式了。 -->
+    <!-- ⚠️ **四态都要有文案**（2026-10-16 补齐）：两处曾经出现「空白窗口」——
+         ① 「单据已有司机 + 又选了别人」两个分支都不命中，渲染成空 div，唯一那条
+            「不选则沿用」的指引凭空消失；② 「单据原本没司机 + 已经选了人」仍停在
+            「请先选择后再确认」，把用户刚做完的事重新要求一遍、且从不点名选了谁。
+         判据一律 `hasDriverOnNote × driverId` 的四格组合。 -->
     <div class="driver-note">
-      <span v-if="!hasDriverOnNote" class="muted">
+      <span v-if="!hasDriverOnNote && !driverId" class="muted">
         本单尚未指定司机，请先选择后再确认（不指定会被后端以 21409 拒绝）。
+      </span>
+      <span v-else-if="!hasDriverOnNote" class="muted">
+        本次将指定为 {{ selectedDriverName ?? '所选司机' }}；清空下拉即取消选择。
       </span>
       <span v-else-if="!driverId" class="muted">
         本单已指定：{{ driverWorkerName }}（不选则沿用该司机）

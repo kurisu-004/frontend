@@ -11,8 +11,8 @@
 //      （调用方据此决定要不要先发 POST /{id}/driver）。
 // 另钉两条关闭语义：「取消」与右上角 × 都不发 confirm 且清掉本地选中态；el-dialog 的
 // `closed` 透传给调用方（单据快照在那之后才清，见 store 的 onDeliverDialogClosed）。
-// 以及「已有司机 + 又选了别人」那一格的三态文案与清空可达性（clearable + valueOnClear
-// 钉成空串；收到 undefined 不算「选好」）。
+// 以及提示行的四格组合（`hasDriverOnNote` × `driverId` 全部有文案、无空白窗口）与清空
+// 可达性（clearable + valueOnClear 钉成空串；收到 undefined 不算「选好」）。
 //
 // 组件自身零写端点：两条 POST 的编排在 store（见 useDeliveryNoteListStore.spec.ts）。
 //
@@ -203,7 +203,7 @@ describe('DeliveryDriverPickerDialog', () => {
 
   // ⚠️ 「已有司机 + 又选了别人」这一格曾经渲染成空 div（两个分支都不命中），唯一那条
   // 「不选则沿用」的指引凭空消失；而下拉当时又没有 clearable，用户再也回不到沿用模式。
-  // 三态文案 + 清空可达性由下面这三条钉。
+  // 四态文案 + 清空可达性由下面这三条钉。
   it('已有司机 + 又选了别人 → 提示「本次将改绑为 X；清空下拉即退回沿用 Y」，不留空白窗口', async () => {
     withDriverOptions();
     const w = await mountDialog({ driverWorkerName: '李四' });
@@ -212,8 +212,31 @@ describe('DeliveryDriverPickerDialog', () => {
     expect(note).toContain('本次将改绑为 王五');
     expect(note).toContain('退回沿用');
     expect(note).toContain('李四');
-    // 三态都要有文案：这一格绝不能渲染成空 div
+    // 四态都要有文案：这一格绝不能渲染成空 div
     expect(note.trim().length).toBeGreaterThan(0);
+  });
+
+  // ⚠️ 「原本没司机 + 已经选了人」这一格原本仍停在「请先选择后再确认」——把用户刚做完的
+  // 事重新要求一遍、且从头到尾不点名选了谁（与「已有司机 + 选了别人」那一格不对称）。
+  it('单据上没有司机 + 选了司机 → 提示「本次将指定为 王五」，不再说「请先选择后再确认」', async () => {
+    withDriverOptions();
+    const w = await mountDialog();
+    await selectDriver(w, 'W2');
+    const note = w.find('.driver-note').text();
+    expect(note).toContain('本次将指定为 王五');
+    expect(note).not.toContain('请先选择后再确认');
+    // 确认按钮此时已解禁（提示与按钮状态必须说同一件事）
+    expect(confirmDisabled(w)).toBe(false);
+  });
+
+  it('单据上没有司机 + 选了又清空 → 提示退回「请先选择后再确认」，确认按钮重新 disabled', async () => {
+    withDriverOptions();
+    const w = await mountDialog();
+    await selectDriver(w, 'W2');
+    await clearDriver(w);
+    const note = w.find('.driver-note').text();
+    expect(note).toContain('请先选择后再确认');
+    expect(confirmDisabled(w)).toBe(true);
   });
 
   it('下拉 clearable + 清空值钉成空串（清空即退回「沿用」，不是 undefined）', async () => {
