@@ -283,10 +283,9 @@ export interface ExcelFillTarget {
 
 /** 文件上传条目（统一容器）。
  * - key：UI cell / 后置上传 job 的键（`pdf:${srcUid}` / `3d:${fileUid}`）。
- * - rowRefs：哪些 row 引用了该文件。**owner 落在哪个实体由 ref 的 rowKind 决定**（见
- *   `buildUploadJobs`）：装配件顶层是 `t_assembly` 行（`owner_kind='ASSEMBLY'`，
- *   落库 kind 由 `'DRAWING'` 转成 `'ASSEMBLY_MASTER'`），其余（独立零件 / 装配件子件）
- *   都是 `t_part` 行（`owner_kind='PART'`，kind 原样透传）。
+ * - rowRefs：哪些 row 引用了该文件。**owner 与 kind 两个维度的分流口径只写在提交段
+ *   `buildUploadJobs` 的注释里**（owner 按 ref 的 rowKind 定、落库 kind 由
+ *   `runUploadJobs` 在发请求前改写），本类型不复述，避免两处各改一处产生矛盾注释。
  *
  * 2026-10-05：装配件侧每个子件、每个总装图都是各自独立的**单页切片**（uid 唯一），
  * 装配件顶层在「无总装图」时**不产生 entry** ⇒ 装配件的一份 entry 只对应一个目标

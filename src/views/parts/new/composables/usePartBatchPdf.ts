@@ -56,7 +56,6 @@ import type { UsePartBatchPdfOptions, UsePartBatchPdfReturn } from './usePartBat
 export type {
   AssemblyChildRow,
   AssemblyRow,
-  PdfFormState,
   PdfPreviewState,
   PdfSource,
   SourceTreeRow,
@@ -94,7 +93,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   // 2026-08-27：vue-draggable-plus 的 useDraggable composable 在 unmount 时
   // 自动 destroy，无需手动调用。
   // unmount 时关预览（revoke blob URL）+ 刷新 draft 快照 + 撤销 pending saver
-  //（避免 debounce 在组件已销毁后写入 stale state）。顺序与拆分前一致。
+  //（避免 debounce 在组件已销毁后写入 stale state）。
   onBeforeUnmount(() => {
     parse.closePdfPreview();
     submit.flushDraftOnUnmount();

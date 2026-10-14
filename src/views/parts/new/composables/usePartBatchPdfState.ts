@@ -172,8 +172,8 @@ export interface PdfBatchState {
 }
 
 /**
- * 创建共享状态。整个 composable 只调一次；四段工厂拿到的都是同一个对象 ⇒ ref 身份、
- * 闭包捕获与拆分前逐字一致。
+ * 创建共享状态。整个 composable 只调一次；四段工厂拿到的都是同一个对象 ⇒ ref 身份唯一、
+ * 各段闭包共享同一份状态。
  */
 export function createPdfBatchState(opts: UsePartBatchPdfOptions): PdfBatchState {
   const { customers, successNextTab } = opts;

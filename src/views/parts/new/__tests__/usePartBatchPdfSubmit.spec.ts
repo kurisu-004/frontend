@@ -72,6 +72,12 @@ const mocks = vi.hoisted(() => ({
   pageCountThrows: false,
   /** 非 null 时：`countPdfPages` 先 await 这个 promise，用于把「解析在途」那段挂起来。 */
   pageCountGate: null as Promise<void> | null,
+  /** 非 null 时：`PDFDocument.load` 先 await 这个 promise（切页在途的挂起点，与
+   *  `pageCountGate` 同款，只是挂在 pdf-lib 那一侧）。 */
+  loadGate: null as Promise<void> | null,
+  /** `PDFDocument.load` 的调用次数：用例用它确认「确实已经进到 await 里、在途」，而不是
+   *  靠 sleep / 固定 flush 次数猜时序。 */
+  loadCalls: 0,
   /** draft.saver.schedule 收到的 payload 队列（末条即最新快照）。 */
   scheduled: [] as Array<Record<string, unknown>>,
 }));
@@ -145,6 +151,12 @@ vi.mock('pdf-lib', () => {
   return {
     PDFDocument: {
       load: async () => {
+        mocks.loadCalls += 1;
+        // 挂起点只拦**第一次** load：它代表「当前那个切页入口正在读文件」。若一路拦下去，
+        // 闸门被改坏后未拦住的那条路径也会一起挂死，退化成超时失败而不是可读的断言失败。
+        const gate = mocks.loadGate;
+        mocks.loadGate = null;
+        if (gate) await gate;
         if (mocks.failOnLoad) throw new Error('Input buffer contains an encrypted PDF');
         return doc();
       },
@@ -293,6 +305,8 @@ beforeEach(() => {
   mocks.failOnLoad = false;
   mocks.pageCountThrows = false;
   mocks.pageCountGate = null;
+  mocks.loadGate = null;
+  mocks.loadCalls = 0;
   mocks.scheduled.length = 0;
 });
 
@@ -2116,6 +2130,86 @@ describe('装配件逐页分发', () => {
     // 只切了一轮（2 页 = 2 次 copyPages），第二次点击没进切页
     expect(mocks.copyPages).toHaveBeenCalledTimes(2);
     expect(mocks.warning.mock.calls.map((c) => c[0]).join('|')).toContain('正在切页');
+    expect(mocks.error).not.toHaveBeenCalled();
+    w.unmount();
+  });
+
+  // 2026-10-20：切页闸 `pageSlicing` 的写入口是**跨模块访问器** `setSlicing`（行段的
+  // `confirmManualAssembly` 经它占闸，解析段的 `mergeSelectedAsAssembly` 经 `rejectIfSlicing`
+  // 查闸，两把闸必须是同一把）。上面那组用例全在**单个入口内**打转（同一入口连点 /
+  // 顺序调用后验证闸门已释放），没有一条让「A 入口持闸在途时 B 入口尝试进入」——
+  // 把 `setSlicing` 误改成写第二个变量、或给行段另配一把局部 flag，上面那组照样全绿，
+  // 两个建行入口却各自可连点 ⇒ 建出两行重复装配件（`POST /assemblies` 无幂等键）。
+  // 下面两条把两个方向都钉死：任一方向的闸断开，必红。
+  it('跨入口互斥：手动新增装配件持闸在途时，「合并为装配件」进不来（同一把闸）', async () => {
+    mocks.pageCount = 2;
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    api.pdfForm.customerL1Id = 'c-root';
+    api.pdfFiles.value = [up(1, 'ASM-3_总装.pdf')];
+    await api.rebuildFromUploads();
+    api.selectedPages.value = new Set(['pdf-1:0', 'pdf-1:1']);
+    await api.addManualAssembly();
+    api.manualAsmForm.drawing_no = 'E42-ASM-011';
+    api.manualAsmForm.file = new File([new Uint8Array([1])], 'manual-11_总装.pdf');
+    // 把「读页数」这一步挂起：手动入口此刻已占住切页闸（闸占在 countPdfPages 之前）
+    let release: () => void = () => undefined;
+    mocks.pageCountGate = new Promise<void>((r) => (release = r));
+
+    const inFlight = api.confirmManualAssembly();
+    // 另一个建行入口此刻点进来：必须被同一把闸拦掉，且拦在建行之前（连 allPdfs 都不该多）
+    await api.mergeSelectedAsAssembly();
+
+    expect(mocks.warning.mock.calls.map((c) => c[0]).join('|')).toContain('正在切页');
+    expect(api.assemblies.value).toHaveLength(0);
+    expect(api.allPdfs.value.filter((s) => s.synthesized)).toHaveLength(0);
+
+    release();
+    await inFlight;
+
+    // 只建出手动那一行（2 页 = 2 次 copyPages），被拦那次没进切页
+    expect(api.assemblies.value).toHaveLength(1);
+    expect(api.assemblies.value[0]!.drawing_no).toBe('E42-ASM-011');
+    expect(mocks.copyPages).toHaveBeenCalledTimes(2);
+    expect(mocks.error).not.toHaveBeenCalled();
+    w.unmount();
+  });
+
+  it('跨入口互斥：「合并为装配件」持闸在途时，手动新增装配件进不来（同一把闸）', async () => {
+    mocks.pageCount = 2;
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    api.pdfForm.customerL1Id = 'c-root';
+    api.pdfFiles.value = [up(1, 'ASM-4_总装.pdf')];
+    await api.rebuildFromUploads();
+    api.selectedPages.value = new Set(['pdf-1:0', 'pdf-1:1']);
+    // 把「读 pdf-lib」这一步挂起：合并入口此刻已占住切页闸（闸占在 load 之前）
+    let release: () => void = () => undefined;
+    mocks.loadGate = new Promise<void>((r) => (release = r));
+
+    const inFlight = api.mergeSelectedAsAssembly();
+    // 等它真的进到 await 里（不是靠 sleep 猜时序），此刻闸必为占住状态
+    await vi.waitFor(() => expect(mocks.loadCalls).toBe(1));
+
+    await api.addManualAssembly();
+    api.manualAsmForm.drawing_no = 'E42-ASM-012';
+    api.manualAsmForm.file = new File([new Uint8Array([1])], 'manual-12_总装.pdf');
+    await api.confirmManualAssembly();
+
+    expect(mocks.warning.mock.calls.map((c) => c[0]).join('|')).toContain('正在切页');
+    // 被拦那次连原始 PDF 都没登记进 allPdfs（闸在建行之前就 return 了）
+    expect(api.allPdfs.value.filter((s) => !s.synthesized)).toHaveLength(1);
+
+    release();
+    await inFlight;
+
+    // 只建出合并那一行（顶层指回原始 PDF、2 个子件各持一页切片），手动那次没建出来
+    expect(api.assemblies.value).toHaveLength(1);
+    expect(api.assemblies.value[0]!.pdfSourceUid).toBe('pdf-1');
+    expect(api.assemblies.value[0]!.children).toHaveLength(2);
+    expect(mocks.copyPages).toHaveBeenCalledTimes(2);
     expect(mocks.error).not.toHaveBeenCalled();
     w.unmount();
   });
