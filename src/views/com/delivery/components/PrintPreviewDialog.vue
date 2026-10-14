@@ -162,7 +162,8 @@ const TEMPLATE_NOT_BOUND_CODE = 21109;
 const templateOk = computed(() => templateSource.value !== null && templateContract.value !== null);
 
 /** 未知版式判别位的编译期兜底：走到这里说明契约联合多了一个没接的 `kind`。
- *  `tsc` 当场红比让人事后看出来便宜（见 `contractLabel`）。 */
+ *  `tsc` 当场红比让人事后看出来便宜。**两个消费点都要有**（`contractLabel` 的标签、
+ *  `onExport` 的渲染分支）—— 只挂一处的话，另一处漏接仍然静默。 */
 function assertNeverKind(never: never): never {
   throw new Error(`未接的送货单模板版式：${JSON.stringify(never)}`);
 }
@@ -385,7 +386,8 @@ watch(
     if (noteChanged) clearTemplateState();
     if (!open) return;
     // 重开一律重新 resolve：模板只来自后端绑定，每次打开都按当下的绑定取一次（换绑 /
-    // 删除都在下一次打开时生效）。
+    // 删除都在下一次打开时生效）。先清模板态 ⇒ 「重新选用进行中」那个窗口里工具栏是空的、
+    // 「导出」不可点（不清的话上一次的 templateSource 会让用户导出到一份可能已被换绑的模板）。
     clearTemplateState();
     autoHint.value = '';
     boundMissing.value = false;
@@ -535,26 +537,37 @@ async function onExport(): Promise<void> {
     // 就是「这次确认了送货人」。落库失败（409 / 21409 / 网络）时中止，不产出文件 ——
     // 否则会下载出一张页脚写着 A 司机、单据上却是 B 司机的送货单。
     if (!(await persistSelectedDriver())) return;
-    // ⚠️ **按 kind 分支各调一次 `renderDeliveryNoteWorkbook`、各传对应的具体契约常量**：
-    // 页脚实参的类型 `FooterFor<C>` 是按契约反查的判别联合，分支之后 `contract` 已收窄成具体
-    // 成员，页脚就必须是对应那一份的形状 —— 页脚与契约配错，`tsc` 当场红。走一个「返回联合」的
+    // ⚠️ **`switch` + `default: return assertNeverKind(contract)`，不是三元**（与 `contractLabel`
+    // 同一条纪律）：三元 `c.kind === 'gauge' ? … : …` 在将来新增第三套版式时会**安静地**落进
+    // 零件版分支（零件版的页脚实参照样传得进去），lint 与 typecheck 全绿、导出的是一份套错版式的
+    // 文件。分支传的是**契约常量**（`detectTemplateContract` 返回的正是这两个常量本身，不是副本），
+    // 所以编译期只能靠判别位收窄来兜 —— 判别位就是这里唯一的判据。
+    //
+    // 分支之后 `contract` 已收窄成具体成员，页脚实参的类型 `FooterFor<C>` 是按契约反查的判别
+    // 联合，页脚就必须是对应那一份的形状 —— 页脚与契约配错，`tsc` 当场红。走一个「返回联合」的
     // 中转函数会把这条编译期耦合稀释掉（联合的任一成员都传得进去），只剩运行时那道
-    // `assertFooterMatchesContract`。分支里传契约常量（`detectTemplateContract` 返回的正是
-    // 这两个常量本身，不是副本）。
-    const out =
-      contract.kind === 'gauge'
-        ? await renderDeliveryNoteWorkbook(
-            bytes,
-            sheets.value,
-            { kind: 'gauge', deliveryDate: formatChineseDeliveryDate(new Date()) },
-            GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT,
-          )
-        : await renderDeliveryNoteWorkbook(
-            bytes,
-            sheets.value,
-            { driverName: driverNameOfExport.value, ...todayParts() },
-            DELIVERY_NOTE_TEMPLATE_CONTRACT,
-          );
+    // `assertFooterMatchesContract`。
+    let out: Uint8Array;
+    switch (contract.kind) {
+      case 'gauge':
+        out = await renderDeliveryNoteWorkbook(
+          bytes,
+          sheets.value,
+          { kind: 'gauge', deliveryDate: formatChineseDeliveryDate(new Date()) },
+          GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT,
+        );
+        break;
+      case 'part':
+        out = await renderDeliveryNoteWorkbook(
+          bytes,
+          sheets.value,
+          { driverName: driverNameOfExport.value, ...todayParts() },
+          DELIVERY_NOTE_TEMPLATE_CONTRACT,
+        );
+        break;
+      default:
+        return assertNeverKind(contract);
+    }
     triggerBrowserDownload(
       // `out` 是 hucre 的 Uint8Array（TS 5.7+ 泛型到 ArrayBufferLike，而
       // BlobPart 要 ArrayBuffer 变体）—— 复制进一个新的 ArrayBuffer 再包，零拷贝

@@ -8,6 +8,7 @@
 //   - 判不出版式（四个锚点都不中）⇒ 「导出」disabled + 一句提示，**且不列逐格差异**
 //     （逐格校验是「模板编辑」页上传闸的职责，见 PrintPreviewDialog.vue 文件头）；
 //   - **导出时对刚取回的字节复探版式**：管理员在对话框开着时换了绑定 ⇒ 中止导出 + 零产物；
+//     复探排在司机落库**之前**（换绑中止时零 driver POST，正常导出仍恰好一次）；
 //   - **单据上没有司机也照样能导出**（指定司机搬去「一键送货」那一步）；
 //   - el-tabs 按收货单位分组，label 带 (N)；
 //   - 行拆分（守恒不通过则「确定」disabled）；
@@ -31,8 +32,20 @@ import { QueryClient, VueQueryPlugin } from '@tanstack/vue-query';
 import { readFileSync } from 'node:fs';
 import type * as HttpModule from '@/api/http';
 
+/**
+ * GET 桩的第二个入参（本 spec 只用它的 `params.customer_id`）。声明在 `vi.hoisted` 之前，
+ * 因为 mock 的类型签名要用它 —— 各条 `mockImplementation` 必须与该签名逐字一致（写成
+ * `config?: unknown` 会让每一处实现都报 TS2345）。
+ */
+type GetConfig = { params?: Record<string, unknown> } | undefined;
+
+/** 取一次 GET 请求的那个 `customer_id`（空串 = 这条请求根本没带）。 */
+function requestedCustomerId(config: GetConfig): string {
+  return String(config?.params?.customer_id ?? '');
+}
+
 const { apiGetMock, apiPostMock } = vi.hoisted(() => ({
-  apiGetMock: vi.fn<(url: string, config?: unknown) => Promise<{ data: unknown }>>(async () => ({
+  apiGetMock: vi.fn<(url: string, config?: GetConfig) => Promise<{ data: unknown }>>(async () => ({
     data: { items: [] },
   })),
   apiPostMock: vi.fn<(url: string, body?: unknown) => Promise<{ data: unknown }>>(async () => ({
@@ -111,9 +124,14 @@ const BOUND_TEMPLATE_ROW = {
  * `customer_name`（另一条 `t_customer` 查询的结果）。**也没有 `content_url`** —— 后端从头到尾
  * 没有这个字段，取字节只有 `/{id}/content` 这条带鉴权的 axios 端点。
  */
-function boundTemplateOut(fileSize: number, filename = 'fala_bound.xlsx') {
+function boundTemplateOut(fileSize: number, filename = 'fala_bound.xlsx', customerId = 'C1') {
   return {
-    template: { ...BOUND_TEMPLATE_ROW, file_size: fileSize, original_filename: filename },
+    template: {
+      ...BOUND_TEMPLATE_ROW,
+      customer_id: customerId,
+      file_size: fileSize,
+      original_filename: filename,
+    },
     customer_name: '法拉电子',
   };
 }
@@ -126,21 +144,45 @@ function boundTemplateOut(fileSize: number, filename = 'fala_bound.xlsx') {
 let boundBytes: Uint8Array | null = null;
 let boundFilename = 'fala_bound.xlsx';
 
+/**
+ * 某些客户**各自的** resolve 返回文件名（key = `customer_id`，值 = 那份绑定的
+ * `original_filename`）；没登记的客户一律吃 `boundFilename`。
+ *
+ * ⚠️ **字节不分客户、只分文件名**是有意的：被它服务的守卫（换单 ⇒ 模板态不飘）判的是
+ * 「工具栏上那个名字是谁的」，字节相同才能让同一条用例顺带断言「版式也重新探过一遍」。
+ * 反过来，若两个客户的字节也一起分掉，「按新单据重新选到模板」那条就得再复制一份 probe。
+ */
+const customerFilenames = new Map<string, string>();
+
+/** 让某个一级客户 resolve 出**另一个**文件名（「换单」那类要两个客户可区分的守卫用）。 */
+function bindFilenameFor(customerId: string, filename: string): void {
+  customerFilenames.set(customerId, filename);
+}
+
 /** 让该一级客户绑上 `src` 那份模板（下次 `mountDialog` 的自动选用就会取它）。 */
 function bindTemplate(src: Uint8Array, filename = 'fala_bound.xlsx'): void {
   boundBytes = src;
   boundFilename = filename;
 }
 
-/** GET 的默认实现：送货车用端点返空、resolve 按「绑没绑」分流、content 返绑定的那份字节。 */
-async function defaultGet(url: string): Promise<{ data: unknown }> {
+/**
+ * GET 的默认实现：送货车用端点返空、resolve **按 `params.customer_id` 分流**（每个客户报自己
+ * 那份绑定的文件名）、content 返绑定的那份字节。
+ *
+ * ⚠️ **resolve 必须按客户分流**（2026-10-18 review 第 2 轮 G2）：不分流时每个客户都返回同一个
+ * 名字，于是「工具栏上还是 A 单那个模板」与「已按 B 单重新选用」两种情况给出**同一份文本**
+ * ⇒ 「换单 ⇒ 模板不跟着飘」那条守卫零区分力，连把 `clearTemplateState()` 整段删掉都不会红。
+ */
+async function defaultGet(url: string, config?: GetConfig): Promise<{ data: unknown }> {
   if (url.includes('/print-templates/resolve')) {
+    const customerId = requestedCustomerId(config);
     if (!boundBytes) {
       // 未绑定 = **业务码 21109 的信封**（不是 HTTP 错误）：响应拦截器会把它抛成
       // ApiError(21109)，对话框据此提示去「模板编辑」页配模板。
       throw Object.assign(new Error('该一级客户未绑定打印模板'), { code: 21109 });
     }
-    return { data: boundTemplateOut(boundBytes.byteLength, boundFilename) };
+    const filename = customerFilenames.get(customerId) ?? boundFilename;
+    return { data: boundTemplateOut(boundBytes.byteLength, filename, customerId || 'C1') };
   }
   if (url.includes('/print-templates/T1/content')) return { data: exactBuffer(boundBytes!) };
   return { data: { items: [] } };
@@ -177,7 +219,11 @@ function li(p: Record<string, unknown> = {}) {
     note: null,
     customer_name: '法拉',
     parent_customer_name: '法拉电子',
-    customer_path: '法拉电子 / 法拉',
+    // ⚠️ **第 2 层到叶子、不含 L1**（后端口径）：L1 是上面那个 `parent_customer_name`。
+    // **刻意用多级路径**而不是单段名 —— C 列那条守卫断言的是「写的是路径而不是叶子单段名」，
+    // fixture 给单段名的话 `customer_path` 与 `customer_name` 取值相同，这条断言恒绿、分不出
+    // 渲染层读的是哪个键。
+    customer_path: '电子厂 / 法拉',
     assembly_id: null,
     assembly_serial_no: null,
     assembly_drawing_no: null,
@@ -201,7 +247,7 @@ function note(over: Record<string, unknown> = {}) {
     delivery_note_no: 'DN-001',
     customer_id: 'C1',
     customer_name: '法拉电子',
-    customer_path: '法拉电子 / 法拉',
+    customer_path: '电子厂 / 法拉',
     status: 'DRAFT',
     submitted_at: null,
     picked_up_at: null,
@@ -326,11 +372,12 @@ async function openDownloaded(n = 0) {
 
 beforeEach(() => {
   apiGetMock.mockReset();
-  apiGetMock.mockImplementation(async (url: string) => defaultGet(url));
+  apiGetMock.mockImplementation(async (url: string, config?: GetConfig) => defaultGet(url, config));
   apiPostMock.mockReset();
   apiPostMock.mockResolvedValue({ data: null });
   boundBytes = null;
   boundFilename = 'fala_bound.xlsx';
+  customerFilenames.clear();
   downloads.length = 0;
   localStorage.clear();
   (ElMessage.error as unknown as { mock: { calls: unknown[] } }).mock.calls.length = 0;
@@ -495,21 +542,23 @@ describe('模板契约常量', () => {
 // 司机绑定时机（2026-10-08 死锁修复的核心验收点）
 // ============================================================
 
+/** 司机端点的两个候选（否则下拉选中项查不到名字，落库闸门不会触发）。 */
+const DRIVER_ITEMS = [
+  { id: 'W1', name: '李四', badge_code: 'S001' },
+  { id: 'W2', name: '王五', badge_code: 'S002' },
+];
+
+/** 是司机端点就返它的响应，不是返 `undefined`（让调用方接着走下一条分支）。
+ *  抽出来是因为要在自定义 `mockImplementation` 里复用（换单那条要叠一层闸）。 */
+function driverItemsFor(url: string): { data: unknown } | undefined {
+  return url.includes('/drivers') ? { data: { items: DRIVER_ITEMS } } : undefined;
+}
+
 /** 让 GET /com/delivery/drivers 返回两名候选（否则下拉选中项查不到名字）。 */
 function withDriverOptions(): void {
-  apiGetMock.mockImplementation(async (url: string) => {
-    if (url.includes('/drivers')) {
-      return {
-        data: {
-          items: [
-            { id: 'W1', name: '李四', badge_code: 'S001' },
-            { id: 'W2', name: '王五', badge_code: 'S002' },
-          ],
-        },
-      };
-    }
-    return defaultGet(url);
-  });
+  apiGetMock.mockImplementation(
+    async (url: string, config?: GetConfig) => driverItemsFor(url) ?? (await defaultGet(url, config)),
+  );
 }
 
 /** 等某个条件成立。桩 GET 与 hucre 渲染都是异步链，机器忙时固定轮次的 `flush` 不够
@@ -698,7 +747,7 @@ describe('PrintPreviewDialog 自动选用一级客户绑定的模板', () => {
     try {
       withDriverOptions();
       bindTemplate(BUILTIN_PART);
-      apiGetMock.mockImplementation(async (url: string) => {
+      apiGetMock.mockImplementation(async (url: string, config?: GetConfig) => {
         if (url.includes('/print-templates/resolve')) {
           // 旧版的**平铺**形状：后端 `PrintTemplateResolveOut` 是嵌套的，顶层这些键不存在
           // ⇒ `printTemplateResolveSchema.parse` 抛 ⇒ 走 catch 的 else 分支。
@@ -715,7 +764,7 @@ describe('PrintPreviewDialog 自动选用一级客户绑定的模板', () => {
             },
           };
         }
-        return defaultGet(url);
+        return defaultGet(url, config);
       });
 
       const w = await mountDialog();
@@ -772,9 +821,9 @@ describe('PrintPreviewDialog 自动选用一级客户绑定的模板', () => {
     // 不命中时，tooltip 不能落到「判不出版式」—— 那会把常态说成故障。
     const gate = deferred();
     bindTemplate(BUILTIN_PART);
-    apiGetMock.mockImplementation(async (url: string) => {
+    apiGetMock.mockImplementation(async (url: string, config?: GetConfig) => {
       if (url.includes('/print-templates/resolve')) await gate.promise;
-      return defaultGet(url);
+      return defaultGet(url, config);
     });
     const w = await mountDialog();
     await waitUntil(
@@ -790,35 +839,71 @@ describe('PrintPreviewDialog 自动选用一级客户绑定的模板', () => {
 
   it('关对话框再打开 ⇒ 重新按当下的绑定自动选用一次', async () => {
     withDriverOptions();
-    const w = await mountWithBound(BUILTIN_PART);
+    const w = await mountWithBound(BUILTIN_PART, {}, 'for_note_a.xlsx');
     await w.setProps({ modelValue: false });
     await flush();
+    // 把重开那一次 resolve 卡在闸上：重开沿必须**先清模板态再重新选用**，这样「重新选用进行中」
+    // 这个窗口里工具栏是空的、「导出」不可点。不清的话上一次的 templateSource / templateName
+    // 会一直留在那儿 —— 用户能拿一份可能已被换绑的旧 templateSource 直接导出。
+    const gate = deferred();
+    apiGetMock.mockImplementation(async (url: string, config?: GetConfig) => {
+      if (url.includes('/print-templates/resolve')) await gate.promise;
+      return driverItemsFor(url) ?? (await defaultGet(url, config));
+    });
     apiGetMock.mockClear();
     await w.setProps({ modelValue: true });
-    await flush();
+    await waitUntil(
+      () => apiGetMock.mock.calls.some((c) => String(c[0]).includes('/print-templates/resolve')),
+      '重开的 resolve 已发出',
+    );
+    expect(w.text()).not.toContain('for_note_a.xlsx');
+    expect(exportDisabled(w)).toBe(true);
 
+    gate.resolve();
     // 模板只来自后端绑定，每次打开都重新取（管理员在这期间换绑 / 删除都在下一次生效）。
+    await waitUntil(() => w.text().includes('for_note_a.xlsx'), '重开后重新选到模板');
     expect(
       apiGetMock.mock.calls.filter((c) => String(c[0]).includes('/print-templates/resolve')),
     ).toHaveLength(1);
-    // ⚠️ 同样等落定：上面 `flush()` 覆盖的是「resolve 已发出」，取字节 + xlsx 解析在它后面。
+    // ⚠️ 同样等落定：上面 `waitUntil` 只等到**取字节之后**，版式探测的 xlsx 解析在它后面。
     await waitUntil(() => w.text().includes('零件版'), '重开后重新探到版式');
+    expect(exportDisabled(w)).toBe(false);
   });
 
   // 换单必须清模板态：详情页可以在对话框**关着**的时候换单（v-if 前后都为真、组件不卸载、
   // modelValue 不变）⇒ 只看 modelValue 的 watch 一个字都不会触发。
+  //
+  // ⚠️ **判据是文件名而不是版式标签**（2026-10-18 review 第 2 轮 G2）：mock 按
+  // `params.customer_id` 分流（C1 报 `for_note_a.xlsx` / C2 报 `for_note_b.xlsx`，见
+  // `customerFilenames`），而两边**字节相同** ⇒ 「模板态从上一张单飘过来」与「按新单重新
+  // resolve」都会显示「零件版」。拿版式标签当判据时把两处 `clearTemplateState()` 整段删掉也
+  // 照样全绿。
   it('换一张送货单 ⇒ 模板不跟着飘（按新单据的一级客户重新 resolve）', async () => {
     withDriverOptions();
-    const w = await mountWithBound(BUILTIN_PART);
+    bindFilenameFor('C2', 'for_note_b.xlsx');
+    const w = await mountWithBound(BUILTIN_PART, {}, 'for_note_a.xlsx');
+    expect(w.text()).toContain('for_note_a.xlsx');
+
     await w.setProps({ modelValue: false });
     await flush();
     // 对话框关着的时候换单：只有 note.id 与 customer_id 变了。
     await w.setProps({ note: note({ id: 'N2', customer_id: 'C2' }) });
     await flush();
-    apiGetMock.mockClear();
-    await w.setProps({ modelValue: true });
-    await flush();
+    // ① 关着换单那一步就清干净。A 单的模板态活到 B 单上的后果不是「显示错了」而是「导出错了」：
+    //    `templateSource` 仍指着 A 客户的模板 id，而导出前的复探只比 `kind` —— 两边都是零件版就
+    //    放行 ⇒ 静默导出一份别人的版式，零报错。
+    expect(w.text()).not.toContain('for_note_a.xlsx');
 
+    // C2 那次 resolve 卡在闸上，好确定性地看一眼「已重开、还没选完」那个中间态。
+    const gate = deferred();
+    apiGetMock.mockImplementation(async (url: string, config?: GetConfig) => {
+      if (url.includes('/print-templates/resolve') && requestedCustomerId(config) === 'C2') {
+        await gate.promise;
+      }
+      return driverItemsFor(url) ?? (await defaultGet(url, config));
+    });
+
+    await w.setProps({ modelValue: true });
     await waitUntil(
       () =>
         apiGetMock.mock.calls.some(
@@ -828,9 +913,20 @@ describe('PrintPreviewDialog 自动选用一级客户绑定的模板', () => {
         ),
       '按新单据的客户重新 resolve',
     );
+    // ② 重开沿同样先清：resolve 在途期间模板态是空的，「导出」不可点（否则用户能拿上一张单的
+    //    模板直接导出，且工具栏上那个名字还在骗人）。
+    expect(w.text()).not.toContain('for_note_a.xlsx');
+    expect(exportDisabled(w)).toBe(true);
+    expect(w.find('.mock-el-tooltip').attributes('title')).toContain('正在自动选用');
+
+    gate.resolve();
     // ⚠️ **等版式真的落定再断言**：上面只等到 resolve **发出**，后面还有取字节 + 一次完整 xlsx
     // 解析（2026-10-18 跑变异实测时这条偶发红过一次 —— 机器忙时断言跑在解析前面）。
-    await waitUntil(() => w.text().includes('零件版'), '按新单据重新选到模板');
+    await waitUntil(() => w.text().includes('for_note_b.xlsx'), '按新单据重新选到模板');
+    // ③ 落定后是 B 客户那一份，A 客户的名字不留痕。
+    expect(w.text()).not.toContain('for_note_a.xlsx');
+    expect(w.text()).toContain('零件版');
+    expect(exportDisabled(w)).toBe(false);
   });
 
   // 代次守卫守的是「开→关→再开」时两次 resolve 并飞：#1 落地那一刻没有任何东西拦它。
@@ -840,7 +936,7 @@ describe('PrintPreviewDialog 自动选用一级客户绑定的模板', () => {
     // 第一次 resolve 卡在闸上；第二次放行且返回**另一个**文件名，便于区分谁落地了。
     const firstGate = deferred();
     let resolveCalls = 0;
-    apiGetMock.mockImplementation(async (url: string) => {
+    apiGetMock.mockImplementation(async (url: string, config?: GetConfig) => {
       if (url.includes('/print-templates/resolve')) {
         // ⚠️ 序号必须**就地捕获**：第一次 resolve 卡在闸上期间计数器已经涨到 2，在 await 之后
         // 再读它会让两次都返回「第二个」的名字，用例就变成恒绿。
@@ -853,7 +949,7 @@ describe('PrintPreviewDialog 自动选用一级客户绑定的模板', () => {
           ),
         };
       }
-      return defaultGet(url);
+      return defaultGet(url, config);
     });
 
     const w = await mountDialog();
@@ -897,7 +993,9 @@ describe('PrintPreviewDialog 检具版模板', () => {
     expect(wb.sheets).toHaveLength(2);
     // 第 1 张 sheet 的数据区首行（0-based row 4 = Excel row 5）：A 序号 / B 订单号 /
     // C 客户路径（第 2 层到叶子、不含 L1）/ D 图号 / E 名称 / F 数量 / G·H 手写列留白 / I 交期
-    expect(wb.sheets[0]!.rows[4]![2]).toBe('法拉电子 / 法拉');
+    // C 客户路径（第 2 层到叶子、不含 L1；刻意是多级值 —— 单段名分不出渲染层读的是
+    // `customer_path` 还是 `customer_name`）
+    expect(wb.sheets[0]!.rows[4]![2]).toBe('电子厂 / 法拉');
     expect(wb.sheets[0]!.rows[4]![3]).toBe('D-1');
     expect(wb.sheets[0]!.rows[4]![5]).toBe(5);
     // 容量 25 ⇒ 第 25 条仍落在第 1 张（0-based row 28），第 26 条另起一张、序号从 1 重排
@@ -948,6 +1046,9 @@ describe('PrintPreviewDialog 导出前复探版式', () => {
     withDriverOptions();
     const w = await mountWithBound(BUILTIN_PART);
     expect(w.text()).toContain('零件版');
+    // ⚠️ **必须先选一个司机**，否则这条用例给「顺序」零信号：`persistSelectedDriver` 的判据是
+    // `driverId` 非空，没选过它恒早退、零 POST ⇒ 把司机落库挪到复探之前，本 spec 仍然全绿。
+    await selectDriver(w, 'W1');
 
     // 管理员在对话框开着的时候把绑定换成了另一套版式（后端是替换语义，不是新增）。
     bindTemplate(BUILTIN_GAUGE, 'gauge_bailuda.xlsx');
@@ -960,16 +1061,24 @@ describe('PrintPreviewDialog 导出前复探版式', () => {
     expect(msg).toContain('重新打开');
     // 对话框不关（用户看完提示自己关），导出按钮回到可点。
     expect(w.emitted('update:modelValue')).toBeUndefined();
+    // ⚠️ **顺序守卫**：复探排在司机落库**之前**。复探不过是一次纯读取的失败（用户什么都没打
+    // 出来），服务端不该已经记了一次「他确认了送货人」的 version 变更。
+    expect(driverPosts()).toHaveLength(0);
   });
 
   it('绑定没换 → 复探通过，正常导出（防这道守卫把导出整体堵死）', async () => {
     // 反向守卫：复探实现成「恒中止」时上面那条照样是绿的，只有这条会红。
     withDriverOptions();
     const w = await mountWithBound(BUILTIN_PART);
+    // 同样选司机：既守住「复探不误伤正常导出的司机落库」（顺序守卫的另一半），页脚那格也跟着
+    // 证明落库用的就是下拉里选的那位（选 W2 = 王五，单据上默认的司机名是李四）。
+    await selectDriver(w, 'W2');
     await clickExport(w, true);
+    expect(driverPosts()).toHaveLength(1);
+    expect(driverPosts()[0]![1]).toEqual({ version: 3, driver_worker_id: 'W2' });
     expect(downloads).toHaveLength(1);
     const wb = await openDownloaded();
-    expect(String(wb.sheets[0]!.rows[14]![5])).toContain('李四');
+    expect(String(wb.sheets[0]!.rows[14]![5])).toContain('王五');
   });
 
   it('导出前绑定换成了判不出版式的字节 ⇒ 同样中止（判不出就禁导出，与打开时同一条口径）', async () => {
