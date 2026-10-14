@@ -75,6 +75,35 @@
       （清单见 `src/components/__tests__/PdfPreviewDialogContract.spec.ts` 的表与例外），
       但组件本体不该把「永远 fit」焊死 —— 将来某个页面要固定比例（比如逐页比对同一比例），
       传 `:fit="false"` 即可，不必改组件本体。
+  2026-10-20 修 Worker 泄漏：`getDocument()` 返回的 `loadingTask` 是**唯一**能终止
+    pdf.js worker 线程的句柄 —— `task.destroy()` 会走 `WorkerTransport.destroy()`，
+    连带销毁 messageHandler、取消在途网络请求、清 pageCache / commonObjs / fontLoader、
+    终止线程本身。组件把 loadingTask 存在实例上，释放路径共三条：
+    ① 切 `props.url` 前先释放旧的，并 await 它 —— 保证旧线程在新线程建出来之前终止，
+       否则高频切文件时新旧线程会并存；
+    ② `props.url` 被清空（宿主收起预览）时也释放，**排在判空 return 之前** —— 少了它，
+       上一份的 worker 就被丢在后台跑完，等于换一种写法复现同一个泄漏；
+    ③ `onBeforeUnmount` 释放（不 await：卸载不阻塞；失败只 console.warn，不打断预览）。
+    doc 上的 `cleanup()` 不在这三条路径里：它只清渲染缓存、worker 照旧活着，destroy
+    已经把那份清理做了。
+    承载弹窗是 destroy-on-close，所以「不释放」等价于「每打开一次图纸预览就漏一个线程」，
+    而图纸预览是工人全天的高频动作。
+    同一条链上的另一半：`load()` 全程带守卫，卸载后迟到的结果不写回状态 —— 被自己
+    destroy 掉的 task 会以 "Worker was destroyed" / "Loading aborted" 拒绝，把它当加载
+    失败上屏是假的，写回已死的视图更是纯浪费。
+    ⚠️ **「最后发起 load 的那次赢」这条硬保证由单调序号（loadSeq）兜底，不是由
+    `loadingTask` 的赋值顺序**：load() 要先 await 释放上一份，而 await 期间完全可能有
+    新的 load 打进来；那样一来「谁最后写 loadingTask」与「谁最后调 load()」就分家了 ——
+    抢在 await 之前建好 task 的那次会被后来者覆盖掉 loadingTask，从此再没人能 destroy
+    它（这恰好把本段要消灭的泄漏又造回来）。注意可见后果是「多建一个孤儿 task + 对同一
+    份文档多下一次重复下载」，**不是**「显示错文档」：`getDocument()` 那次读的是当时的
+    `props.url`（load() 入口只在判空时读一次，不做快照），被抢跑的那次同样会取到最新的
+    url，所以别把「谁渲染出来的」当判据。
+    所以 bail 点一律对照 seq，且**必须在建 task 之前**bail（建出来就晚了）。
+    ⚠️ 路径 ② 除了释放，还必须**自己把 loading 落回 false**：模板是 `v-if="loading"`，
+    loading 为真就接管整个视图，而被它作废的那次 load 醒来只会命中 stale 守卫直接 return
+    （它没有、也不该有「替别人把 loading 落回去」的职责）⇒ 没人归位就永远停在「加载中…」。
+
   CLAUDE.md #6：仍走 @/utils/pdfjs，不直接 import pdfjs-dist。
 -->
 <template>
@@ -213,26 +242,114 @@ let fitPending = false;
 let pdfDoc: pdfjsLib.PDFDocumentProxy | null = null;
 let renderTask: pdfjsLib.RenderTask | null = null;
 let resizeObserver: ResizeObserver | null = null;
+// 2026-10-20 修 Worker 泄漏：loadingTask 是唯一能终止 pdf.js worker 线程的句柄
+// （`destroy()` → `WorkerTransport.destroy()` → 销毁 messageHandler + 终止线程）。
+// 它必须活在实例上、贯穿 load 的整个 await 链 —— 谁把它丢在局部变量里，谁就永远
+// 没机会回收那个线程（承载弹窗是 destroy-on-close，等于每次开预览漏一个）。
+let loadingTask: pdfjsLib.PDFDocumentLoadingTask | null = null;
+// 卸载后仍在飞行的 load() 一律不得再写状态（见 releaseLoadingTask 与 load 的守卫）。
+let disposed = false;
+// 2026-10-20 补：load() 的单调序号。基线里 getDocument() 整个在 load() 的同步段内，
+// 「谁最后调用 load 谁赢」是硬保证；引入「先 await 释放旧 task」之后这个保证没了 ——
+// 抢在后一个 await 里回来的那次会把 loadingTask 覆盖成自己的，让先建的那一份彻底
+// 失去句柄（孤儿 worker 线程）。序号是唯一单调递增的量，判据只能是它。
+let loadSeq = 0;
+
+/**
+ * 释放当前 loadingTask（2026-10-20 修 Worker 泄漏）。
+ *
+ * `destroy()` 返回 Promise，两条调用点的口径不同但共用这一个函数：
+ *  · 切 url：**await** 它 —— 新 task 建出来之前旧 worker 必须已经终止，否则切文件
+ *    高频发生时新旧线程会并存，峰值线程数跟着涨；
+ *  · unmount：**不 await** —— 卸载是同步流程，不能为一个后台收尾卡住整条卸载链；
+ *    失败只记一行 warn（沿用本仓 best-effort 清理的既有风格），绝不冒泡成未处理拒绝。
+ *
+ * ⚠️ 释放失败（warn 之后）**照常建新 task**：destroy 失败只说明旧线程的终止没被确认，
+ *   不代表这份文档还能取到页 —— 停在旧文档上等于给工人看一份已经不成立的图纸，比多
+ *   留一个待回收的线程更难查。下一次 load / unmount 还会再释放一次（那时 loadingTask
+ *   已经指向新 task，旧的只能靠 pdf.js 自身的 GC），这属于可接受的兜底。
+ *
+ * 2026-10-20 补：释放 task 的同一个瞬间把 `pdfDoc` 也置 null。它是**这个 task** 的
+ * promise 兑现出来的，task 一销毁，那份 doc 就再也取不到页（后续 `getPage` 一律
+ * "Worker was destroyed"）。留着它有两个后果：render() 会拿着一个已死的 doc 去摸画布；
+ * 换文件那次还会多刷一条「取页失败」假 warn —— 新 doc 还没 resolve、`pdfDoc` 仍指着旧
+ * doc 的话，`doc !== pdfDoc` 这道竞态守卫就分不清「自 destroy」与「真取页失败」了。
+ */
+async function releaseLoadingTask(): Promise<void> {
+  const task = loadingTask;
+  loadingTask = null;
+  pdfDoc = null;
+  if (!task) return;
+  try {
+    await task.destroy();
+  } catch (e) {
+    console.warn(`[PdfViewer] 释放 pdf.js worker 失败：${(e as Error).message ?? String(e)}`);
+  }
+}
+
+/**
+ * 本次加载是否仍然「算数」：组件已卸载、或 loadingTask 已换主（有一份更新的 task
+ * 接手了这份文档的 worker 线程）⇒ 结果作废。
+ *
+ * 判据用「task 换主」而不是序号，是因为**每一次新的 load 都会先释放上一份**：
+ * 新的 load 一动手（同步段内）就把 loadingTask 摘空或换成人，于是「这份 task 还在
+ * loadingTask 上」与「没有更新的 load 抢跑」是同一件事，序号不必再进这道闸。
+ */
+function isStale(task: pdfjsLib.PDFDocumentLoadingTask): boolean {
+  return disposed || loadingTask !== task;
+}
 
 async function load() {
-  if (!props.url) return;
+  // 单调序号：本次调用在整个 load() 生命周期内的身份。所有 bail 点都拿它对照，
+  // 不用「loadingTask 是不是我」——那一项在 task 建出来之前还没有值可比。
+  const seq = (loadSeq += 1);
+  if (!props.url) {
+    // 2026-10-20 补：url 被清空（宿主收起预览）也是一条释放路径。直接 return 会把
+    // 上一份的 worker 丢在后台跑完，等于换一种写法复现同一个泄漏。
+    await releaseLoadingTask();
+    // ⚠️ 释放之后**必须自己把 loading 归位**：模板是 `v-if="loading"`，loading 为真就
+    // 接管整个视图；而被本次作废的那次 load 醒来时只会命中 stale 守卫直接 return（它没有、
+    // 也不该有「替别人把 loading 落回去」的职责）⇒ 谁不归位，界面就永远停在「加载中…」。
+    // 附带清 error：那句报错是上一份文档的结论，宿主已经表示「这里没有文档」。
+    // 判据取 seq（本次身份）—— 释放期间完全可能有更新的 load 接手，它的状态不能被覆盖。
+    if (!disposed && seq === loadSeq) {
+      loading.value = false;
+      error.value = null;
+    }
+    return;
+  }
   loading.value = true;
   error.value = null;
+  // 先释放上一份：切 url 时它对应的 worker 还活着，留着就是一次泄漏。
+  await releaseLoadingTask();
+  // ⚠️ 必须在建 task **之前** bail：上面那个 await 期间可能又来了一次 load（url
+  // 再变）或组件已卸载，那种情况下本次不该再建 task —— 建出来的那份会被后一次
+  // load 覆盖掉 loadingTask，从此没有任何句柄能 destroy 它（孤儿 worker），还白白多下
+  // 一次同一份文档。
+  if (disposed || seq !== loadSeq) return;
+  const task = pdfjsLib.getDocument({ url: props.url, ...PDF_CMAP_OPTIONS });
+  loadingTask = task;
   try {
-    const task = pdfjsLib.getDocument({ url: props.url, ...PDF_CMAP_OPTIONS });
-    pdfDoc = await task.promise;
-    totalPages.value = pdfDoc.numPages;
+    const doc = await task.promise;
+    if (isStale(task)) return;
+    pdfDoc = doc;
+    totalPages.value = doc.numPages;
     if (page.value < 1) page.value = 1;
     if (page.value > totalPages.value) page.value = totalPages.value;
   } catch (e) {
+    // 被自己 release 掉的 task 会以 "Worker was destroyed" / "Loading aborted" 拒绝，
+    // 那不是加载失败：不上屏（否则切 url 会闪一句假报错），不写回已卸载的视图。
+    if (isStale(task)) return;
     error.value = (e as Error).message ?? 'PDF 加载失败';
     loading.value = false;
     return;
   }
+  if (isStale(task)) return;
   // 先让 Vue 把 canvas-wrap（含 canvas）插入 DOM，
   // 否则 render() 中 canvasRef.value 为 null，绘画被静默跳过。
   loading.value = false;
   await nextTick();
+  if (isStale(task)) return;
   // `.pdf-viewport` 只在 loading 结束后才渲染（v-else 分支），所以观察者必须挂在这里，
   // 挂在 onMounted 上时它还不存在。
   ensureResizeObserver();
@@ -255,7 +372,8 @@ function ensureResizeObserver(): void {
 }
 
 async function render() {
-  if (!pdfDoc || !canvasRef.value) return;
+  const doc = pdfDoc;
+  if (!doc || !canvasRef.value) return;
   if (renderTask) {
     try {
       renderTask.cancel();
@@ -263,7 +381,32 @@ async function render() {
       /* ignore */
     }
   }
-  const p = await pdfDoc.getPage(page.value);
+  let p: pdfjsLib.PDFPageProxy;
+  try {
+    p = await doc.getPage(page.value);
+  } catch (e) {
+    // 2026-10-20 补：失败**分两种**，别合成一句「拿不到页就算了」——
+    //   · 已卸载 / 这份 doc 已随它的 task 被释放（换文件会 destroy 旧 task，在途 getPage
+    //     于是以 "Worker was destroyed" 拒绝）⇒ 竞态的正常收尾，静默放弃，新文档的
+    //     load / render 会自己重画。render() 由复位 / +/- / ResizeObserver 以 void 调用，
+    //     抛出去就是一条未处理拒绝，所以这里必须吃掉。
+    //   · 当前文档真的取不到页（页码越界、页面损坏、worker 崩溃）⇒ 留一行 warn。零日志地
+    //     吞掉的话画布就静默停在空白或上一帧，排障时没有任何信号（同仓 SCAN_BANNER 的
+    //     「丢弃 + 一行 warn」口径，也与本文件 releaseLoadingTask 的 warn 一致）。
+    if (disposed || doc !== pdfDoc) return;
+    console.warn(
+      `[PdfViewer] 取页失败（第 ${page.value} 页）：${(e as Error).message ?? String(e)}`,
+    );
+    return;
+  }
+  // ⚠️ getPage 是 await，醒来时这次渲染有两种「已作废」，后果不同、守卫也不同 ——
+  // load() 的那道守卫管不到这里（render 还被复位 / +/- / ResizeObserver 直接调用）：
+  //   · **已卸载** ⇒ canvasRef 已被 Vue 置 null，继续摸 canvas.width 是 TypeError
+  //     （`!canvas` 拦；`disposed` 是同义的第二道，卸载收尾里两者不保证同一时刻）；
+  //   · **已换文档**（含旧 task 被释放、`pdfDoc` 已置 null）⇒ canvas 还在，不会 TypeError，
+  //     但会把**上一份文档的页**画到新画布上，工人看到闪一帧旧图纸 —— `doc !== pdfDoc` 拦。
+  const canvas = canvasRef.value;
+  if (disposed || !canvas || doc !== pdfDoc) return;
   // 2026-10-11：先把 renderScale 落到「整页塞进容器」的比例（写 renderScale 而非
   // viewScale：fit 要的是矢量清晰的成像，CSS 放大只会把图放大糊）。
   // 两个门都过才重算：`props.fit` 是 opt-out 口子；`userZoomed` 表示工人已经用 +/− /
@@ -285,7 +428,6 @@ async function render() {
     fitPending = false;
   }
   const viewport = p.getViewport({ scale: renderScale.value * (window.devicePixelRatio || 1) });
-  const canvas = canvasRef.value;
   canvas.width = viewport.width;
   canvas.height = viewport.height;
   const cssWidth = viewport.width / (window.devicePixelRatio || 1);
@@ -490,6 +632,9 @@ watch(
 
 onMounted(load);
 onBeforeUnmount(() => {
+  // 2026-10-20 修 Worker 泄漏：先立「已卸载」标志，再做收尾 —— 正在 await
+  // task.promise 的 load() 醒来后据此跳过写状态与渲染。
+  disposed = true;
   resizeObserver?.disconnect();
   resizeObserver = null;
   window.removeEventListener('mousemove', onMouseMove);
@@ -500,10 +645,14 @@ onBeforeUnmount(() => {
     } catch {
       /* ignore */
     }
+    renderTask = null;
   }
-  if (pdfDoc) {
-    void pdfDoc.cleanup();
-  }
+  // 唯一的 worker 回收点（2026-10-20）：destroy-on-close 的承载弹窗每开一次就新建
+  // 一个 pdf.js worker，不在此终止就是每开一次漏一个线程。doc 侧的清理由 destroy()
+  // 一并完成（它会清 pageCache / commonObjs / fontLoader 并终止 worker），
+  // 故不再单独调 pdfDoc.cleanup()。
+  pdfDoc = null;
+  void releaseLoadingTask();
 });
 </script>
 
