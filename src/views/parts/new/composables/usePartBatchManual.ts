@@ -27,7 +27,7 @@ import { computed, onBeforeUnmount, reactive, ref, watch, type ComputedRef, type
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useMutation } from '@tanstack/vue-query';
-import { createApplicant } from '@/api/applicant';
+import { getOrCreateApplicant } from '@/api/applicant';
 import { batchCreateParts, type PartBatchCreatePayload, type PartBatchResult } from '@/api/parts';
 import { grantStsTmpKeyFiles } from '@/api/files/sts';
 import {
@@ -342,7 +342,8 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
    * 保持 applicantId 与 applicantName 一致：
    * - 用户从下拉挑了某人：applicantName = item.name，applicantId = item.id（@select 设）
    * - 用户清空 / 继续打字改了名字：当前 applicantId 已不再指向同名 → 清掉
-   *   → 让 onSubmit 走「自动新增」分支（PartBatchNew.vue:onSubmit 内 createApplicant 段）。
+   *   → 让 onSubmit 走「自动新增」分支（submitStagedEntries 内
+   *     getOrCreateApplicant 段；2026-10-17 起该段已幂等 + 单行失败不中止整批）。
    * - onEditFromPreview 反填 staged row 时若 applicantId 已 stale，watcher 也自愈。
    *
    * 注意：本 watcher 必须在 const form 声明之后注册 —— watch 的 getter 在 setup
@@ -791,8 +792,8 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
 
   /**
    * 提交主体（薄封装）：
-   *   1) 遍历 staged，为无 applicantId 的条目处理申请人 dedupe（缓存命中复用 id，
-   *      未命中 → createApplicant 自动新增）；
+   *   1) 遍历 staged，为无 applicantId 的条目解析申请人（缓存命中复用 id，
+   *      未命中 → 调**幂等**端点 get-or-create 自动新增）；
    *   2) 构造 payload 调 batchCreateParts（按 customer_id 分组，跨客户混合语义由
    *      api 层负责）；
    *   3) 返回 PartBatchResult 交给 onSuccess 分流（部分失败 / 全成功）。
@@ -801,14 +802,30 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
    *   - 清 staged / draft / session consumeFiles（放 onSuccess）；
    *   - 跳转 / ElMessage（放 onSuccess / onError）；
    *   - 入队前 confirm 确认（放 onSubmit handler）。
+   *
+   * ⚠️ 第 1 步**绝不允许**抛错中止整批 —— 2026-10-17 修复，详见循环体注释。
    */
   async function submitStagedEntries(): Promise<PartBatchResult> {
-    // 1) 先为每条 entry 处理 applicant_id：
+    // 1) 先为每条 entry 解析 applicant_id：
     //    - 已有 applicantId（用户从下拉挑的）→ 跳过；
-    //    - 在缓存中能按 name 命中 → 复用其 id（2026-09-16 修复，避免
-    //      对已存在的 applicant 重复 POST → 409 Conflict）；
+    //    - 在缓存中能按 name 命中 → 复用其 id（2026-09-16 修复引入的**快路径**，
+    //      保留：省掉一次网络往返；2026-10-17 起它只是优化，不再是正确性依赖）；
     //    - 缓存未命中（且缓存对应 L1 root 与本条 L1 一致时才查，避免
-    //      跨 L1 root 误判）→ 调 createApplicant 自动新增。
+    //      跨 L1 root 误判）→ 调**幂等**端点 `getOrCreateApplicant`。
+    //
+    // 2026-10-17 两处修复：
+    //
+    // (a) `createApplicant` → `getOrCreateApplicant`。原实现对每条未命中的行直接
+    //     POST `/com/applicants`，**非幂等**：同一批里两行同名申请人（用户自由
+    //     文本录入，placeholder 明写「不在表中则提交时自动新增」）第二行必然
+    //     撞后端唯一键 409 → 整批 reject。
+    //
+    // (b) 每行包 try/catch，失败只 console.warn + applicantId 留 null，**不中止
+    //     整批**。为什么这不算降级丢功能：后端 `PartBatchCreateItem` **没有**
+    //     `applicant_id` 字段（`applicant_name` 是自由文本，直接存进
+    //     `t_part.applicant_name`，见 backend-rust 的 PartBatchCreateItem 契约
+    //     与 `t_part` 表结构 —— 前端多带该键后端 serde 默认忽略），所以拿不到
+    //     id **完全不影响工单创建**。一行申请人解析失败拖垮整批订单才是真 bug。
     for (const s of staged.value) {
       if (s.applicantId) continue;
       const trimmed = s.applicantName.trim();
@@ -824,11 +841,23 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
           continue;
         }
       }
-      const created = await createApplicant({
-        name: trimmed,
-        customer_id: String(rootId),
-      });
-      s.applicantId = created.id;
+      try {
+        const applicant = await getOrCreateApplicant({
+          name: trimmed,
+          customer_id: String(rootId),
+        });
+        s.applicantId = applicant.id;
+        // 回写缓存（同 root 下）：同一批里后续同名行即可走上面的快路径，
+        // 不必再打一次网络。rootCustomerId 对不上时**不写** —— 那是别人的缓存。
+        if (applicantSearch.rootCustomerId.value === rootId) {
+          applicantSearch.applicants.value = [...applicantSearch.applicants.value, applicant];
+        }
+      } catch (e) {
+        console.warn(
+          `[usePartBatchManual] 申请人「${trimmed}」解析失败，该行 applicant_id 留空（不影响建单）:`,
+          e,
+        );
+      }
     }
 
     // 2) 构造批量 payload

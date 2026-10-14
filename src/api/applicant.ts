@@ -42,28 +42,34 @@ export async function searchApplicants(params: ApplicantSearchParams): Promise<A
   return result.items;
 }
 
-export interface BulkApplicantItemPayload {
-  name: string;
-  customer_id: string;
-}
-
-export interface BulkApplicantResult {
-  name: string;
-  customer_id: string;
-  applicant_id: string;
-}
+/**
+ * 2026-10-17 删 `bulkGetOrCreateApplicants` 及其两个 Bulk* 类型（死代码）。
+ *
+ * 死在哪：① 全仓零调用方（`rg bulkGetOrCreateApplicants src/` 只命中定义处本身）；
+ * ② 它 POST 的 `/com/applicants/bulk-get-or-create` 在 rust v2 后端**根本不存在**
+ * —— applicant 域只挂 `/` / `/{id}` / `/{id}/update` / `/{id}/soft-delete`
+ * （backend-rust `src/modules/com/applicant/handler.rs` 的模块 doc 明确把
+ * `/search` 与 `/bulk-get-or-create` 列为「不在范围」）。真有人调用会落进
+ * `/{id}` 捕获后 `Path<i64>` 解析失败 → 405/400，**永远不会成功**。
+ * 两个 `Bulk*` 接口只服务于该函数，一并删；保留它们只会让后人以为那条路还能走。
+ */
 
 /**
- * 批量 get-or-create 申请人（应标 Excel 导入用）。
- * 后端内部按 (name, l1_root_id) 去重并幂等创建；customer_id 允许传 L1 或 L2。
- * 返回的 customer_id 是 L1 根 id（applicant 实际存储位置）。
+ * 幂等 get-or-create 申请人（2026-10-17 新增，替代上面的批量死代码）。
+ *
+ * 语义：`(name, customer_id)` 命中既有行就**直接返回该行**（HTTP 200），不新建、
+ * 不报 409 —— 这是它与 `createApplicant` 的唯一区别，也是新增订单页能安全地
+ * 「没登记就自动新增」的根据（同批两行同名申请人不会把整批拖废）。
+ *
+ * - body 形状与 `ApplicantCreatePayload` 逐字相同（`name` 由后端 trim，
+ *   `customer_id` 传**字符串**雪花 id），故直接复用该类型、不另立一份。
+ * - 出参 `R<ApplicantOut>` 与 `createApplicant` 完全同形，故复用 `Applicant`。
+ * - `customer_id` 必须是**一级客户** id（后端按 `parent_id IS NULL` 校验）。
+ *   调用方（`usePartBatchManual.submitStagedEntries`）先经
+ *   `resolveRootCustomerId` 上溯再传，传 L2 会被后端拒。
  */
-export async function bulkGetOrCreateApplicants(
-  items: BulkApplicantItemPayload[],
-): Promise<BulkApplicantResult[]> {
-  const resp = await api.post<BulkApplicantResult[]>('/com/applicants/bulk-get-or-create', {
-    items,
-  });
+export async function getOrCreateApplicant(payload: ApplicantCreatePayload): Promise<Applicant> {
+  const resp = await api.post<Applicant>('/com/applicants/get-or-create', payload);
   return resp.data;
 }
 

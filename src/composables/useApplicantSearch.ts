@@ -82,7 +82,18 @@ export function useApplicantSearch(opts: UseApplicantSearchOptions): UseApplican
       });
     } catch {
       // 错误由 ElMessage 提示
+      // 2026-10-17 修复：必须连 `rootCustomerId` 一起清。原实现只清 applicants，
+      // 而 rootCustomerId 早在 fetch **之前**就被赋成 rootId（L76 早于 try）⇒
+      // 「加载失败」会留下一份「rootCustomerId=X + applicants=[]」的**假权威缓存**：
+      //   - 下次切到**同一**客户时，`rootCustomerId.value === rootId && length > 0`
+      //     这道守卫因 length 为 0 而放行重拉 —— 只是白拉一次；
+      //   - 真正有害的是消费方：`submitStagedEntries` 用
+      //     `applicantSearch.rootCustomerId.value === rootId` 判定「这份缓存属于
+      //     同一 L1，可以信任」，加载失败时它会**对一个空缓存下这个结论**，
+      //     于是「同名即已存在」的 dedupe 前提失效。
+      // 清掉 rootCustomerId ⇒ 失败态与「从未加载过」完全同形，调用方无从误判。
       applicants.value = [];
+      rootCustomerId.value = null;
     } finally {
       loading.value = false;
     }

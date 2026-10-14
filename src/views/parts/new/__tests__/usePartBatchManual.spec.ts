@@ -7,7 +7,10 @@
 //   - 客户存在性业务校验失败 → formErrors.customerId；
 //   - onSubmit mutation 成功 → staged 清空 + router.push；
 //   - onSubmit 部分失败 → ElMessageBox.alert 且 staged 保留；
-//   - 申请人缓存未命中 → createApplicant 被调且 payload 带新 id。
+//   - 申请人缓存未命中 → getOrCreateApplicant 被调且 payload 带新 id；
+//   - 2026-10-17：同批两行同名申请人 → 两行拿到同一个 id 且整批照常提交
+//     （幂等端点 + 缓存回写）；
+//   - 2026-10-17：申请人接口 reject → 该行 applicantId 留 null，但整批仍提交。
 // @vitest-environment happy-dom
 
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -18,9 +21,15 @@ import { flushPromises, mount } from '@vue/test-utils';
 
 const mocks = vi.hoisted(() => ({
   batchCreateParts: vi.fn(),
-  createApplicant: vi.fn(),
+  /**
+   * 2026-10-17：`createApplicant` → `getOrCreateApplicant`。
+   * 后端 `POST /com/applicants/get-or-create` 是幂等的（同 name+customer 直接返
+   * 既有行），非幂等的 createApplicant 会让「同批两行同名申请人」必然撞 409。
+   */
+  getOrCreateApplicant: vi.fn(),
   routerReplace: vi.fn(),
   confirmDangerous: vi.fn(),
+  warn: vi.fn(),
 }));
 
 // 2026-09-28 删 useUploadSession：原 usePartBatchManual.spec.ts 的 sessionStub +
@@ -32,8 +41,14 @@ vi.mock('@/api/parts', () => ({
 }));
 
 vi.mock('@/api/applicant', () => ({
-  createApplicant: mocks.createApplicant,
+  getOrCreateApplicant: mocks.getOrCreateApplicant,
 }));
+
+// 2026-10-17：申请人解析失败只 console.warn（不中止整批），钉住「告警确实发生」，
+// 避免将来有人把 catch 里的 warn 删成静默。
+vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
+  mocks.warn(...args);
+});
 
 vi.mock('@/views/parts/new/composables/usePartsNewDraft', () => ({
   usePartsNewDraft: () => ({
@@ -149,18 +164,23 @@ const baseCustomer: Customer = {
 const customersRef = vueRef<Customer[]>([baseCustomer]);
 
 // setup 阶段调 usePartBatchManual，把 return 挂到 instance 便于断言。
+//
+// 2026-10-17：三个 applicantSearch ref 也提到模块级（此前建在 Harness setup 内），
+// 因为新用例必须能在 mount **之前**预置缓存（命中快路径）与在提交**之后**断言
+// 回写结果，setup 内部的 ref 用例拿不到。
+const applicantsRef = vueRef<Applicant[]>([]);
+const rootCustomerIdRef = vueRef<string | null>(null);
+const loadingRef = vueRef(false);
+
 let captured: ReturnType<typeof usePartBatchManual> | null = null;
 const Harness = defineComponent({
   setup() {
-    const applicants = vueRef<Applicant[]>([]);
-    const rootCustomerId = vueRef<string | null>(null);
-    const loading = vueRef(false);
     captured = usePartBatchManual({
       customers: customersRef,
       applicantSearch: {
-        applicants,
-        rootCustomerId,
-        loading,
+        applicants: applicantsRef,
+        rootCustomerId: rootCustomerIdRef,
+        loading: loadingRef,
         loadForCustomer: async () => undefined,
         querySearch: () => undefined,
       },
@@ -235,12 +255,41 @@ const partialResult: PartBatchResult = {
 
 beforeEach(() => {
   mocks.batchCreateParts.mockReset();
-  mocks.createApplicant.mockReset();
+  mocks.getOrCreateApplicant.mockReset();
   mocks.routerReplace.mockReset();
+  mocks.warn.mockReset();
   mocks.confirmDangerous.mockResolvedValue(true);
-  // 默认：applicant 缓存命中，避免 createApplicant 未配置触发 undefined.id
-  mocks.createApplicant.mockResolvedValue({ id: 'appl-default' });
+  // 申请人缓存默认「空且不属于任何 root」⇒ 强制走 getOrCreateApplicant 分支，
+  // 避免未配置 mock 时读到 undefined.id。
+  applicantsRef.value = [];
+  rootCustomerIdRef.value = null;
+  loadingRef.value = false;
+  mocks.getOrCreateApplicant.mockResolvedValue({ id: 'appl-default' });
 });
+
+/** 把一条合法表单灌进 `captured.form` 并入队（Tab 1 的录入路径）。 */
+async function stageEntry(
+  c: ReturnType<typeof usePartBatchManual>,
+  drawingNo: string,
+  applicantName: string,
+): Promise<void> {
+  c.form.drawingNo = drawingNo;
+  c.form.name = 'p1';
+  c.form.customerId = 'c1';
+  c.form.applicantName = applicantName;
+  c.form.requestDate = '2026-09-24';
+  c.form.plannedDeliveryDate = '2026-09-25';
+  await c.onAddConfirm();
+  await nextTick();
+}
+
+/** onSubmit 是 fire-and-forget 的 mutate，跑完它需要几个宏任务周转。 */
+async function drainSubmit(): Promise<void> {
+  for (let i = 0; i < 5; i += 1) {
+    await flushPromises();
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
 
 // ============ tests ============
 
@@ -370,32 +419,22 @@ describe('usePartBatchManual', () => {
     w.unmount();
   });
 
-  it('申请人缓存未命中：createApplicant 被调、payload 带新 id', async () => {
+  it('申请人缓存未命中：getOrCreateApplicant 被调、payload 带新 id', async () => {
     mocks.batchCreateParts.mockResolvedValue(okResult);
-    mocks.createApplicant.mockResolvedValue({ id: 'appl-new' });
+    mocks.getOrCreateApplicant.mockResolvedValue({ id: 'appl-new' });
     const w = harnessMount();
     await flushPromises();
     if (!captured) throw new Error('not captured');
 
-    captured.form.drawingNo = 'LT1';
-    captured.form.name = 'p1';
-    captured.form.customerId = 'c1';
-    captured.form.applicantName = 'newface';
-    captured.form.requestDate = '2026-09-24';
-    captured.form.plannedDeliveryDate = '2026-09-25';
-    await captured.onAddConfirm();
-    await nextTick();
+    await stageEntry(captured, 'LT1', 'newface');
 
-    // 清掉 applicants cache 与 rootCustomerId 不一致，强制走 createApplicant
-    if (!captured) throw new Error('not captured');
-    // rootCustomerId 默认 null，applicantSearch.rootCustomerId.value 是 ref，
-    // 但 harness 注入的是 {value:null} 浅对象——保留 null 让 if (applicantSearch.rootCustomerId.value === rootId) 走 createApplicant 分支
-
+    // rootCustomerId 默认 null，applicantSearch.rootCustomerId.value 与解析出的
+    // rootId（'c1'）不相等 ⇒ 缓存快路径判据不成立，必然走 getOrCreateApplicant。
     await captured.onSubmit();
-    await flushPromises();
+    await drainSubmit();
 
-    expect(mocks.createApplicant).toHaveBeenCalledTimes(1);
-    expect(mocks.createApplicant).toHaveBeenCalledWith(
+    expect(mocks.getOrCreateApplicant).toHaveBeenCalledTimes(1);
+    expect(mocks.getOrCreateApplicant).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'newface', customer_id: 'c1' }),
     );
     // payload 带新 id
@@ -448,6 +487,135 @@ describe('usePartBatchManual', () => {
       await new Promise((r) => setTimeout(r, 10));
     }
     expect(captured.submitting.value).toBe(false);
+
+    w.unmount();
+  });
+});
+
+// ============================================================================
+// 2026-10-17：新增订单页「申请人已存在」修复。
+//
+// 改前：`submitStagedEntries` 的申请人循环对每条缓存未命中的行走**非幂等**的
+// `createApplicant`、且**没有 try/catch** ⇒
+//   - 同批两行同名申请人 → 第二行 409 → 整个函数 reject → `batchCreateParts`
+//     根本不执行 → **整批订单全废**；
+//   - 任意一行申请人接口抖动 / 挂掉 → 同样整批报废。
+//
+// 改后：走幂等端点 `getOrCreateApplicant`，且每行独立 try/catch（失败只 warn）。
+// ============================================================================
+
+/** 幂等端点的返回行（字段对齐 `types/applicant.ts` 的 `Applicant`）。 */
+function applicantFixture(id: string, name: string, customerId: string): Applicant {
+  return {
+    id,
+    version: 1,
+    name,
+    customer_id: customerId,
+    customer_name: '客户A',
+    created_at: '2026-10-17 08:00:00',
+    updated_at: '2026-10-17 08:00:00',
+  };
+}
+
+describe('usePartBatchManual：申请人幂等解析（2026-10-17）', () => {
+  it('同批两行同名申请人：两行拿到同一个 id、端点只调一次、整批照常提交', async () => {
+    mocks.batchCreateParts.mockResolvedValue(okResult);
+    // 预置「缓存属于 c1、但里面还没有这个申请人」⇒ 第一行走网络、第二行走回写后的快路径
+    rootCustomerIdRef.value = 'c1';
+    applicantsRef.value = [];
+    mocks.getOrCreateApplicant.mockResolvedValue(applicantFixture('appl-dup', 'dup', 'c1'));
+
+    const w = harnessMount();
+    await flushPromises();
+    if (!captured) throw new Error('not captured');
+
+    // 两行同一客户、同一申请人姓名；第二行的 applicantId 仍是 null（未走下拉选中）
+    await stageEntry(captured, 'LT-1', 'dup');
+    await stageEntry(captured, 'LT-2', 'dup');
+    expect(captured.staged.value.map((s) => s.applicantId)).toEqual([null, null]);
+
+    await captured.onSubmit();
+    await drainSubmit();
+
+    // (a) 两行都拿到同一个 applicantId
+    const sent = mocks.batchCreateParts.mock.calls[0]![0] as Array<{ applicant_id: string | null }>;
+    expect(mocks.batchCreateParts).toHaveBeenCalledTimes(1);
+    expect(sent).toHaveLength(2);
+    expect(sent.map((it) => it.applicant_id)).toEqual(['appl-dup', 'appl-dup']);
+
+    // 幂等端点只被调一次（第二行命中第一行回写进缓存的快路径）
+    expect(mocks.getOrCreateApplicant).toHaveBeenCalledTimes(1);
+    expect(mocks.getOrCreateApplicant).toHaveBeenCalledWith({ name: 'dup', customer_id: 'c1' });
+
+    // 新申请人已回写进同 root 的缓存，供本批后续行 / 下一批复用
+    expect(applicantsRef.value.map((a) => a.id)).toEqual(['appl-dup']);
+
+    w.unmount();
+  });
+
+  it('幂等端点 reject：该行 applicantId 留 null，但 batchCreateParts 仍被调、不抛错', async () => {
+    mocks.batchCreateParts.mockResolvedValue(okResult);
+    rootCustomerIdRef.value = 'c1';
+    applicantsRef.value = [];
+    mocks.getOrCreateApplicant.mockRejectedValue(new Error('applicant 500'));
+
+    const w = harnessMount();
+    await flushPromises();
+    if (!captured) throw new Error('not captured');
+
+    await stageEntry(captured, 'LT-1', 'boom');
+    // 关键：onSubmit 本身必须**不** reject（原 bug 就是这里 reject → 整批全废）
+    await expect(captured.onSubmit()).resolves.toBeUndefined();
+    await drainSubmit();
+
+    // 整批照常提交，申请人 id 留空
+    const sent = mocks.batchCreateParts.mock.calls[0]![0] as Array<{
+      applicant_id: string | null;
+      applicant_name: string;
+    }>;
+    expect(mocks.batchCreateParts).toHaveBeenCalledTimes(1);
+    expect(sent[0]!.applicant_id).toBeNull();
+    // 后端 PartBatchCreateItem 没有 applicant_id 字段（applicant_name 是自由文本、
+    // 直接落 t_part.applicant_name）⇒ 名字照发，工单照建。
+    expect(sent[0]!.applicant_name).toBe('boom');
+
+    // 失败必须**有告警**，不许静默吞
+    const warned = mocks.warn.mock.calls.map((c: unknown[]) => c.map(String).join(' '));
+    expect(warned.some((line: string) => line.includes('boom'))).toBe(true);
+
+    // 失败行不写缓存（避免把半截数据喂给后续行的快路径）
+    expect(applicantsRef.value).toEqual([]);
+
+    w.unmount();
+  });
+
+  it('一行失败不牵连同批其它行：成功行走端点拿到 id，失败行留空，两行都在 payload 里', async () => {
+    mocks.batchCreateParts.mockResolvedValue(okResult);
+    rootCustomerIdRef.value = 'c1';
+    applicantsRef.value = [];
+    mocks.getOrCreateApplicant
+      .mockRejectedValueOnce(new Error('applicant 500'))
+      .mockResolvedValueOnce(applicantFixture('appl-ok', 'good', 'c1'));
+
+    const w = harnessMount();
+    await flushPromises();
+    if (!captured) throw new Error('not captured');
+
+    await stageEntry(captured, 'LT-1', 'bad');
+    await stageEntry(captured, 'LT-2', 'good');
+
+    await captured.onSubmit();
+    await drainSubmit();
+
+    const sent = mocks.batchCreateParts.mock.calls[0]![0] as Array<{
+      drawing_no: string;
+      applicant_id: string | null;
+    }>;
+    expect(mocks.batchCreateParts).toHaveBeenCalledTimes(1);
+    expect(sent.map((it) => [it.drawing_no, it.applicant_id])).toEqual([
+      ['LT-1', null],
+      ['LT-2', 'appl-ok'],
+    ]);
 
     w.unmount();
   });
