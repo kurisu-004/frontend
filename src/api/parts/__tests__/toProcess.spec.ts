@@ -22,7 +22,7 @@
 //   - C3：toShip 同款守卫（`version` 必填 / body 不含 batch_id / 返回 { part, new_batch_id }）。
 //   - C4：批次 id 走 encodeURIComponent（雪花 id 是纯数字，但 URL 拼接统一转义）。
 //
-// mock 手法沿 src/api/shelfProcesses.spec.ts 同款：整模块桩掉 `@/api/http`
+// mock 手法沿 src/api/__tests__/shelfProcesses.spec.ts 同款：整模块桩掉 `@/api/http`
 // （不 importOriginal），只留可断言的 api.post 入口。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
