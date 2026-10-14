@@ -110,11 +110,14 @@
  * 工序大按钮 picker（2026-07-17，HMI 重设计）。
  *
  * 数据源：共享基础数据层 `useProcessesQuery({ limit: 200 })`（2026-10-20 接入，此前是本组件
- * 内裸调 `listProcesses`）—— 工序字典是跨域基础数据，生产队列看板 `QueueBoard.vue` 读的是
- * 同一条 queryKey（`qk.processesOptions({ limit: 200 })`），同屏两处打开只发一次往返。
- * `staleTime: 30_000` / `gcTime: 5 * 60 * 1000`（共享层统一口径），弹窗关着的 5 分钟内
- * 再开直接命中缓存、零等待 —— 放回页「换一道工序」是工人高频路径，车间网络下每次开弹窗
- * 白等一个 200 行字典往返是不可接受的。
+ * 内裸调 `listProcesses`）—— 工序字典是跨域基础数据，生产队列看板 `QueueBoard.vue`、待品检页、
+ * 零件详情时间线等读的是同一条 queryKey（`qk.processesOptions({ limit: 200 })`）。
+ * ⚠️ **但它们与本弹窗不在同一条路由上**（看板在 `production/worker-queue`，本组件的两个宿主
+ * `ScanReturnParts` / `LocateDialog` 都在 `scan/*`），不可能同屏挂载 —— 收益不是「同屏去重」，
+ * 而是共享层的 `staleTime: 30_000` / `gcTime: 5 * 60 * 1000`：**跨路由复用**（刚在别的页面看过
+ * 工序字典，30s 内切过来开弹窗直接命中缓存、零等待）与**同页反复开启**（连开几次弹窗不再每次打
+ * 一个 200 行字典往返）。放回页「换一道工序」是工人高频路径，车间网络下每次开弹窗白等一个往返
+ * 是不可接受的。
  * enabled 闸门取 `() => props.modelValue`：弹窗不可见时零请求。
  *
  * 可展示范围由 `allowedProcessIds` 决定 —— 传了只渲染该集合（扫码接管 / 外协收回两条自助恢复路径按
@@ -214,7 +217,8 @@ const activeTab = ref<'INHOUSE' | 'OUTSOURCE'>('INHOUSE');
  * `listProcesses`，弹窗每开一次打一次 200 行字典请求、零缓存零去重）。
  *
  * - `limit: 200` 与生产队列看板 `QueueBoard.vue` 逐字相同 ⇒ 同一条 queryKey
- *   （`qk.processesOptions({ limit: 200 })`）⇒ 同屏两处只发一次往返。
+ *   （`qk.processesOptions({ limit: 200 })`）。两者不在同一条路由上（见文件头注释），
+ *   收益来自共享层的 30s staleTime / 5min gcTime：跨路由复用 + 同页反复开启不再重发。
  * - `enabled: () => props.modelValue` ⇒ 弹窗不可见时零请求（弹窗关着时这条工序字典对
  *   本组件没有用途）。闸门只挡发起请求、不挡读缓存：缓存新鲜时打开直接命中，零等待。
  * - `staleTime: 30_000` / `gcTime: 5 * 60 * 1000` 由共享 hook 统一，本组件不覆写。
@@ -222,22 +226,40 @@ const activeTab = ref<'INHOUSE' | 'OUTSOURCE'>('INHOUSE');
 const processesQuery = useProcessesQuery({ limit: 200 }, { enabled: () => props.modelValue });
 
 /**
- * 列表三态由 query 直接派生。`isPending`（无数据）而非 `isFetching`（含后台 refetch）：
+ * 列表三态由 query 直接派生。`loading` 取 `isPending`（无数据）而非 `isFetching`（含后台 refetch）：
  * 后台 refetch 时不该把已经在屏的卡片整片换成 loading 骨架，工人会以为弹窗坏了。
+ *
+ * 而「上一轮失败过、这一轮正在重取」那一瞬也不需要额外照顾：query-core 的 `fetchState` 在
+ * **无数据**时发起请求会把 `error` 清成 null、`status` 回落成 `pending` ⇒ `isPending` 为 true，
+ * 重开弹窗照样先压骨架，不会闪一条上一轮的旧错误横幅（这条行为由
+ * `__tests__/ProcessPickerDialog.processQuery.spec.ts` 的重开用例钉住）。
+ * ⚠️ 别为了「以防万一」再加 `|| (isFetching && !data)`：无数据时 `isPending` 已覆盖，有数据时
+ * 该子句恒 false，两种状态都推不出新结果 —— 是死代码。
  */
 const loading = computed<boolean>(() => processesQuery.isPending.value);
-const errorMessage = computed<string | null>(() => {
-  const err = processesQuery.error.value;
-  if (!err) return null;
+
+/** 错误文案（模板里的错误横幅用）。空 message 兜成「加载失败」，避免渲染出一块空横幅。 */
+function errorText(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
   return msg || '加载失败';
+}
+
+const errorMessage = computed<string | null>(() => {
+  const err = processesQuery.error.value;
+  return err ? errorText(err) : null;
 });
 
-// 错误提示走 toast（error-state 那块横幅另有模板渲染）。用 watch 而不是模板副作用：
-// 同一次失败只弹一次，且错误态本身由上面的 errorMessage 驱动，二者不会各说各话。
-watch(errorMessage, (msg) => {
-  if (!msg) return;
-  ElMessage.error(msg);
+/**
+ * 错误提示走 toast（error-state 那块横幅另有模板渲染）。用 watch 而不是模板副作用。
+ *
+ * ⚠️ watch 的是 **Error 对象**而不是文案字符串：「每次失败弹一次」因此只取决于**失败了几次**，
+ * 不取决于「这次文案和上次是否相同」。query-core 在无数据时发起请求会把 `error` 清成 null，
+ * 所以文案写法今天也能弹；但那是借来的库行为 —— 一旦某次重取不再清空 error，连续两次同文案
+ * 失败就会静默只剩横幅。这里把触发源钉死在失败事件本身上。
+ */
+watch(processesQuery.error, (err) => {
+  if (!err) return;
+  ElMessage.error(errorText(err));
   // 加载失败时清空预填：只弹了个错误、确认键却还能点，工人就会提交一个本轮没校验过的工序 id。
   selectedId.value = null;
 });

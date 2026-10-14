@@ -125,6 +125,8 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  // 先作废仍在途的加载：它回来时发现自己代号过期，会自释放句柄并放弃渲染。
+  bumpLoadToken();
   // 释放顺序：先 gizmo → 再 sceneManager → 再 wasm 句柄 → 最后 revoke blob URL
   if (cubeGizmo.value) {
     cubeGizmo.value.dispose();
@@ -151,7 +153,9 @@ watch(
   (newSrc, _oldSrc) => {
     if (!sceneManager.value) return;
     if (!newSrc) {
-      // src 清空：卸载当前模型，回到空白 canvas
+      // src 清空：卸载当前模型，回到空白 canvas。令牌一并作废，让仍在途的那次加载
+      // 回来时自释放句柄 —— 否则它会把模型重新挂回一个已经清空的 canvas。
+      bumpLoadToken();
       releaseCurrentShape();
       loaded.value = false;
       loading.value = false;
@@ -177,8 +181,10 @@ watch(gizmoVisible, (v) => cubeGizmo.value?.setVisible(v));
  * 反复切文件 / 反复开关预览面板会让它们只增不减，所以「切模型」「src 清空」「组件卸载」
  * 三条路径都要走这里（`releaseShape` 内部对 null 是空操作，故本函数不判空）。
  *
- * ⚠️ 刻意**不**在这里调 `disposeKernel()`：kernel 是模块级单例，多个 `StepViewer` 实例
- * （`FileListCard` 每个 3D 文件一个）会同时活着，拆掉内核会让其余实例的句柄全部失效。
+ * ⚠️ 刻意**不**在这里调 `disposeKernel()`：kernel 是模块级单例，多个 `StepViewer` 实例会
+ * 同时活着（实例数 = 同时存活的 3D 预览弹窗个数：keep-alive 让多个标签页的路由实例并存，
+ * `PartFilesTabsCard` 内那三个 `FileListCard` 挂载点互斥、各自弹窗里只有一个 `StepViewer`，
+ * 另有 `DrawingPreviewPane` 一个承载点），拆掉内核会让其余实例的句柄全部失效。
  */
 function releaseCurrentShape(): void {
   const shape = currentShape.value;
@@ -186,9 +192,28 @@ function releaseCurrentShape(): void {
   releaseShape(shape);
 }
 
+/**
+ * 2026-10-20 新增：加载代次令牌。
+ *
+ * `loadFromBlobUrl` 全程 await（拉 blob → arrayBuffer → occt-wasm 解析），期间 `src` 可能
+ * 再变一次（用户连切文件，或父组件换了预览对象）。没有令牌时**先发后至**的那次会把结果
+ * 照常写进 `currentShape`，把后到者覆盖掉 —— 被覆盖那份的 wasm 句柄与拓扑缓存条目从此
+ * 没有任何人拿得到，而「切模型 / src 清空 / 卸载」三条释放路径都只看 `currentShape`。
+ *
+ * 令牌在三个「新一轮开始」的位置自增（每次发起加载 / src 清空 / 组件卸载），仍在途的那次
+ * 回来后发现代号不对就自己释放句柄并放弃，不碰任何共享状态。返回值即本次代号。
+ */
+let loadToken = 0;
+
+function bumpLoadToken(): number {
+  loadToken += 1;
+  return loadToken;
+}
+
 async function loadFromBlobUrl(url: string): Promise<void> {
   const sm = sceneManager.value;
   if (!sm) return;
+  const token = bumpLoadToken();
   // 先放掉上一份，再拉新的：两份句柄同时活着没有任何好处。
   releaseCurrentShape();
   loading.value = true;
@@ -210,10 +235,18 @@ async function loadFromBlobUrl(url: string): Promise<void> {
     const bytes = new Uint8Array(await blob.arrayBuffer());
     const shape = await loadStepFromBytes(bytes, format, {
       onProgress: (pct) => {
+        // 已作废的那次加载不碰进度条（否则先发后至会让进度来回跳）。
+        if (token !== loadToken) return;
         progressPct.value = pct;
         emit('progress', pct);
       },
     });
+    // 代号对不上 ⇒ 本次加载期间又发起了新一轮（新一轮已放掉 currentShape）或组件已卸载。
+    // 自己这份已经没人认领：就地释放句柄 + 缓存条目，不覆盖新一轮的结果。
+    if (token !== loadToken) {
+      releaseShape(shape);
+      return;
+    }
     currentShape.value = shape;
     sm.setModel(shape.root);
     // 注册 LineMaterial → SceneManager 维护 resolution（与 step-viewer ViewerCanvas 一致）
@@ -230,6 +263,8 @@ async function loadFromBlobUrl(url: string): Promise<void> {
     });
     emit('loaded', info);
   } catch (e) {
+    // 已作废的那次加载不报错误（新一轮 / 卸载已经在推进，报错只会串场）。
+    if (token !== loadToken) return;
     const msg =
       e instanceof OcctLoadError
         ? `[${e.stage}] ${e.message}`
@@ -249,7 +284,8 @@ async function loadFromBlobUrl(url: string): Promise<void> {
       : '';
     emit('error', `${props.errorPrefix}: ${msg}${hint}`);
   } finally {
-    loading.value = false;
+    // 同上：作废的那次不该把新一轮的 loading 提前关掉。
+    if (token === loadToken) loading.value = false;
   }
 }
 

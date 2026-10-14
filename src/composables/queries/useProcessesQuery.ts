@@ -35,9 +35,11 @@ export interface UseProcessesQueryOptions {
    * 不传 = 恒启用，与 2026-09-26 起的行为逐字一致。
    *
    * 消费方：报工台的工序选择弹窗（`views/production/scan/components/ProcessPickerDialog.vue`），
-   * 它只在弹窗可见时才需要工序字典，闸门取 `() => props.modelValue` ⇒ 弹窗关着时零请求、
-   * 开着时与生产队列看板（`QueueBoard.vue`，恒启用）共享同一条 queryKey ⇒ 同屏两处只发
-   * 一次往返。闸门只挡**发起请求**，不挡读缓存：缓存新鲜时打开弹窗直接命中，零往返。
+   * 它只在弹窗可见时才需要工序字典，闸门取 `() => props.modelValue` ⇒ 弹窗关着时零请求。
+   * 它与生产队列看板（`QueueBoard.vue`，恒启用）、待品检页等共用同一条 queryKey，但**分属不同
+   * 路由**（看板 `production/worker-queue` vs 弹窗所在的 `scan/*`），不会同屏挂载 ⇒ 收益是
+   * 30s staleTime / 5min gcTime 的跨路由复用与同页反复开启的零重复请求。闸门只挡**发起请求**，
+   * 不挡读缓存：缓存新鲜时打开弹窗直接命中，零往返。
    */
   enabled?: MaybeRefOrGetter<boolean | undefined>;
 }

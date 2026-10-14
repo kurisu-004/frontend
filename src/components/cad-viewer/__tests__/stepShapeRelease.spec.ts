@@ -37,17 +37,34 @@ const STEP_VIEWER_SRC = readFileSync(resolve(CAD_DIR, 'StepViewer.vue'), 'utf8')
 const LOADER_SRC = readFileSync(resolve(CAD_DIR, '../../three/OcctStepLoader.ts'), 'utf8');
 
 /** 把三类注释逐字符换成空格（换行保留）—— 位置不变，判定只跑在真实代码上。
- *  本批两个守卫点（`disposeKernel` / `_resetKernelForTest`）在文档注释里都被点名解释了
- *  「为什么不能那么用」，守卫要判的是**代码**里有没有那条调用/导出，不是注释里有没有那个词。 */
+ *  本批守卫点在文档注释里都被点名解释了「为什么不能那么用」，守卫要判的是**代码**里有没有
+ *  那条调用/导出，不是注释里有没有那个词。
+ *
+ *  ⚠️ **顺序：HTML → `//` 行注释 → 块注释**。反过来（块注释在前）时，一句行注释里只要出现
+ *  块注释的起始符（文件路径、glob、正则片段都容易撞上），块注释正则就会从那里一路吃到文件里
+ *  下一个闭合符，把中间整段**真实代码**吞成空格 —— 守卫不会变红而是**恒绿**（整文件级断言
+ *  静默通过）。代价是反过来的病态形态（块注释内部有一行以 `//` 开头、且那行含闭合符）会漏剥，
+ *  本仓不存在这种写法。 */
 function stripComments(src: string): string {
   return src
     .replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, ' '))
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
-    .replace(/^\s*\/\/.*$/gm, ' ');
+    .replace(/^\s*\/\/.*$/gm, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
 }
 
 const STEP_VIEWER_CODE = stripComments(STEP_VIEWER_SRC);
 const LOADER_CODE = stripComments(LOADER_SRC);
+
+/** 取源码里 [startMarker, endMarker) 那一段（再剥掉注释）；任一 marker 找不到就当场红
+ *  （防止挪了函数后守卫悄悄在空串上通过）。切段用**原始**文本 —— 分节标记
+ *  `// ---- watch src ----` 本身就是行注释，在剥注释后的文本里已经不存在了。 */
+function regionOf(src: string, startMarker: string, endMarker: string): string {
+  const from = src.indexOf(startMarker);
+  const to = src.indexOf(endMarker, from + startMarker.length);
+  expect(from, `找不到起始标记 ${startMarker}`).toBeGreaterThanOrEqual(0);
+  expect(to, `找不到结束标记 ${endMarker}`).toBeGreaterThan(from);
+  return stripComments(src.slice(from, to));
+}
 
 /** occt-wasm 的 `ShapeHandle` 是 branded type（`number & { [brand]: never }`，防的就是把裸
  *  数字当句柄传）。本文件用假句柄，故在这里显式补 brand —— 生产代码不该有这一步。 */
@@ -150,19 +167,31 @@ describe('occt-wasm 形状句柄与缓存的清位（假 kernel，node 环境可
     expect(() => releaseShape(undefined)).not.toThrow();
     expect(shapeCache.size()).toBe(0);
   });
+
+  // 「释放自己那一份」与「清空全部」是两件事：多 StepViewer 同屏时，A 实例释放自己的形状
+  // 顺手清掉 B 实例的拓扑缓存是真实缺陷（调试数据凭空消失），而上面四条断言在那种写法下
+  // 全绿 —— 只有「释放后别人还在」才抓得住（把 forget 换成 reset() 即变红）。
+  it('R2b：释放单个句柄不得顺手清掉别人的条目（forget ≠ reset）', () => {
+    const { kernel } = fakeKernel();
+    const h1 = handleOf(201);
+    const h2 = handleOf(202);
+    shapeCache.put(h1, topology(h1), stats());
+    shapeCache.put(h2, topology(h2), stats());
+    expect(shapeCache.size()).toBe(2);
+
+    releaseShape({ rootHandle: h1, kernel });
+
+    expect(shapeCache.topologyOf(h1)).toBeNull();
+    expect(shapeCache.statsOf(h1)).toBeNull();
+    expect(shapeCache.size(), '只剩另一个句柄的一条').toBe(1);
+    expect(shapeCache.topologyOf(h2)?.handle, '另一个句柄的拓扑必须还在').toBe(h2);
+    expect(shapeCache.statsOf(h2)?.faces, '另一个句柄的统计必须还在').toBe(6);
+  });
 });
 
 describe('StepViewer / 释放接线（源码契约守卫）', () => {
-  /** 取源码里 [startMarker, endMarker) 那一段（再剥掉注释）；任一 marker 找不到就当场红
-   *  （防止挪了函数后守卫悄悄在空串上通过）。切段用**原始**文本 —— 分节标记
-   *  `// ---- watch src ----` 本身就是行注释，在剥注释后的文本里已经不存在了。 */
-  function region(startMarker: string, endMarker: string): string {
-    const from = STEP_VIEWER_SRC.indexOf(startMarker);
-    const to = STEP_VIEWER_SRC.indexOf(endMarker, from + startMarker.length);
-    expect(from, `找不到起始标记 ${startMarker}`).toBeGreaterThanOrEqual(0);
-    expect(to, `找不到结束标记 ${endMarker}`).toBeGreaterThan(from);
-    return stripComments(STEP_VIEWER_SRC.slice(from, to));
-  }
+  const region = (startMarker: string, endMarker: string): string =>
+    regionOf(STEP_VIEWER_SRC, startMarker, endMarker);
 
   it('R5：切模型 / src 清空 / 组件卸载三条路径各调一次释放', () => {
     const unload = region('onBeforeUnmount(', '// ----------------- watch src');
@@ -187,5 +216,37 @@ describe('StepViewer / 释放接线（源码契约守卫）', () => {
   it('R7：加载器里不再有名不副实的 _resetKernelForTest 死导出', () => {
     expect(LOADER_CODE).not.toMatch(/_resetKernelForTest/);
     expect(LOADER_CODE).toContain('export function releaseShape(');
+  });
+});
+
+describe('三角化失败不留僵尸（源码契约守卫，判位置不判行号）', () => {
+  const loaderBody = (): string =>
+    regionOf(
+      LOADER_SRC,
+      'export async function loadStepFromBytes',
+      'export async function loadStepFromArrayBuffer',
+    );
+
+  // 病灶：`shapeCache.put` 排在三角化**之前**时，`meshShape` / `wireframe` 一抛错，本函数
+  // 直接 reject —— 调用方拿到的是错误而不是 LoadedShape，`StepViewer` 的三条释放路径都拿不到
+  // 这个句柄，两张表里各留一条永远没人 forget 的条目，wasm 句柄也永久占着。
+  // ⚠️ 断言的是**相对位置**（put 在 meshShape 之后），不是行号：行号必然过期。
+  it('R8：入表排在三角化之后，且三角化失败的 catch 里把句柄交还内核', () => {
+    const body = loaderBody();
+    const meshAt = body.indexOf('kernel.meshShape(');
+    const putAt = body.indexOf('shapeCache.put(');
+    expect(meshAt, '找不到三角化调用').toBeGreaterThanOrEqual(0);
+    expect(putAt, '找不到入表调用').toBeGreaterThanOrEqual(0);
+    expect(putAt, '入表必须排在三角化成功之后，否则失败路径留下僵尸条目').toBeGreaterThan(meshAt);
+
+    // catch 分支的范围：从 wireframe 之后的第一个 catch 到 buildMeshGroup 调用之前。
+    const catchAt = body.indexOf('catch', body.indexOf('kernel.wireframe('));
+    const catchEnd = body.indexOf('buildMeshGroup(', catchAt);
+    expect(catchAt, '找不到三角化失败的 catch 分支').toBeGreaterThanOrEqual(0);
+    expect(catchEnd, '找不到三角化 catch 的结束位置').toBeGreaterThan(catchAt);
+    const tessCatch = body.slice(catchAt, catchEnd);
+    expect(tessCatch, '三角化失败时句柄必须交还内核').toMatch(/\.release\(\s*shape\s*\)/);
+    // 释放不能盖掉原始错误：失败仍然要抛给调用方。
+    expect(tessCatch).toContain('三角化失败');
   });
 });

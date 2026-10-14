@@ -496,10 +496,9 @@ export async function loadStepFromBytes(
     );
   }
 
-  // 拓扑 + 统计
+  // 拓扑 + 统计（**此处不入表**，入表位置见三角化之后那行）
   const topology = buildTopology(kernel, shape);
   const stats = buildStats(kernel, shape);
-  shapeCache.put(shape, topology, stats);
 
   options.onProgress?.(60, 'tessellate');
 
@@ -514,12 +513,27 @@ export async function loadStepFromBytes(
     // 用默认 source:'curve'（OCCT 真实拓扑边，face↔face 边界），避免三角化内部网格线
     edgeData = kernel.wireframe(shape, { deflection: linDef });
   } catch (e) {
+    // 三角化失败 ⇒ 整次加载作废：调用方拿到的是 reject，**没有 LoadedShape**，
+    // `StepViewer` 的三条 releaseCurrentShape() 路径都拿不到这个句柄。所以这里既不能
+    // 把句柄留在 wasm arena 里，也不能把它留在两张缓存表里 —— 两者都只有本函数知道，
+    // 谁都清不掉（这正是 releaseShape 注释里点名的「僵尸条目」）。
+    // 此刻还没建任何 THREE 资源（buildMeshGroup 在后面），释放句柄不影响已拿到的数据。
+    try {
+      kernel.release(shape);
+    } catch {
+      /* 句柄已失效：照常把三角化失败抛给调用方，不要让清理动作盖掉原始错误 */
+    }
     throw new OcctLoadError(
       `三角化失败: ${e instanceof Error ? e.message : String(e)}`,
       'tessellate',
       e,
     );
   }
+
+  // 2026-10-20：入表排在三角化**之后**。反过来（先 put 再三角化）时，三角化失败会在
+  // 两张表里各留一条永远没人来 forget 的条目。守卫见
+  // `components/cad-viewer/__tests__/stepShapeRelease.spec.ts`（三角化失败不留僵尸那组）。
+  shapeCache.put(shape, topology, stats);
 
   const rootName = topology.type === 'compound' ? 'model' : topology.type;
   const group = buildMeshGroup(faceMesh, edgeData, rootName);
@@ -559,10 +573,14 @@ export async function loadStepFromArrayBuffer(
  * delete 原始内核）并清空模块级状态。
  *
  * ⚠️ **绝不能挂在任何组件生命周期上**：kernel 是模块级单例，而 `StepViewer` 可以同时挂着多个
- * 实例（`FileListCard` 每个 3D 文件一个、`DrawingPreviewPane` 一个），一个卸载就拆 kernel
- * 会让其余实例下一次加载拿到已释放的句柄；而且 wasm 初始化本身不便宜，让它跟着「关一个预览
- * 窗口」反复拆建更亏。单个形状的释放走 `releaseShape()`，本函数留给「确认没有任何
- * `StepViewer` 挂载」的整进程收尾（应用退出、集成测试 teardown）。
+ * 实例 —— 实例数 = 当前**同时存活**的 3D 预览弹窗个数：tagsView 的 keep-alive 让多个路由
+ * 实例同时活着（开两个零件详情标签、各自打开一个 3D 预览即得两个 `StepViewer`；
+ * `PartFilesTabsCard` 内那三个 `FileListCard` 挂载点是 `v-if / v-else-if / v-else` 互斥的，
+ * 同一时刻只挂一个，每个预览弹窗里也只有一个 `StepViewer`），另有 `DrawingPreviewPane`
+ * 这个承载点。一个卸载就拆 kernel 会让其余实例下一次加载拿到已释放的句柄；而且 wasm
+ * 初始化本身不便宜，让它跟着「关一个预览窗口」反复拆建更亏。单个形状的释放走
+ * `releaseShape()`，本函数留给「确认没有任何 `StepViewer` 挂载」的整进程收尾（应用退出、
+ * 集成测试 teardown）。
  */
 export async function disposeKernel(): Promise<void> {
   const pending = kernelPromise;

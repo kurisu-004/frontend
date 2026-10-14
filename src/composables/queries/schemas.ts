@@ -120,8 +120,10 @@ export type CustomerListResultSchema = z.infer<typeof customerListResultSchema>;
  * `.nullable()` 与 `.optional()` 是正交维度（前者放宽类型、后者放宽 required），必须并存
  * 才能同时接受 null 与字段缺失两种形态。
  * 仍走 `listProcesses` 裸调、**不**经 Zod 的视图（RepairStartDialog / ShelfList /
- * OutsourceQuoteList / OutsourceList / ProcessPickerDialog）
- * 不受本 schema 变更影响。 */
+ * OutsourceQuoteList / OutsourceList）不受本 schema 变更影响。
+ * ⚠️ `ProcessPickerDialog`（报工台的工序选择弹窗）**已于 2026-10-20 起走
+ * `useProcessesQuery`**（queryFn 内 `processListResultSchema.parse`），**是受本 schema 约束的**
+ * —— 本条 schema 的任何变更同样会让那个弹窗的工序列表恒空，别把它当免疫视图。 */
 export const processSchema = z.object({
   id: z.string(),
   version: z.number(),

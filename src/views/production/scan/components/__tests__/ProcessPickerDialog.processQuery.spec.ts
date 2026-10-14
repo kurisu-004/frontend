@@ -5,20 +5,22 @@
 // `useProcessesQuery`，不再由组件内裸调 `listProcesses`。
 //
 // 为什么值得单独立一个文件：改造前弹窗每开一次打一次 `GET /prod/processes?limit=200`
-// （零缓存零去重），而工序字典是跨域基础数据 —— 生产队列看板 `QueueBoard.vue` 读的是同一条
-// queryKey。同屏两处（看板 + 弹窗）本该只发一次往返，改成裸调后必然发两次。
-// 「放回 → 换一道工序」是工人高频路径，车间网络下每次开弹窗白等一个 200 行字典往返是
-// 不可接受的。这条不变量在运行期只能靠 queryKey 相等来兑现，故本文件按「同一个
-// QueryClient 下两次挂载只发一次请求」来断言，而不是断言源码里有没有某个字面量。
+// （零缓存零去重），而工序字典是跨域基础数据 —— 生产队列看板 `QueueBoard.vue`、待品检页等读的是
+// 同一条 queryKey。⚠️ 它们与本弹窗**分属不同路由**（看板 `production/worker-queue`，本弹窗的
+// 两个宿主都在 `scan/*`），**不可能同屏挂载**：真正的收益是共享层 30s staleTime / 5min gcTime
+// 的跨路由复用与「同一页反复开启不再重发」。「放回 → 换一道工序」是工人高频路径，车间网络下
+// 每次开弹窗白等一个 200 行字典往返是不可接受的。
 //
 // 覆盖：
 //   - Q1（源码守卫）：组件内不再有裸 `listProcesses`（含 import）。防止有人图省事把
-//     `await listProcesses(...)` 加回来 —— 那样同屏去重当场失效，而功能测试全绿。
+//     `await listProcesses(...)` 加回来 —— 那样缓存复用当场失效，而功能测试全绿。
 //   - Q2（enabled 闸门）：弹窗不可见时零请求；可见后才发。
-//   - Q3（同屏共享 queryKey ⇒ 去重）：看板形态的 `useProcessesQuery({ limit: 200 })` 与
-//     弹窗同时挂在**同一个** QueryClient 上，`listProcesses` 全程只被调一次，且弹窗
-//     直接渲染出卡片（零等待、无 loading 骨架）。
+//   - Q3（queryKey 相等 ⇒ 去重）：看板形态的 `useProcessesQuery({ limit: 200 })` 与弹窗挂在
+//     **同一个** QueryClient 上，`listProcesses` 全程只被调一次（这是 queryKey 机械相等的
+//     证明，**不假设两者同屏**），且弹窗直接渲染出卡片（零等待、无 loading 骨架）。
 //   - Q4（缓存热 ⇒ 打开即渲染）：同一个 QueryClient 内关窗再开窗，请求数仍为 1。
+//   - Q5（错误提示）：连续两次失败 ⇒ 各弹一次 toast（失败几次就弹几次）。
+//   - Q6（重开不留旧错误）：上一轮失败后重开弹窗、重取在途时压 loading 骨架，不闪旧横幅。
 //
 // 测试策略（沿 ProcessPickerDialog.spec.ts 同款）：
 //   - `vi.mock('@/api/process')` 桩住唯一的出网口（共享 hook 内部调的正是它），桩返回值
@@ -49,6 +51,7 @@ vi.mock('element-plus', () => ({ ElMessage: mocks.ElMessage }));
 
 import ProcessPickerDialog from '../ProcessPickerDialog.vue';
 import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
+import { qk } from '@/composables/queries/keys';
 
 /** 组件源文件（Q1 的守卫对象）。
  *  ⚠️ 用 `import.meta.url` **字符串** + `node:url` 的 `fileURLToPath`，不要写
@@ -62,12 +65,15 @@ const COMPONENT_SRC = readFileSync(
 
 /** 把三类注释逐字符换成空格（换行保留）—— 位置不变，判定只跑在真实代码上。
  *  本组件的文档注释里点名了「此前裸调 listProcesses」这段历史，守卫要判的是**代码**里
- *  有没有那条调用，不是注释里有没有那个词。 */
+ *  有没有那条调用，不是注释里有没有那个词。
+ *
+ *  ⚠️ **顺序：HTML → `//` 行注释 → 块注释**：反过来时，一句行注释里只要出现块注释的起始符，
+ *  块注释正则就会从那里一路吃到下一个闭合符，把中间整段真实代码吞成空格 ⇒ Q1 恒绿。 */
 function stripComments(src: string): string {
   return src
     .replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, ' '))
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
-    .replace(/^\s*\/\/.*$/gm, ' ');
+    .replace(/^\s*\/\/.*$/gm, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
 }
 
 const stubs = {
@@ -163,7 +169,7 @@ describe('ProcessPickerDialog / 工序字典走共享查询层', () => {
     expect(mocks.listProcesses.mock.calls[0]![0]).toMatchObject({ limit: 200 });
   });
 
-  it('Q3：与看板形态共享同一条 queryKey ⇒ 同屏只发一次请求，弹窗零等待直出卡片', async () => {
+  it('Q3：与看板形态共用同一条 queryKey ⇒ 同一 QueryClient 下两个消费者只发一次，弹窗零等待直出卡片', async () => {
     mount(BoardLike, { global: { plugins: [[VueQueryPlugin, { queryClient: qc }]] } });
     await flushPromises();
     expect(mocks.listProcesses, '看板先取到的就是那一次').toHaveBeenCalledTimes(1);
@@ -194,5 +200,42 @@ describe('ProcessPickerDialog / 工序字典走共享查询层', () => {
 
     expect(mocks.listProcesses).toHaveBeenCalledTimes(1);
     expect(w.findAll('.stub-card')).toHaveLength(3);
+  });
+
+  // 钉的是「失败几次 = 弹几次」这条不变量（去掉 watch、或加成只弹一次，这两条都会红）。
+  // ⚠️ 它**不**能区分 watch 的触发源是 Error 对象还是文案字符串：query-core 在无数据时发起请求
+  // 会把 error 清成 null，所以两种写法今天都弹两次（守卫见组件内同名注释）。
+  it('Q5：连续两次失败各弹一次 toast（与两次文案是否相同无关）', async () => {
+    mocks.listProcesses.mockRejectedValue(new Error('Network Error'));
+    const w = mountDialog(true);
+    await flushPromises();
+    expect(mocks.ElMessage.error).toHaveBeenCalledTimes(1);
+
+    await qc.invalidateQueries({ queryKey: qk.processesPrefix });
+    await flushPromises();
+
+    expect(mocks.listProcesses, '失效后应当真的重取了一次').toHaveBeenCalledTimes(2);
+    expect(mocks.ElMessage.error, '第二次失败也要弹').toHaveBeenCalledTimes(2);
+    expect(w.find('.error-state').exists()).toBe(true);
+  });
+
+  // 钉的是「重开弹窗的那一瞬压骨架、不闪上一轮的旧错误横幅」这条可见行为。
+  // 今天它靠的是 query-core 的 fetchState（无数据时 status 回落 pending ⇒ isPending 为 true），
+  // 所以 `loading` 只取 isPending 就够 —— 这里是行为钉子，不是对某个实现的断言。
+  it('Q6：上一轮失败后重开弹窗，重取在途时压 loading 骨架而不是闪旧错误横幅', async () => {
+    mocks.listProcesses.mockRejectedValueOnce(new Error('Network Error'));
+    const w = mountDialog(true);
+    await flushPromises();
+    expect(w.find('.error-state').exists()).toBe(true);
+
+    // 第二轮挂起（永不兑现），把「重取在途」这个瞬间定住。
+    mocks.listProcesses.mockImplementationOnce(() => new Promise(() => {}));
+    await w.setProps({ modelValue: false });
+    await flushPromises();
+    await w.setProps({ modelValue: true });
+    await flushPromises();
+
+    expect(w.find('.loading-state').exists(), '重取在途时压骨架').toBe(true);
+    expect(w.find('.error-state').exists(), '不闪上一轮的旧错误横幅').toBe(false);
   });
 });
