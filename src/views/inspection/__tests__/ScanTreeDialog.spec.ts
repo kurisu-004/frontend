@@ -434,7 +434,8 @@ async function mountDialog(tree: ScanTreeOut, options: { canTransition?: boolean
   const store = useInspectionListStore();
   // 2026-10-15：种入批次流转权限点（真实 auth store；mount 后 pinia 才安装到 app 上，
   // auth store setup 首行 useQueryClient 需要注入上下文）。无权限场景传
-  // { canTransition: false } —— 操作列三个流转按钮全收掉。
+  // { canTransition: false } —— 操作列的流转按钮（品检通过 / 指定工序 / 送检 /
+  // 强制送检，2026-10-17 起四个）全收掉。
   useAuthStore().user = {
     id: 'u-scan-tree-test',
     username: 'tester',
@@ -533,7 +534,7 @@ describe('ScanTreeDialog', () => {
     wrapper.unmount();
   });
 
-  it('无 batch.transition 权限点：品检通过 / 指定工序 / 送检三按钮全收掉（2026-10-15 权限闸）', async () => {
+  it('无 batch.transition 权限点：品检通过 / 指定工序 / 送检 / 强制送检四个按钮全收掉（2026-10-15 权限闸，2026-10-17 增补强制送检）', async () => {
     // 回归 guard：整个按钮矩阵统一过 `batch.transition`（store.canTransition）。无权限时
     // 批次行落最后的 `—` 分支 —— 弹窗仍可打开（扫码查看是读操作），但没有任何点下去
     // 必然 403 的流转入口，也不留「无操作可做」的空门。

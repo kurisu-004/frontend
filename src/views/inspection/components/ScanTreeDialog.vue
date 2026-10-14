@@ -130,9 +130,12 @@
         <template #default="{ row }">
           <span v-if="row.node_kind !== 'BATCH'" class="muted">—</span>
           <!--
-            2026-10-15：三个流转按钮（品检通过 / 指定工序 / 送检）统一按 `batch.transition`
-            权限点 gate（store.canTransition）。无权限时批次行落最后的 `—` 分支 —— 不给
-            无权限账号一个点了必然 403 的入口，也不留「点开弹窗却无可执行操作」的空门。
+            2026-10-15：流转动作统一按 `batch.transition`
+            权限点 gate（store.canTransition）—— 当时是三个按钮（品检通过 / 指定工序 /
+            送检），2026-10-17 新增「强制送检」后为**四个**。无权限时批次行落最后的 `—`
+            分支 —— 不给无权限账号一个点了必然 403 的入口，也不留「点开弹窗却无可执行
+            操作」的空门。⚠️ 强制送检**没有**新增权限点：它与普通送检同端点、同权限码，
+            差异只是提交时多带一个 `force: true`。
           -->
           <template v-else-if="canTransition && row.status === 'INSPECTION'">
             <el-button size="small" type="success" @click="onPass(row as ActionRow)"
@@ -238,8 +241,11 @@ const emit = defineEmits<{
 const store = useInspectionListStore();
 
 /** 流转权限闸（`batch.transition`，store 内按权限点派生）—— 品检通过 / 指定工序 /
- *  送检三按钮共用。写端点（to-ship / to-process / to-inspection）后端同一组**权限点闸**，
- *  前端跟着读同一个码，才不会出现「可见却 403」。 */
+ *  送检 / 强制送检**四个**按钮共用。写端点（to-ship / to-process / to-inspection）
+ *  后端同一组**权限点闸**，前端跟着读同一个码，才不会出现「可见却 403」。
+ *  ⚠️ 2026-10-17：强制送检**没有**新增权限点 —— 它与普通送检同端点
+ *  （`POST /prod/batches/{id}/to-inspection`）、只是多一个可选入参 `force: true`，
+ *  故刻意复用本闸。 */
 const canTransition = computed<boolean>(() => store.canTransition);
 
 // 2026-10-06：弹窗从 fullscreen 改为定宽（用户要求「不要全屏显示」）。

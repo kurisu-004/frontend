@@ -40,7 +40,9 @@ export const QUEUE_ALLOCATE_PERMISSION = 'queue.allocate';
 /** 拆批（`POST /batches/split`）。 */
 export const BATCH_SPLIT_PERMISSION = 'batch.split';
 
-/** 批次流转（品检通过 / 指定工序 / 送检，`POST /prod/batches/{id}/to-*`）。 */
+/** 批次流转（品检通过 / 指定工序 / 送检 / 强制送检，`POST /prod/batches/{id}/to-*`）。
+ *  ⚠️ 强制送检（2026-10-17）**没有**新增权限点：它与普通送检**同端点**
+ *  （`to-inspection`）、只是多一个可选入参 `force: true`，故刻意复用本码。 */
 export const BATCH_TRANSITION_PERMISSION = 'batch.transition';
 
 /** 批次交付（`POST /prod/batches/{id}/deliver` 等，本批无 UI 闸）。 */
