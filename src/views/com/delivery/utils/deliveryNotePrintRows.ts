@@ -359,10 +359,16 @@ export function groupRows(
 /**
  * 每组独立 pack 成 `≤ capacity` 条 / sheet。**跨组不混** —— 一张送货单一个收货单位。
  * 同一组超过容量时 sheet 名加序号后缀（`组名-2`、`组名-3`…），直到 31 字符上限内。
+ *
+ * ⚠️ `capacity` 显式标注成 `number`（2026-10-16）：默认值取自 `as const` 契约常量，不标注时
+ * 形参类型被推断成**字面量 `10`**，检具版的 25 传不进去（tsc 报「Argument of type '25' is not
+ * assignable to parameter of type '10'」）。只放开类型标注、不动默认值来源 ⇒ 默认行为与既有
+ * 调用方逐字节不变；检具版调用方显式传 25（守卫见 deliveryNotePrintRows.spec 的 25 → [25, 1]
+ * 那一条）。现有唯一生产调用点（PrintPreviewDialog）仍显式传零件版的 `dataRowCount`。
  */
 export function groupIntoSheets(
   byGroup: PrintRowsByGroup,
-  capacity = DELIVERY_NOTE_TEMPLATE_CONTRACT.dataRowCount,
+  capacity: number = DELIVERY_NOTE_TEMPLATE_CONTRACT.dataRowCount,
 ): PrintSheetSpec[] {
   const used = new Set<string>();
   const specs: PrintSheetSpec[] = [];

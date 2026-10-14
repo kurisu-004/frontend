@@ -5,9 +5,14 @@
 // 而 Zod strip 模式不会报错、只会静默丢字段 ⇒ 必须靠这里的逐条差异把用户自己看出
 // 「改错了哪一格」。
 //
-// 覆盖：正确模板返空数组 / 缺 placeholder / 旧名 {{L2_customer}} / 列位错位 / 缺 sheet；
-// 2026-10-16 追加：`fetchTemplateBytes` 的三种 `TemplateSource` 变体（重点是 `api` 变体
-// 必须走后端 axios 端点而不是裸 `fetch` —— 后者带不上 Authorization 头，必然 401）。
+// 覆盖（零件版）：正确模板返空数组 / 缺 placeholder / 旧名 {{L2_customer}} / 列位错位 /
+// 缺 sheet。
+//
+// 2026-10-16 两批追加：
+//   · `fetchTemplateBytes` 的三种 `TemplateSource` 变体（重点是 `api` 变体必须走后端 axios
+//     端点而不是裸 `fetch` —— 后者带不上 Authorization 头，必然 401）；
+//   · 检具版一批：两份内置检具模板逐格通过 + 三类坏模板各出一差异（改坏 row5 占位符 /
+//     删掉 I2 的 {{delivery_date}} / A 列中间一格不是 {{no}}）。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -26,19 +31,31 @@ vi.mock('@/api/printTemplates', () => ({
 const { assertTemplateMatches, colIndexOf, fetchTemplateBytes } = await import(
   '../deliveryNoteTemplate'
 );
+const { GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT } = await import(
+  '../deliveryNoteTemplateContract'
+);
 
 beforeEach(() => {
   fetchPrintTemplateContentMock.mockClear();
 });
 
-const BUILTIN = readFileSync('templates/delivery_note_fala.xlsx');
+/** 内置零件版模板（法拉）。 */
+const PART_BUILTIN = readFileSync('templates/delivery_note_fala.xlsx');
 
-/** 从内置模板复制一份，改指定单元格后交给校验（不落盘，纯内存）。 */
+/** 两份内置检具模板（百路达 / 杏南）。哪几项一致、哪几项不同以契约文件头那份「一致 /
+ * 不一致」清单为准（deliveryNoteTemplateContract.ts）—— 这里不复述一份，两处各写各的
+ * 迟早对不上。 */
+const GAUGE_BUILTINS = [
+  'templates/delivery_note_gauge_bailuda.xlsx',
+  'templates/delivery_note_gauge_xingnan.xlsx',
+] as const;
+
+/** 从内置零件版模板复制一份，改指定单元格后交给校验（不落盘，纯内存）。 */
 async function openWithEdits(
   edits: (sheet: { rows: unknown[][] }) => void,
 ): Promise<Hucre.Workbook> {
   const { openXlsx, saveXlsx } = await import('hucre');
-  const wb = await openXlsx(new Uint8Array(BUILTIN));
+  const wb = await openXlsx(new Uint8Array(PART_BUILTIN));
   const sheet = wb.sheets[0];
   sheet.rows = sheet.rows.map((r) => [...r]);
   edits(sheet);
@@ -46,10 +63,23 @@ async function openWithEdits(
   return await openXlsx(await saveXlsx(wb));
 }
 
+/** 检具版同款：复制内置检具模板再改格（默认百路达那份）。 */
+async function openGaugeWithEdits(
+  edits: (sheet: { rows: unknown[][] }) => void,
+  file: (typeof GAUGE_BUILTINS)[number] = GAUGE_BUILTINS[0],
+): Promise<Hucre.Workbook> {
+  const { openXlsx, saveXlsx } = await import('hucre');
+  const wb = await openXlsx(new Uint8Array(readFileSync(file)));
+  const sheet = wb.sheets[0];
+  sheet.rows = sheet.rows.map((r) => [...r]);
+  edits(sheet);
+  return await openXlsx(await saveXlsx(wb));
+}
+
 describe('assertTemplateMatches', () => {
   it('内置模板逐格校验通过（空数组）', async () => {
     const { openXlsx } = await import('hucre');
-    const diffs = await assertTemplateMatches(await openXlsx(new Uint8Array(BUILTIN)));
+    const diffs = await assertTemplateMatches(await openXlsx(new Uint8Array(PART_BUILTIN)));
     expect(diffs).toEqual([]);
   });
 
@@ -100,7 +130,7 @@ describe('assertTemplateMatches', () => {
 
   it('缺工作表 → 一条差异，不抛', async () => {
     const { openXlsx } = await import('hucre');
-    const wb = await openXlsx(new Uint8Array(BUILTIN));
+    const wb = await openXlsx(new Uint8Array(PART_BUILTIN));
     (wb as unknown as { sheets: unknown[] }).sheets = [];
     const diffs = await assertTemplateMatches(wb);
     expect(diffs).toEqual(['缺少第 1 个工作表（模板必须是单 sheet 结构）']);
@@ -150,5 +180,53 @@ describe('fetchTemplateBytes', () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+});
+
+// ============================================================
+// 检具版（2026-10-16 新增）
+// ============================================================
+describe('assertTemplateMatches（检具版）', () => {
+  it.each(GAUGE_BUILTINS)('内置检具模板逐格校验通过（空数组）：%s', async (file) => {
+    const { openXlsx } = await import('hucre');
+    const wb = await openXlsx(new Uint8Array(readFileSync(file)));
+    const diffs = await assertTemplateMatches(wb, GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT);
+    expect(diffs).toEqual([]);
+  });
+
+  it('row5 的占位符被改坏 → 差异含单元格引用与实际值', async () => {
+    const wb = await openGaugeWithEdits((s) => {
+      s.rows[4]![1] = '原订单号';
+    });
+    const diffs = await assertTemplateMatches(wb, GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT);
+    expect(diffs).toHaveLength(1);
+    expect(diffs[0]).toContain('B5 期望 {{order_no}}');
+    expect(diffs[0]).toContain('原订单号');
+  });
+
+  it('I2 的 {{delivery_date}} 被删 → 差异', async () => {
+    const wb = await openGaugeWithEdits((s) => {
+      s.rows[1]![8] = '送货日期';
+    });
+    const diffs = await assertTemplateMatches(wb, GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT);
+    expect(diffs).toEqual(['I2 应包含 {{delivery_date}}']);
+  });
+
+  it('A 列中间某格不是 {{no}}（A15）→ 差异只报那一格', async () => {
+    const wb = await openGaugeWithEdits((s) => {
+      s.rows[14]![0] = '3';
+    });
+    const diffs = await assertTemplateMatches(wb, GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT);
+    expect(diffs).toHaveLength(1);
+    expect(diffs[0]).toContain('A15 期望 {{no}}');
+    expect(diffs[0]).toContain('3');
+  });
+
+  it('缺工作表 → 一条差异，不抛（两套版式共用同一条判据）', async () => {
+    const { openXlsx } = await import('hucre');
+    const wb = await openXlsx(new Uint8Array(readFileSync(GAUGE_BUILTINS[0])));
+    (wb as unknown as { sheets: unknown[] }).sheets = [];
+    const diffs = await assertTemplateMatches(wb, GAUGE_DELIVERY_NOTE_TEMPLATE_CONTRACT);
+    expect(diffs).toEqual(['缺少第 1 个工作表（模板必须是单 sheet 结构）']);
   });
 });

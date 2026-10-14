@@ -2,7 +2,8 @@
 //
 // 送货单打印模板的取字节 + 结构校验（2026-10-08 新增）。
 //
-// 模板来源三种形态（`TemplateSource`），**只有数据来源不同，渲染与校验链路逐字相同**：
+// 模板来源三种形态（`TemplateSource`），**只有数据来源不同，取到字节之后的渲染与校验链路
+// 逐字相同**：
 //   · `local` —— 用户在打印对话框里临时上传的文件（el-upload 给的 raw File → bytes）；
 //   · `api`   —— **2026-10-16 新增**：后端 `/api/v2/print-templates` 按**一级客户**绑定的
 //                模板，打印对话框打开时用 `resolve` 端点选中、再按 id 取字节。管理员在
@@ -13,9 +14,8 @@
 //
 // ⚠️ **`api` 形态必须走 axios，不能用裸 `fetch`**：`GET /{id}/content` 要 Authorization 头
 //（后端按权限点 `delivery_note.print` 判定），裸 `fetch` 带不上 ⇒ 401。取字节一律走
-// `api/printTemplates.ts::fetchPrintTemplateContent(id)` —— ⚠️ 后端 resolve 出参里**没有**
-// `content_url` 这个字段（2026-10-16 review 第 2 轮 C-1 订正：本文件原先那条关于它的注释
-// 描述的是一个不存在的字段），本域因此也没有任何「拼相对路径塞 `<a href>`」的写法。
+// `api/printTemplates.ts::fetchPrintTemplateContent(id)` —— 后端 resolve 出参里**没有**
+// `content_url` 这个字段，本域因此也没有任何「拼相对路径塞 `<a href>`」的写法。
 //
 // ⚠️ 校验失败**不静默**：assertTemplateMatches 返回逐条差异，由对话框把「导出」按钮
 // 置 disabled 并把差异原文摆进 tooltip。用户改坏了一列位还导出成功，得到的送货单在
@@ -23,14 +23,22 @@
 //
 // ⚠️ **服务端取回的字节必须复验**：`api` 形态的字节是别人（管理员）上传的，可能在被绑定
 // 之后又被改坏。打印对话框打开时那次 `assertTemplateMatches` 就是这条护栏 —— 它与本地
-// 上传那份逐格同判，不因「它来自我们自己的服务器」而放行。
+// 上传那份按同一套契约逐格同判，不因「它来自我们自己的服务器」而放行。
+//
+// 2026-10-16 新增检具版：校验按 `contract.kind` 分派到两套逐格判据（版式差异全在
+// 契约里），`contract` 缺省仍是零件版 ⇒ 打印对话框的既有调用零改动。
 
 import { fetchPrintTemplateContent } from '@/api/printTemplates';
-import type { Workbook } from 'hucre/xlsx';
+import type { Sheet, Workbook } from 'hucre/xlsx';
 import {
   DELIVERY_NOTE_TEMPLATE_CONTRACT,
   FOOTER_DATE_ANCHOR,
   FOOTER_DRIVER_NAME_ANCHOR,
+} from './deliveryNoteTemplateContract';
+import type {
+  DeliveryNoteTemplateContract,
+  GaugeDeliveryNoteTemplateContract,
+  PartDeliveryNoteTemplateContract,
 } from './deliveryNoteTemplateContract';
 
 export type TemplateSource =
@@ -49,7 +57,7 @@ export async function fetchTemplateBytes(src: TemplateSource): Promise<Uint8Arra
 }
 
 /** 列字母 → 0-based 列下标（'A' → 0，'J' → 9）。
- *  ⚠️ 只认**单字母**列：模板契约的 10 个数据列全在 A..J 内，多字母（'AA'）被静默
+ *  ⚠️ 只认**单字母**列：模板契约的数据列全在 A..J 内，多字母（'AA'）被静默
  *  当成 'A' 会把值写错列且不发任何错 —— 故显式拒绝。 */
 export function colIndexOf(letter: string): number {
   if (!/^[A-Z]$/.test(letter)) throw new Error(`模板契约的列字母必须是单个 A-Z：${letter}`);
@@ -63,9 +71,10 @@ export function parseRef(ref: string): { row: number; col: number } {
   return { row: Number(m[2]) - 1, col: colIndexOf(m[1]!) };
 }
 
-/** 读一格的文本（null / undefined / 非字符串都归一成串，便于比对与报错）。 */
-function cellText(wb: Workbook, row: number, col: number): string {
-  const v = wb.sheets[0]?.rows[row]?.[col];
+/** 读一格的文本（null / undefined / 非字符串都归一成串，便于比对与报错）。
+ *  取 sheet 形参而不读 `wb.sheets[0]`：调用方已按契约的 `sheetIndex` 取过并判过存在。 */
+function cellText(sheet: Sheet, row: number, col: number): string {
+  const v = sheet.rows[row]?.[col];
   if (v === null || v === undefined) return '';
   return typeof v === 'string' ? v : String(v);
 }
@@ -75,26 +84,30 @@ function excelRef(row: number, col: number): string {
   return `${String.fromCharCode(65 + col)}${row + 1}`;
 }
 
+/** 一格比对不通过的统一文案（两套版式逐格差异共用同一条格式）。
+ *
+ *  `note` 是可选的**补充说明**：检具版用它把「契约声明的哪一列该写什么」摊开 —— 用户看到的
+ *  要么是「模板那格被改坏了」，要么是「契约说这一列该有占位符而模板里没有」，两类问题不该
+ *  报出同一条差异。 */
+function diffText(ref: string, expected: string, actual: string, note?: string): string {
+  const head = `${ref} 期望 ${expected}，实际为${actual === '' ? '「空」' : `「${actual}」`}`;
+  return note ? `${head}${note}` : head;
+}
+
 /**
- * 逐格比对模板结构，返回差异清单（**空数组 = 通过**）。
+ * 逐格比对**零件版**模板结构，返回差异清单（**空数组 = 通过**）。
  *
  * 检查项：
- *   1. 第 0 个 sheet 存在；
+ *   1. 第 0 个 sheet 存在（在 `assertTemplateMatches` 里查）；
  *   2. row 3 的 B3..J3 恰好是 9 个数据 placeholder；
  *   3. row 3..12 的 A 列都是 `{{no}}`（10 格）；
  *   4. F15 含 `{{driver_name}}`；A17 含 `{{year}}` / `{{month}}` / `{{date}}`。
- *
- * 异步只是为了与「打开工作簿」这一步同形（调用方拿到 bytes 后先 openXlsx 再断言），
- * 内部是同步计算。
  */
-export async function assertTemplateMatches(wb: Workbook): Promise<string[]> {
-  const c = DELIVERY_NOTE_TEMPLATE_CONTRACT;
+function assertPartMatches(
+  sheet: Sheet,
+  c: PartDeliveryNoteTemplateContract,
+): string[] {
   const diffs: string[] = [];
-
-  const sheet = wb.sheets[c.sheetIndex];
-  if (!sheet) {
-    return [`缺少第 ${c.sheetIndex + 1} 个工作表（模板必须是单 sheet 结构）`];
-  }
 
   // row 3（0-based 2）的 9 个数据列。no 列单独查（10 行都要有）。
   const row3: [keyof typeof c.columns, string][] = [
@@ -110,13 +123,9 @@ export async function assertTemplateMatches(wb: Workbook): Promise<string[]> {
   ];
   for (const [field, expected] of row3) {
     const col = colIndexOf(c.columns[field]);
-    const actual = cellText(wb, c.dataStartRow, col);
+    const actual = cellText(sheet, c.dataStartRow, col);
     if (actual !== expected) {
-      diffs.push(
-        `${excelRef(c.dataStartRow, col)} 期望 ${expected}，实际为${
-          actual === '' ? '「空」' : `「${actual}」`
-        }`,
-      );
+      diffs.push(diffText(excelRef(c.dataStartRow, col), expected, actual));
     }
   }
 
@@ -124,27 +133,23 @@ export async function assertTemplateMatches(wb: Workbook): Promise<string[]> {
   const noCol = colIndexOf(c.columns.no);
   for (let k = 0; k < c.dataRowCount; k += 1) {
     const row = c.dataStartRow + k;
-    const actual = cellText(wb, row, noCol);
+    const actual = cellText(sheet, row, noCol);
     if (actual !== '{{no}}') {
-      diffs.push(
-        `${excelRef(row, noCol)} 期望 {{no}}，实际为${
-          actual === '' ? '「空」' : `「${actual}」`
-        }`,
-      );
+      diffs.push(diffText(excelRef(row, noCol), '{{no}}', actual));
     }
   }
 
   // 页脚：占位符嵌在整串文案里，只查「包含」。锚点用整格引用（A1 记法）。
   const driverRef = c.footer.driver_name;
   const driverAt = parseRef(driverRef);
-  if (!cellText(wb, driverAt.row, driverAt.col).includes('{{driver_name}}')) {
+  if (!cellText(sheet, driverAt.row, driverAt.col).includes('{{driver_name}}')) {
     diffs.push(
       `${driverRef} 应包含 {{driver_name}}（锚文案「${FOOTER_DRIVER_NAME_ANCHOR}」）`,
     );
   }
   const dateRef = c.footer.year;
   const dateAt = parseRef(dateRef);
-  const dateCell = cellText(wb, dateAt.row, dateAt.col);
+  const dateCell = cellText(sheet, dateAt.row, dateAt.col);
   for (const ph of ['{{year}}', '{{month}}', '{{date}}']) {
     if (!dateCell.includes(ph)) {
       diffs.push(`${dateRef} 应包含 ${ph}（锚文案「${FOOTER_DATE_ANCHOR}」）`);
@@ -152,4 +157,95 @@ export async function assertTemplateMatches(wb: Workbook): Promise<string[]> {
   }
 
   return diffs;
+}
+
+/** 检具版首行数据区（0-based row 4 = Excel row 5）**应写**的占位符，逐列列明。
+ *
+ *  ⚠️ 显式表而不是 `expected = \`{{\${field}}}\` 反推（2026-10-16）：反推让「契约键名写错」
+ *  与「模板那格没有占位符」两类问题报出同一条差异，用户无从判断该改契约还是改模板。键集由
+ *  `satisfies` 与契约 `columns`（除序号列外）**绑死** —— 契约增删列而不改这张表，`tsc` 当场红。 */
+const GAUGE_ROW5_PLACEHOLDERS = {
+  order_no: '{{order_no}}',
+  drawing_no: '{{drawing_no}}',
+  name: '{{name}}',
+  quantity: '{{quantity}}',
+  system_delivery_date: '{{system_delivery_date}}',
+} satisfies Record<Exclude<keyof GaugeDeliveryNoteTemplateContract['columns'], 'no'>, string>;
+
+/**
+ * 逐格比对**检具版**模板结构，返回差异清单（**空数组 = 通过**）。
+ *
+ * 检查项（2026-10-16 实测版式）：
+ *   1. 第 0 个 sheet 存在（在 `assertTemplateMatches` 里查）；
+ *   2. row 5 的 5 个数据 placeholder（`columns` 里除 `no` 外的全部列）；
+ *   3. row 5..29 的 A 列都是 `{{no}}`（25 格）；
+ *   4. I2 含 `{{delivery_date}}`。
+ *
+ * ⚠️ row 3-4 是**两行表头**、row 30-31 是填写说明：**不参与校验** —— 表头文案随客户
+ * 措辞调整（列名、列宽都按客户样例来），拿来当判据只会在客户改措辞时误报。
+ */
+function assertGaugeMatches(sheet: Sheet, c: GaugeDeliveryNoteTemplateContract): string[] {
+  const diffs: string[] = [];
+
+  // row 5（0-based 4）的数据列：走显式占位符表（序号列不在表内，25 行单独全查）。
+  for (const field of Object.keys(GAUGE_ROW5_PLACEHOLDERS) as Array<
+    keyof typeof GAUGE_ROW5_PLACEHOLDERS
+  >) {
+    const expected = GAUGE_ROW5_PLACEHOLDERS[field];
+    const letter = c.columns[field];
+    const col = colIndexOf(letter);
+    const actual = cellText(sheet, c.dataStartRow, col);
+    if (actual !== expected) {
+      diffs.push(
+        diffText(
+          excelRef(c.dataStartRow, col),
+          expected,
+          actual,
+          `（契约声明列 ${field} 在第 ${c.dataStartRow + 1} 行应写占位符 ${expected}，落在 ${letter} 列）`,
+        ),
+      );
+    }
+  }
+
+  // 序号列：25 个数据行都要有 `{{no}}`。
+  const noCol = colIndexOf(c.columns.no);
+  for (let k = 0; k < c.dataRowCount; k += 1) {
+    const row = c.dataStartRow + k;
+    const actual = cellText(sheet, row, noCol);
+    if (actual !== '{{no}}') {
+      diffs.push(diffText(excelRef(row, noCol), '{{no}}', actual));
+    }
+  }
+
+  // 送货日期锚在表头右侧的 I2（不是页脚区），整格只有这一个占位符，只查「包含」。
+  const ddRef = c.footer.delivery_date;
+  const ddAt = parseRef(ddRef);
+  if (!cellText(sheet, ddAt.row, ddAt.col).includes('{{delivery_date}}')) {
+    diffs.push(`${ddRef} 应包含 {{delivery_date}}`);
+  }
+
+  return diffs;
+}
+
+/**
+ * 逐格比对模板结构，返回差异清单（**空数组 = 通过**）。
+ *
+ * 按 `contract.kind` 分派到对应版式的校验（`part` 见 `assertPartMatches`、
+ * `gauge` 见 `assertGaugeMatches`）。契约缺省是零件版 —— 现有调用方（打印对话框
+ * 校验用户上传的模板）零改动继续走老口径。
+ *
+ * 异步只是为了与「打开工作簿」这一步同形（调用方拿到 bytes 后先 openXlsx 再断言），
+ * 内部是同步计算。
+ */
+export async function assertTemplateMatches(
+  wb: Workbook,
+  contract: DeliveryNoteTemplateContract = DELIVERY_NOTE_TEMPLATE_CONTRACT,
+): Promise<string[]> {
+  const sheet = wb.sheets[contract.sheetIndex];
+  if (!sheet) {
+    return [`缺少第 ${contract.sheetIndex + 1} 个工作表（模板必须是单 sheet 结构）`];
+  }
+  return contract.kind === 'gauge'
+    ? assertGaugeMatches(sheet, contract)
+    : assertPartMatches(sheet, contract);
 }

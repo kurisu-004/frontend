@@ -473,6 +473,14 @@ describe('groupIntoSheets', () => {
     expect(specs[0]!.sheetName).toBe('二五六厂');
   });
 
+  it('显式传检具容量 25 ⇒ 26 条切成 [25, 1]，sheet 名按既有规则带分块序号', () => {
+    // `capacity` 形参的默认值取自 `as const` 契约常量 ⇒ 曾被推断成字面量 `10`，25 传不进去。
+    // 本条同时守住两件事：形参是开放的 `number`，且容量改大后切法与命名都走同一条规则。
+    const specs = groupIntoSheets(groupRows(itemsFor(1, 26), map, 'merge'), 25);
+    expect(specs.map((s) => s.rows.length)).toEqual([25, 1]);
+    expect(specs.map((s) => s.sheetName)).toEqual(['二五六厂-1', '二五六厂-2']);
+  });
+
   it('空组也出一张空表（模板自带表头与页脚，导出来可手填）', () => {
     const specs = groupIntoSheets(groupRows([], map, 'merge'));
     expect(specs).toHaveLength(0);
