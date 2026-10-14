@@ -85,10 +85,34 @@ const CONFIG: WeComDailyConfigData = {
 
 const META = {
   frequencies: [
-    { value: 'DAILY', label: '每天', needs_time: true, needs_weekday: false, needs_day_of_month: false },
-    { value: 'WEEKLY', label: '每周', needs_time: true, needs_weekday: true, needs_day_of_month: false },
-    { value: 'MONTHLY', label: '每月', needs_time: true, needs_weekday: false, needs_day_of_month: true },
-    { value: 'MANUAL_ONLY', label: '仅手动', needs_time: false, needs_weekday: false, needs_day_of_month: false },
+    {
+      value: 'DAILY',
+      label: '每天',
+      needs_time: true,
+      needs_weekday: false,
+      needs_day_of_month: false,
+    },
+    {
+      value: 'WEEKLY',
+      label: '每周',
+      needs_time: true,
+      needs_weekday: true,
+      needs_day_of_month: false,
+    },
+    {
+      value: 'MONTHLY',
+      label: '每月',
+      needs_time: true,
+      needs_weekday: false,
+      needs_day_of_month: true,
+    },
+    {
+      value: 'MANUAL_ONLY',
+      label: '仅手动',
+      needs_time: false,
+      needs_weekday: false,
+      needs_day_of_month: false,
+    },
   ],
   worker_metrics: [
     { value: 'QUANTITY', label: '按件数' },
@@ -426,7 +450,9 @@ describe('useWeComDailyStore — 保存（OCC 硬约束 + 逐字段写全）', (
     await store.actions.save();
 
     expect(saveWeComDailyConfigMock).not.toHaveBeenCalled();
-    expect(store.query.fieldErrors.sections).toBe('四节内容至少要开启一节，否则推送出去是一条空消息');
+    expect(store.query.fieldErrors.sections).toBe(
+      '四节内容至少要开启一节，否则推送出去是一条空消息',
+    );
     expect(ElMessage.warning).toHaveBeenCalledWith('请先修正表单中标红的字段');
   });
 
@@ -546,7 +572,9 @@ describe('useWeComDailyStore — 预览与立即发送', () => {
 
     expect(sendWeComDailyNowMock).toHaveBeenCalledTimes(1);
     expect(ElMessage.success).toHaveBeenCalledWith('企业微信消息已发送');
-    expect(spy).toHaveBeenCalledWith({ queryKey: ['wecom-daily', 'logs', { limit: 20, offset: 0 }] });
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: ['wecom-daily', 'logs', { limit: 20, offset: 0 }],
+    });
     // ⚠️ **不**失效 prefix（那会把 config + meta 也刷一遍，而发送不改配置）
     expect(spy).not.toHaveBeenCalledWith({ queryKey: ['wecom-daily'] });
   });
@@ -563,7 +591,9 @@ describe('useWeComDailyStore — 预览与立即发送', () => {
     await store.actions.sendNow();
     await tick();
 
-    expect(spy).toHaveBeenCalledWith({ queryKey: ['wecom-daily', 'logs', { limit: 20, offset: 0 }] });
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: ['wecom-daily', 'logs', { limit: 20, offset: 0 }],
+    });
     expect(ElMessage.error).toHaveBeenCalledWith(
       '企业微信推送失败，请检查 webhook 是否仍有效（机器人是否已被移出群）',
     );
@@ -630,7 +660,10 @@ describe('useWeComDailyStore — range 跟 meta 走', () => {
   });
 
   it('R2：meta 把 worker_top_n 上限放宽到 500 时，500 能过校验', async () => {
-    fetchWeComDailyMetaMock.mockResolvedValue({ ...META, worker_top_n_range: { min: 0, max: 500 } });
+    fetchWeComDailyMetaMock.mockResolvedValue({
+      ...META,
+      worker_top_n_range: { min: 0, max: 500 },
+    });
     fetchWeComDailyConfigMock.mockResolvedValue({ ...CONFIG, worker_top_n: 500 });
     const store = useWeComDailyStore();
     store.query.openGate();

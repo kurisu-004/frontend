@@ -132,9 +132,7 @@ describe('useQueueSnapshot — 队列快照 query', () => {
       q = testApp.runWithContext(() => useQueueSnapshot());
     });
     await q!.refetch();
-    const entry = testQueryClient
-      .getQueryCache()
-      .find({ queryKey: qk.productionQueueSnapshot() });
+    const entry = testQueryClient.getQueryCache().find({ queryKey: qk.productionQueueSnapshot() });
     const opts = entry?.options as { staleTime?: number; gcTime?: number };
     expect(opts?.staleTime).toBe(30_000);
     expect(opts?.gcTime).toBe(5 * 60 * 1000);

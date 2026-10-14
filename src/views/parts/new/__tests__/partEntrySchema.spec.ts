@@ -87,24 +87,16 @@ describe('partEntrySchema', () => {
   });
 
   it('日期格式 YYYY-MM-DD：非空非格式 → 报错', () => {
-    expect(
-      partEntrySchema.safeParse({ ...base, requestDate: '' }).success,
-    ).toBe(false);
-    expect(
-      partEntrySchema.safeParse({ ...base, plannedDeliveryDate: '2026-9-9' }).success,
-    ).toBe(false);
-    expect(
-      partEntrySchema.safeParse({ ...base, requestDate: '2026-09-24' }).success,
-    ).toBe(true);
+    expect(partEntrySchema.safeParse({ ...base, requestDate: '' }).success).toBe(false);
+    expect(partEntrySchema.safeParse({ ...base, plannedDeliveryDate: '2026-9-9' }).success).toBe(
+      false,
+    );
+    expect(partEntrySchema.safeParse({ ...base, requestDate: '2026-09-24' }).success).toBe(true);
   });
 
   it('systemDeliveryDate 可为 null；非法格式报错', () => {
-    expect(
-      partEntrySchema.safeParse({ ...base, systemDeliveryDate: null }).success,
-    ).toBe(true);
-    expect(
-      partEntrySchema.safeParse({ ...base, systemDeliveryDate: 'bad' }).success,
-    ).toBe(false);
+    expect(partEntrySchema.safeParse({ ...base, systemDeliveryDate: null }).success).toBe(true);
+    expect(partEntrySchema.safeParse({ ...base, systemDeliveryDate: 'bad' }).success).toBe(false);
   });
 
   it('orderNo / note 可为 null 或空字符串（caller 端归一化为 null）', () => {

@@ -22,13 +22,7 @@ import type {
 } from './types';
 
 // re-export 契约类型，方便 caller 从 composable 模块单点导入
-export type {
-  CosCredentials,
-  CosUploadedItem,
-  CosUploaderItem,
-  CosUploaderStatus,
-  CosUploadGrant,
-};
+export type { CosCredentials, CosUploadedItem, CosUploaderItem, CosUploaderStatus, CosUploadGrant };
 
 /** 内部状态机的类型别名（直接复用 CosUploaderItem['status']）。 */
 export type CosUploaderPhase = CosUploaderItem['status'];

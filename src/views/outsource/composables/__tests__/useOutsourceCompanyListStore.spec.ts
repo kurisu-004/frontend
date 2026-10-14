@@ -94,11 +94,7 @@ function makeRow(overrides: Partial<OutsourceCompanySchema> = {}): OutsourceComp
   };
 }
 
-function makeProcess(
-  id: string,
-  code: string,
-  name: string,
-): Record<string, unknown> {
+function makeProcess(id: string, code: string, name: string): Record<string, unknown> {
   return {
     id,
     version: 1,

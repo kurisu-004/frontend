@@ -75,7 +75,12 @@
       </template>
 
       <!-- 操作列（始终可见；不进 defs） -->
-      <el-table-column label="操作" :min-width="store.actionColumnWidth" fixed="right" align="center">
+      <el-table-column
+        label="操作"
+        :min-width="store.actionColumnWidth"
+        fixed="right"
+        align="center"
+      >
         <template #default="{ row }">
           <el-button
             v-if="canSubmit(row as OutsourceQuoteSchema)"
@@ -131,7 +136,12 @@ import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
 import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag';
 import { resolveDraggable } from '@/composables/useColumnVisibility';
-import { canApprove as canApproveQuote, canEdit, canReject as canRejectQuote, canSoftDelete as canSoftDeleteQuote } from '@/utils/outsourceQuotePermissions';
+import {
+  canApprove as canApproveQuote,
+  canEdit,
+  canReject as canRejectQuote,
+  canSoftDelete as canSoftDeleteQuote,
+} from '@/utils/outsourceQuotePermissions';
 import { useOutsourceQuoteListStore } from '../composables/useOutsourceQuoteListStore';
 import type { OutsourceQuoteSchema } from '../composables/outsourceListSchema';
 import type { OutsourceQuoteStatus } from '@/types/outsource';
@@ -146,7 +156,9 @@ import 'element-plus/es/components/tree-select/style/css';
 
 const emit = defineEmits<{
   rowClick: [row: OutsourceQuoteSchema];
-  action: [payload: { type: 'submit' | 'approve' | 'reject' | 'delete'; row: OutsourceQuoteSchema }];
+  action: [
+    payload: { type: 'submit' | 'approve' | 'reject' | 'delete'; row: OutsourceQuoteSchema },
+  ];
 }>();
 
 // store 由父壳 `OutsourceQuoteList.vue` 首调（不变量 #1；`$dispose` 也在父壳）——

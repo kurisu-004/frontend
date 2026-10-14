@@ -215,8 +215,7 @@ export const useWeComWebhooksStore = defineStore('wecom-webhooks', () => {
 
   const setDefaultMutation = useMutation({
     mutationKey: ['wecom', 'set-default-webhook'],
-    mutationFn: (row: WeComWebhookData) =>
-      setDefaultWeComWebhook(row.id, { version: row.version }),
+    mutationFn: (row: WeComWebhookData) => setDefaultWeComWebhook(row.id, { version: row.version }),
     onSuccess: async () => {
       await invalidateWeComWebhooks();
       // ⚠️ 文案**只报这一次写操作做了什么**（把某行标成默认），不暗示它会改变推送行为：

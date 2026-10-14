@@ -51,10 +51,7 @@ export function stsCredentialsToCosCredentials(sts: StsTmpKeysResponse): CosCred
  * const grant = stsToCosUploadGrant(head, files.map(() => crypto.randomUUID()));
  * ```
  */
-export function stsToCosUploadGrant(
-  sts: StsTmpKeysResponse,
-  clientRefs: string[],
-): CosUploadGrant {
+export function stsToCosUploadGrant(sts: StsTmpKeysResponse, clientRefs: string[]): CosUploadGrant {
   if (sts.tmp_key === '') {
     throw new Error('grantStsTmpKeyFiles 返回的 tmp_key 为空，请重试');
   }

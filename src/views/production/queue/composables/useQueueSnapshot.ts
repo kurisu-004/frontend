@@ -70,7 +70,5 @@ export function useQueueSnapshot() {
  *  调用点：useQueueMove（move / auto-allocate）、useQueueDispatch（dispatch）、
  *  useQueueRecall（recall）、QueueBoard.onRefresh（手动刷新）。 */
 export function invalidateQueueSnapshot(qc: QueryClient): Promise<void> {
-  return qc
-    .invalidateQueries({ queryKey: qk.productionQueueSnapshotPrefix })
-    .then(() => undefined);
+  return qc.invalidateQueries({ queryKey: qk.productionQueueSnapshotPrefix }).then(() => undefined);
 }

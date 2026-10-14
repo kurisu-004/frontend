@@ -16,11 +16,11 @@
 //       refresh token 一次性轮转 + reuse detection 会连带清掉该用户所有会话。
 //    d) code !== 0 → 抛 `ApiError(code, message)`，调用方用 try/catch 即可拿到业务错误码。
 //    e) 二进制错误体分支：`responseType: 'blob'`（4 个打印端点）与 `responseType:
-    //       'arraybuffer'`（`GET /print-templates/{id}/content` 取模板字节）这两类端点的
-    //       error body 也是二进制对象而不是普通对象，必须先读成文本再 JSON.parse，否则
-    //       isEnvelope 判 false → 这两类端点的 40102 自动 refresh **静默失效**（直接抛成
-    //       network error，用户被踢登录且零提示）。**新增 `responseType` 非 json 的端点时，
-    //       记得同步看这一段有没有对应分支**（2026-10-16 review 第 1 轮 MAJOR-4）。
+//       'arraybuffer'`（`GET /print-templates/{id}/content` 取模板字节）这两类端点的
+//       error body 也是二进制对象而不是普通对象，必须先读成文本再 JSON.parse，否则
+//       isEnvelope 判 false → 这两类端点的 40102 自动 refresh **静默失效**（直接抛成
+//       network error，用户被踢登录且零提示）。**新增 `responseType` 非 json 的端点时，
+//       记得同步看这一段有没有对应分支**（2026-10-16 review 第 1 轮 MAJOR-4）。
 //
 // 3) `refreshClient`：无任何拦截器的裸 axios 实例（baseURL `/api/v2`），专门给
 //    /api/v2/iam/refresh 用，避免响应拦截器里的 40102 → refresh 链路递归触发。

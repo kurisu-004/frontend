@@ -53,9 +53,7 @@ describe('weComWebhookErrorText — 码值 ↔ 文案逐条钉死', () => {
     // 映射表的键集 = 常量表的键集（不多不少）⇒ 有人加了码忘了配文案时本用例不会红，
     // 但下面那条「每个码都有非空文案」会红。
     expect(Object.keys(WECOM_WEBHOOK_ERROR_TEXT).sort()).toEqual(
-      Object.values(WECOM_WEBHOOK_ERROR_CODES)
-        .map(String)
-        .sort(),
+      Object.values(WECOM_WEBHOOK_ERROR_CODES).map(String).sort(),
     );
     for (const [code, text] of Object.entries(WECOM_WEBHOOK_ERROR_TEXT)) {
       expect(text, `码 ${code} 的文案不能为空`).toBeTruthy();
@@ -75,7 +73,9 @@ describe('weComWebhookErrorText — 码值 ↔ 文案逐条钉死', () => {
   it('E4：ZodError → 固定漂移文案 + console.error（细节只进 console）', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const zodErr = new ZodError([{ code: 'custom', path: ['id'], message: '缺 id' }]);
-    expect(weComWebhookErrorText(zodErr, 'fallback')).toBe('服务端返回的数据格式不符合预期，请联系管理员');
+    expect(weComWebhookErrorText(zodErr, 'fallback')).toBe(
+      '服务端返回的数据格式不符合预期，请联系管理员',
+    );
     expect(spy).toHaveBeenCalled();
     spy.mockRestore();
   });

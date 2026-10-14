@@ -71,7 +71,5 @@ export function useQueueBoard(processId: MaybeRefOrGetter<string | null | undefi
  *  返回 Promise<void> 让调用方 await 完整失效链。调用点：useQueueMove /
  *  useQueueDispatch / useQueueRecall 的 mutation 回调 + QueueBoard.onRefresh。 */
 export function invalidateQueueBoardAll(qc: QueryClient): Promise<void> {
-  return qc
-    .invalidateQueries({ queryKey: qk.productionQueueBoardPrefix })
-    .then(() => undefined);
+  return qc.invalidateQueries({ queryKey: qk.productionQueueBoardPrefix }).then(() => undefined);
 }

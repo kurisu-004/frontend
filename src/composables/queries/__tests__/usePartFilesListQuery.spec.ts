@@ -45,7 +45,10 @@ vi.mock('element-plus', () => ({
 // 完全是 mock 与 schema 共谋的假阳性 —— 真实后端 PartFileListOut 只有 items + total。
 // 现改为真后端契约 2 字段 shape，让 schema 守门有现实意义（缺字段必抛）。
 const realListPartFilesByOwner = vi.fn<
-  (partId: string, kind?: string) => Promise<{
+  (
+    partId: string,
+    kind?: string,
+  ) => Promise<{
     items: unknown[];
     total: number;
   }>
@@ -55,15 +58,11 @@ vi.mock('@/api/files/objects', () => ({
   // 2026-09-29：listPartFilesByOwner 是 usePartFilesListQuery 的唯一外部依赖；
   // 2026-10-13：它自 api/assembly.ts 迁到 api/files/objects.ts（端点本就是
   // GET /files/objects），mock 目标随之改。
-  listPartFilesByOwner: (partId: string, kind?: string) =>
-    realListPartFilesByOwner(partId, kind),
+  listPartFilesByOwner: (partId: string, kind?: string) => realListPartFilesByOwner(partId, kind),
 }));
 
 import { partFileSchema, partFileListResultSchema } from '../schemas';
-import {
-  invalidatePartFilesListQuery,
-  usePartFilesListQuery,
-} from '../usePartFilesListQuery';
+import { invalidatePartFilesListQuery, usePartFilesListQuery } from '../usePartFilesListQuery';
 
 let testApp: ReturnType<typeof createApp>;
 let testQueryClient: QueryClient;

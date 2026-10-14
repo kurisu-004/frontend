@@ -40,9 +40,7 @@
       <span class="pool-title">可发送候选</span>
       <el-tag size="small" type="info">{{ items.length }}</el-tag>
       <el-tooltip :content="NOT_SHELVED_HINT" placement="top">
-        <span v-if="notShelvedCount > 0" class="pool-hint">
-          {{ notShelvedCount }} 个尚未上架
-        </span>
+        <span v-if="notShelvedCount > 0" class="pool-hint"> {{ notShelvedCount }} 个尚未上架 </span>
       </el-tooltip>
       <span class="pool-selected">已选 {{ selectedIds.size }} 件</span>
     </div>
@@ -154,7 +152,9 @@ const cards = computed<PoolCard[]>(() =>
 );
 
 /** 尚未上架的行数（工具条提示用）。 */
-const notShelvedCount = computed(() => props.items.filter((it) => !isCandidateDraggable(it)).length);
+const notShelvedCount = computed(
+  () => props.items.filter((it) => !isCandidateDraggable(it)).length,
+);
 
 /** 传给 useLazyDraggable 的本地副本，**不是渲染源**（模板 v-for 走 cards）。存在的
  *  唯一理由是让库给本实例挂上源端内建 handler（见文件头第 1 条）。 */
@@ -233,7 +233,10 @@ function onCardToggleSelect(card: PoolCard): void {
 
 /** 当前激活的外协工序 id —— 扫码作用域闸门。多个 tab 都激活过时本组件有多个实例，
  *  不闸门就会一次扫码把 N 个 tab 的勾选都改掉。 */
-const activeProcessId = inject<ComputedRef<string>>(ACTIVE_OUTSOURCE_PROCESS_ID, computed(() => ''));
+const activeProcessId = inject<ComputedRef<string>>(
+  ACTIVE_OUTSOURCE_PROCESS_ID,
+  computed(() => ''),
+);
 
 const { onScan } = useBarcodeScanner();
 let unsubScan: (() => void) | null = null;

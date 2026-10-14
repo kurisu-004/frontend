@@ -53,9 +53,7 @@ export function useDeliveryDraftsQuery(l1Id: MaybeRefOrGetter<string | null | un
  *
  *  ⚠️ data 是**数组**（`DeliveryNoteDetailData[]`），不是 `{ items }` 信封 ——
  *  api 层 `batchGetNotes` 已解信封，见 queryFn 内的注释（2026-10-08 修）。 */
-export function useDeliveryDraftsDetailQuery(
-  ids: MaybeRefOrGetter<readonly string[]>,
-) {
+export function useDeliveryDraftsDetailQuery(ids: MaybeRefOrGetter<readonly string[]>) {
   const key = computed(() => (toValue(ids) ?? []).map(String));
   const queryKey = computed(() => qk.deliveryNotesBatchDetail(key.value));
 

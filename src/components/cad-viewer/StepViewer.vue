@@ -219,9 +219,7 @@ async function loadFromBlobUrl(url: string): Promise<void> {
     //（dev server 中途 npm install / vite.config 改 / 删 .vite/deps 后磁盘 hash 重算，
     // 浏览器还在请求旧 hash，浏览器缓存策略命中即返回 stale module；非代码 bug）。
     const isViteCacheIssue =
-      msg.includes('Failed to fetch') ||
-      msg.includes('vite/deps') ||
-      msg.includes('occt-wasm-');
+      msg.includes('Failed to fetch') || msg.includes('vite/deps') || msg.includes('occt-wasm-');
     const hint = isViteCacheIssue
       ? '\n（疑似 Vite 预构建缓存 hash 与浏览器缓存不一致：' +
         'rm -rf node_modules/.vite/deps + 重启 vite + 浏览器硬刷新 Cmd+Shift+R）'

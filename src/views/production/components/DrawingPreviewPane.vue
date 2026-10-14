@@ -166,9 +166,7 @@ const activeTab = ref<'drawings' | 'models3d' | 'cad'>('drawings');
 const partFilesQuery = usePartFilesListQuery(() => props.part?.id ?? null);
 const files = computed<PartFileItem[]>(() => partFilesQuery.data.value?.items ?? []);
 const drawings = computed(() =>
-  files.value.filter(
-    (f) => f.kind === 'DRAWING' && (isPdf(f.file_type) || isImage(f.file_type)),
-  ),
+  files.value.filter((f) => f.kind === 'DRAWING' && (isPdf(f.file_type) || isImage(f.file_type))),
 );
 const models3d = computed(() => files.value.filter((f) => f.kind === '3D_MODEL'));
 // 2026-09-29：cadFiles 不在 DrawingPreviewPane 内消费（CAD Tab 占位），保留

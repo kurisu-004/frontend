@@ -80,7 +80,13 @@ const DEFAULTS: WeComDailyConfigDefaultsData = {
 
 const META = {
   frequencies: [
-    { value: 'DAILY', label: '每天', needs_time: true, needs_weekday: false, needs_day_of_month: false },
+    {
+      value: 'DAILY',
+      label: '每天',
+      needs_time: true,
+      needs_weekday: false,
+      needs_day_of_month: false,
+    },
     {
       value: 'WEEKLY',
       label: '每周',
@@ -189,7 +195,14 @@ describe('weComDailySchema — ConfigOut 键集（21 键，.strict()）', () => 
       weComDailyConfigSchema.parse({ ...CONFIG, frequency: 'MANUAL_ONLY', weekday: 3 }),
     ).not.toThrow();
     expect(() =>
-      weComDailyConfigSchema.parse({ ...CONFIG, frequency: 'MANUAL_ONLY', send_hour: null, send_minute: null, weekday: null, day_of_month: null }),
+      weComDailyConfigSchema.parse({
+        ...CONFIG,
+        frequency: 'MANUAL_ONLY',
+        send_hour: null,
+        send_minute: null,
+        weekday: null,
+        day_of_month: null,
+      }),
     ).not.toThrow();
   });
 
@@ -315,7 +328,10 @@ describe('weComDailySchema — LogRow 键集（19 键，.strict()）', () => {
   });
 
   it('L5：信封四键（items / total / limit / offset）缺一必抛', () => {
-    expect(weComDailyLogListSchema.safeParse({ items: [LOG_ROW], total: 1, limit: 20, offset: 0 }).success).toBe(true);
+    expect(
+      weComDailyLogListSchema.safeParse({ items: [LOG_ROW], total: 1, limit: 20, offset: 0 })
+        .success,
+    ).toBe(true);
     const { total: _drop, ...noTotal } = { items: [LOG_ROW], total: 1, limit: 20, offset: 0 };
     expect(weComDailyLogListSchema.safeParse(noTotal).success).toBe(false);
   });
@@ -386,7 +402,13 @@ describe('makeWeComDailyFormSchema — 7 条同款分支', () => {
 
   it('F8：MANUAL_ONLY + 三个配套字段全 null ⇒ 全绿', () => {
     expect(
-      check({ frequency: 'MANUAL_ONLY', send_hour: null, send_minute: null, weekday: null, day_of_month: null }),
+      check({
+        frequency: 'MANUAL_ONLY',
+        send_hour: null,
+        send_minute: null,
+        weekday: null,
+        day_of_month: null,
+      }),
     ).toEqual({});
   });
 });

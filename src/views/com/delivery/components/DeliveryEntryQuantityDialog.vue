@@ -34,19 +34,15 @@
           @update:model-value="(v: number | undefined) => (quantity = v ?? 1)"
         />
         <span class="unit">{{ kind === 'ASSEMBLY' ? '套' : '件' }}</span>
-        <span class="hint">可入单上限 {{ maxQuantity }} {{ kind === 'ASSEMBLY' ? '套' : '件' }}</span>
+        <span class="hint"
+          >可入单上限 {{ maxQuantity }} {{ kind === 'ASSEMBLY' ? '套' : '件' }}</span
+        >
       </el-form-item>
 
       <el-form-item v-if="kind === 'ASSEMBLY'" label="每套用量">
         <div v-if="perSetParts.length === 0" class="muted">（该装配件没有子件用量信息）</div>
         <div v-else class="per-set">
-          <el-tag
-            v-for="p in perSetParts"
-            :key="p.part_id"
-            size="small"
-            effect="plain"
-            type="info"
-          >
+          <el-tag v-for="p in perSetParts" :key="p.part_id" size="small" effect="plain" type="info">
             {{ partSerialOf(p.part_id) }} {{ p.per_set_quantity }} 件
           </el-tag>
         </div>
@@ -105,7 +101,8 @@ watch(
 );
 
 const valid = computed(
-  () => Number.isInteger(quantity.value) && quantity.value >= 1 && quantity.value <= props.maxQuantity,
+  () =>
+    Number.isInteger(quantity.value) && quantity.value >= 1 && quantity.value <= props.maxQuantity,
 );
 
 const perSetParts = computed<DeliveryScanPerSetPartData[]>(() => props.perSetParts ?? []);

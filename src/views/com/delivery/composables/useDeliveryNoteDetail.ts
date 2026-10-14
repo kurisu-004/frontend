@@ -33,10 +33,7 @@ import {
 } from '../deliveryNoteLineItemsColumnDefs';
 import { useDeliveryNoteDetailQuery } from './useDeliveryNoteDetailQuery';
 import { usePrintedLabels } from './usePrintedLabels';
-import type {
-  DeliveryNoteDetailData,
-  DeliveryNoteLineItemData,
-} from './deliveryNoteSchema';
+import type { DeliveryNoteDetailData, DeliveryNoteLineItemData } from './deliveryNoteSchema';
 
 export interface DeliveryNoteRoleMap {
   MANAGER: boolean;

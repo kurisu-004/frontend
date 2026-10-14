@@ -152,7 +152,10 @@ function unzipEntries(bytes: Uint8Array): Map<string, Uint8Array> {
     const name = dec.decode(bytes.subarray(p + 46, p + 46 + nameLen));
     // 本地头的 extra 长度与中央目录那份**可以不同**，数据偏移必须按本地头重算。
     const dataStart =
-      localOffset + 30 + dv.getUint16(localOffset + 26, true) + dv.getUint16(localOffset + 28, true);
+      localOffset +
+      30 +
+      dv.getUint16(localOffset + 26, true) +
+      dv.getUint16(localOffset + 28, true);
     const raw = bytes.subarray(dataStart, dataStart + compSize);
     out.set(name, method === 8 ? inflateRawSync(raw) : raw);
     p += 46 + nameLen + extraLen + commentLen;
@@ -206,11 +209,13 @@ function mergeList(
   merges: { startRow: number; startCol: number; endRow: number; endCol: number }[] | undefined,
 ): string[] {
   const cell = (row0: number, col0: number) => `${String.fromCharCode(65 + col0)}${row0 + 1}`;
-  return (merges ?? []).map((m) =>
-    m.startRow === m.endRow && m.startCol === m.endCol
-      ? cell(m.startRow, m.startCol)
-      : `${cell(m.startRow, m.startCol)}:${cell(m.endRow, m.endCol)}`,
-  ).sort();
+  return (merges ?? [])
+    .map((m) =>
+      m.startRow === m.endRow && m.startCol === m.endCol
+        ? cell(m.startRow, m.startCol)
+        : `${cell(m.startRow, m.startCol)}:${cell(m.endRow, m.endCol)}`,
+    )
+    .sort();
 }
 
 function row(i: number) {
@@ -304,23 +309,27 @@ describe('renderDeliveryNoteWorkbook', () => {
   });
 
   it('页脚占位符在合并单元格内也被替换（fillTemplate 支持 merges —— 实测结论）', async () => {
-    const out = await renderDeliveryNoteWorkbook(
-      TEMPLATE,
-      [{ sheetName: 'S', rows: [row(0)] }],
-      { driverName: '李四', year: '2026', month: '10', date: '08' },
-    );
+    const out = await renderDeliveryNoteWorkbook(TEMPLATE, [{ sheetName: 'S', rows: [row(0)] }], {
+      driverName: '李四',
+      year: '2026',
+      month: '10',
+      date: '08',
+    });
     const s = (await readBack(out)).sheets[0]!;
     // F15 在合并区 F15:J16、A17 在合并区 A17:J17
     expect(s.rows[14]![5]).toBe('送货人：李四');
-    expect(s.rows[16]![0]).toBe('                                         送货日期：  2026年10月08日');
+    expect(s.rows[16]![0]).toBe(
+      '                                         送货日期：  2026年10月08日',
+    );
   });
 
   it('round-trip 保留 8 处 merges（用 writeXlsx 重建会全丢）', async () => {
-    const out = await renderDeliveryNoteWorkbook(
-      TEMPLATE,
-      [{ sheetName: 'S', rows: [] }],
-      { driverName: '李四', year: '2026', month: '10', date: '08' },
-    );
+    const out = await renderDeliveryNoteWorkbook(TEMPLATE, [{ sheetName: 'S', rows: [] }], {
+      driverName: '李四',
+      year: '2026',
+      month: '10',
+      date: '08',
+    });
     expect((await readBack(out)).sheets[0]!.merges).toHaveLength(8);
   });
 
@@ -365,11 +374,12 @@ describe('renderDeliveryNoteWorkbook', () => {
   });
 
   it('零残留占位符（模板里 23 处 / 14 类 placeholder 全被替换或清空）', async () => {
-    const out = await renderDeliveryNoteWorkbook(
-      TEMPLATE,
-      [{ sheetName: 'S', rows: [row(0)] }],
-      { driverName: '李四', year: '2026', month: '10', date: '08' },
-    );
+    const out = await renderDeliveryNoteWorkbook(TEMPLATE, [{ sheetName: 'S', rows: [row(0)] }], {
+      driverName: '李四',
+      year: '2026',
+      month: '10',
+      date: '08',
+    });
     const s = (await readBack(out)).sheets[0]!;
     const leftover = s.rows.flat().filter((v) => typeof v === 'string' && v.includes('{{'));
     expect(leftover).toEqual([]);
@@ -389,11 +399,12 @@ describe('renderDeliveryNoteWorkbook', () => {
   });
 
   it('styles.xml 不是被重生成的空壳（有真实的 border / font 记录）', async () => {
-    const out = await renderDeliveryNoteWorkbook(
-      TEMPLATE,
-      [{ sheetName: 'S', rows: [row(0)] }],
-      { driverName: '李四', year: '2026', month: '10', date: '08' },
-    );
+    const out = await renderDeliveryNoteWorkbook(TEMPLATE, [{ sheetName: 'S', rows: [row(0)] }], {
+      driverName: '李四',
+      year: '2026',
+      month: '10',
+      date: '08',
+    });
     const styles = partOf(out, 'xl/styles.xml');
     // 空壳形态是 `<borders count="1">` + `<cellXfs count="1">`；模板实测 10 borders /
     // 27 cellXfs。断言 borders 记录数 > 1 即可判别，绑死具体数字会让 hucre 升版假红。
@@ -436,11 +447,12 @@ describe('renderDeliveryNoteWorkbook', () => {
   });
 
   it('空数据行仍保留边框（整块清空只清值、不踩样式）', async () => {
-    const out = await renderDeliveryNoteWorkbook(
-      TEMPLATE,
-      [{ sheetName: 'S', rows: [row(0)] }],
-      { driverName: '李四', year: '2026', month: '10', date: '08' },
-    );
+    const out = await renderDeliveryNoteWorkbook(TEMPLATE, [{ sheetName: 'S', rows: [row(0)] }], {
+      driverName: '李四',
+      year: '2026',
+      month: '10',
+      date: '08',
+    });
     const sheetXml = partOf(out, 'xl/worksheets/sheet1.xml');
     const c = DELIVERY_NOTE_TEMPLATE_CONTRACT;
     // 数据区最后一行（0-based row 11 = Excel row 12）被整行清空成 10 个空值，
@@ -474,11 +486,27 @@ describe('renderDeliveryNoteWorkbook（检具版）', () => {
     // row 5（0-based 4）：A 序号 / B 订单号 / C 客户路径 / D 图号 / E 名称 / F 数量 /
     // G·H 手写列（留白）/ I 交货日期
     expect(s.rows[4]).toEqual([
-      1, 'SO-0', '终端BG / 手机部 / 影像组', 'C-1000', '铝电解电容', 1, '', '', '11月1日',
+      1,
+      'SO-0',
+      '终端BG / 手机部 / 影像组',
+      'C-1000',
+      '铝电解电容',
+      1,
+      '',
+      '',
+      '11月1日',
     ]);
     // row 6 同形，序号续排（清空后逐格覆写，不会漏出模板里 row5 才有的占位符）
     expect(s.rows[5]).toEqual([
-      2, 'SO-1', '终端BG / 手机部 / 影像组', 'C-1001', '铝电解电容', 2, '', '', '11月1日',
+      2,
+      'SO-1',
+      '终端BG / 手机部 / 影像组',
+      'C-1001',
+      '铝电解电容',
+      2,
+      '',
+      '',
+      '11月1日',
     ]);
     // 第 7..29 行未填 ⇒ 整行清空（含 A 列序号占位符、C 列的客户路径占位符）
     expect(s.rows[6]!.every((v) => String(v ?? '') === '')).toBe(true);
@@ -536,9 +564,10 @@ describe('renderDeliveryNoteWorkbook（检具版）', () => {
     // G / H 两列整列扫一遍：25 行数据区里全部空
     for (const colIdx of [6, 7]) {
       for (let k = 0; k < G.dataRowCount; k += 1) {
-        expect(String(s.rows[G.dataStartRow + k]![colIdx] ?? ''), `第 ${k + 1} 行第 ${colIdx} 列`).toBe(
-          '',
-        );
+        expect(
+          String(s.rows[G.dataStartRow + k]![colIdx] ?? ''),
+          `第 ${k + 1} 行第 ${colIdx} 列`,
+        ).toBe('');
       }
     }
     // 清空范围不得越界到数据区之后：**渲染前后的尾部整行快照必须逐格相同** —— 只钉一格的话，
@@ -579,7 +608,15 @@ describe('renderDeliveryNoteWorkbook（检具版）', () => {
     expect(wb.sheets[0]!.rows[28]![0]).toBe(25);
     // 第 26 条落在第二张的第 1 个数据行，序号从头排
     expect(wb.sheets[1]!.rows[4]).toEqual([
-      1, 'SO-25', '法拉', 'C-10025', '铝电解电容', 26, '', '', '11月1日',
+      1,
+      'SO-25',
+      '法拉',
+      'C-10025',
+      '铝电解电容',
+      26,
+      '',
+      '',
+      '11月1日',
     ]);
   });
 
@@ -626,7 +663,9 @@ describe('renderDeliveryNoteWorkbook（检具版）', () => {
     );
     expect(gaugeSheet.rows[G.dataStartRow]![2]).toBe('终端BG / 手机部 / 影像组');
     // 未填满的数据行：两套版式的 C 列都必须是空（零件版第二行 C / 检具版第二行 C）
-    expect(String(partSheet.rows[DELIVERY_NOTE_TEMPLATE_CONTRACT.dataStartRow + 1]![2] ?? '')).toBe('');
+    expect(String(partSheet.rows[DELIVERY_NOTE_TEMPLATE_CONTRACT.dataStartRow + 1]![2] ?? '')).toBe(
+      '',
+    );
     expect(String(gaugeSheet.rows[G.dataStartRow + 1]![2] ?? '')).toBe('');
   });
 
@@ -850,11 +889,7 @@ describe('renderDeliveryNoteWorkbook（检具版）', () => {
     ).rejects.toThrow(/deliveryDate/);
     // 反之：零件契约配检具版页脚 ⇒ 送货人 / 年月日会一起丢
     await expect(
-      renderDeliveryNoteWorkbook(
-        TEMPLATE,
-        [{ sheetName: 'S', rows: [] }],
-        GAUGE_FOOTER as never,
-      ),
+      renderDeliveryNoteWorkbook(TEMPLATE, [{ sheetName: 'S', rows: [] }], GAUGE_FOOTER as never),
     ).rejects.toThrow(/零件版模板页脚/);
   });
 });

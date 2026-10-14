@@ -139,7 +139,13 @@ describe('useOutsourceQuotesQuery — 外协报价一览主查询', () => {
     await q.query.refetch();
     expect(realList).toHaveBeenLastCalledWith({ statuses: ['DRAFT'], limit: 20, offset: 0 });
 
-    paramsRef.value = { statuses: ['SUBMITTED'], sort_by: 'PRICE', sort_dir: 'ASC', limit: 50, offset: 50 };
+    paramsRef.value = {
+      statuses: ['SUBMITTED'],
+      sort_by: 'PRICE',
+      sort_dir: 'ASC',
+      limit: 50,
+      offset: 50,
+    };
     await q.query.refetch();
     expect(realList).toHaveBeenLastCalledWith({
       statuses: ['SUBMITTED'],

@@ -117,9 +117,9 @@ describe('http 错误拦截器 — 二进制 error body（2026-10-16 MAJOR-4）'
     const onLogout = () => listeners.push('auth:logout');
     window.addEventListener('auth:logout', onLogout);
     try {
-      const err = (await errorHandler()(axiosError(asArrayBuffer(JSON.stringify(ENVELOPE_40102)))).catch(
-        (e: unknown) => e as Error,
-      )) as Error;
+      const err = (await errorHandler()(
+        axiosError(asArrayBuffer(JSON.stringify(ENVELOPE_40102))),
+      ).catch((e: unknown) => e as Error)) as Error;
       // 进了 refresh 分支的标志：① 去调了 refreshTokens；② refresh 失败派发了 auth:logout。
       // 若 ArrayBuffer 分支缺失，这里会是 `ApiError(401, 'Request failed with status…')`。
       expect(refreshTokensMock).toHaveBeenCalled();
@@ -157,8 +157,8 @@ describe('http 错误拦截器 — 二进制 error body（2026-10-16 MAJOR-4）'
       window.addEventListener('auth:logout', onLogout);
       try {
         const err = (await errorHandler()(axiosError(data)).catch(
-        (e: unknown) => e as Error & { code?: number },
-      )) as Error & { code?: number };
+          (e: unknown) => e as Error & { code?: number },
+        )) as Error & { code?: number };
         expect(err.code).toBe(40105);
         // 40105 走的是「直接登出」，**不**去换 refresh token。
         expect(refreshTokensMock).not.toHaveBeenCalled();
@@ -181,7 +181,10 @@ describe('http 错误拦截器 — 二进制 error body（2026-10-16 MAJOR-4）'
   //   `fileURLToPath` + `node:path` 的 `resolve/dirname`，两种环境下都锚在**本文件**所在目录，
   //   换 cwd 跑也不会炸（原先的 `readFileSync('src/api/http.ts', 'utf8')` 是 CWD 相对的）。
   it('B5：二进制 error body 的两个解包分支字面量都在（Blob / ArrayBuffer）', () => {
-    const src = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../http.ts'), 'utf8');
+    const src = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), '../http.ts'),
+      'utf8',
+    );
     expect(src).toContain('payload instanceof Blob');
     expect(src).toContain('payload instanceof ArrayBuffer');
     // 反向：本文件不得自己抄一份 isEnvelope 判据（那是要在 http.ts 里改的那一处）。

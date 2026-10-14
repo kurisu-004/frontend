@@ -70,7 +70,5 @@ export function useOutsourceQueueProcessQuery(
  *  返回 Promise<void> 让调用方 await 完整失效链。调用点：`useOutsourceQueueMove` 的
  *  mutation 回调 + 看板的手动刷新。 */
 export function invalidateOutsourceQueueProcessAll(qc: QueryClient): Promise<void> {
-  return qc
-    .invalidateQueries({ queryKey: qk.outsourceQueueProcessPrefix })
-    .then(() => undefined);
+  return qc.invalidateQueries({ queryKey: qk.outsourceQueueProcessPrefix }).then(() => undefined);
 }

@@ -81,9 +81,7 @@ describe('useScanPartsSort / compareScanParts', () => {
   });
 
   it('规则③：同组内日期都缺时先落到键 4（id 字符串降序）', () => {
-    const sorted = useScanPartsSort(
-      ref([part('001'), part('003'), part('002')]),
-    );
+    const sorted = useScanPartsSort(ref([part('001'), part('003'), part('002')]));
 
     // 全都无日期 ⇒ 键 3 返回 0，最终由 id 字符串降序决定（雪花 id 单调递增，
     // 字典序等价于数值序 ⇒ 「新件在前」）

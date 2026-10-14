@@ -86,7 +86,9 @@ describe('WeComWebhooksTab.vue — 5 条动作都在 + 删除走二次确认', (
 
 describe('WeComWebhooksTab.vue — 弹窗关闭权与生命周期', () => {
   it('C1：弹窗显隐的出口收在 closeDialog 一处（不发第二个业务事件）', () => {
-    expect(CODE).toMatch(/function onDialogVisible\(next: boolean\): void \{[\s\S]*?closeDialog\(\);/);
+    expect(CODE).toMatch(
+      /function onDialogVisible\(next: boolean\): void \{[\s\S]*?closeDialog\(\);/,
+    );
     expect(CODE).toMatch(/@cancel="store\.dialogs\.closeDialog\(\)"/);
     // ⚠️ 弹窗**留着 × 是安全的**（关闭不丢任何已提交的数据，唯一的输入态在 store 里，
     // 关掉再打开会被 openCreate / openEdit 重置）—— 所以这里不钉 `:show-close="false"`。

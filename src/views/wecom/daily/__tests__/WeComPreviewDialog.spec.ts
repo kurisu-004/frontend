@@ -18,10 +18,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 
-const SRC = readFileSync(
-  new URL('../components/WeComPreviewDialog.vue', import.meta.url),
-  'utf8',
-);
+const SRC = readFileSync(new URL('../components/WeComPreviewDialog.vue', import.meta.url), 'utf8');
 
 /**
  * 剥掉**注释**后的源码（HTML 块注释 `<!-- -->` + 脚本块注释 `/* *\/` + 整行 `//` 注释）。
@@ -34,7 +31,10 @@ const SRC = readFileSync(
  * 副作用（刻意接受）：本 spec 不检查注释内容是否正确 —— 那是 review 的事，不是测试的事。
  */
 function stripComments(src: string): string {
-  return src.replace(/<!--[\s\S]*?-->/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  return src
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
 }
 
 const CODE = stripComments(SRC);

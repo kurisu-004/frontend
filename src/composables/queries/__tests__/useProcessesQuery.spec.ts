@@ -51,9 +51,7 @@ import type { ProcessListParams } from '../keys';
 // api.get('/prod/processes', { params: cleanParams(params) })），不是 useProcessesQuery
 // 传入的原始 params。这样 'in params' 这类断言才能反映 axios 实际看到的 URL 参数形态。
 const realListProcessesMock = vi.fn<
-  (
-    params: ProcessListParams,
-  ) => Promise<{
+  (params: ProcessListParams) => Promise<{
     items: unknown[];
     total: number;
     limit: number;
@@ -159,7 +157,10 @@ describe('useProcessesQuery — reactive params + queryKey 响应式回归保护
     // 背景：ProcessTab.vue 用 search reactive + queryParams computed 包装 code_like /
     // category。本用例模拟该形态，验证 reactive 源头变化能驱动 listProcesses 入参变化。
     const scope = effectScope();
-    const search = ref({ code_like: '', category: undefined as 'INHOUSE' | 'OUTSOURCE' | undefined });
+    const search = ref({
+      code_like: '',
+      category: undefined as 'INHOUSE' | 'OUTSOURCE' | undefined,
+    });
     const queryParams = computed<ProcessListParams>(() => ({
       code_like: search.value.code_like || undefined,
       category: search.value.category,

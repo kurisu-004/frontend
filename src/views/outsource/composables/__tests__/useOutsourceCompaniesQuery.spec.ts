@@ -170,7 +170,9 @@ describe('useOutsourceCompaniesQuery — 外协公司一览主查询', () => {
 
   it('CQ6：信封多出的 created_at / updated_at 被 strip（后端已删，前端不许依赖）', async () => {
     realList.mockImplementation(async () => ({
-      items: [{ ...makeCompany('190000000000900', '福州精工外协'), created_at: 'x', updated_at: 'y' }],
+      items: [
+        { ...makeCompany('190000000000900', '福州精工外协'), created_at: 'x', updated_at: 'y' },
+      ],
       total: 1,
       limit: 100,
       offset: 0,

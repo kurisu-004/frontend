@@ -46,10 +46,11 @@ const ElTimelineItemStub = defineComponent({
   name: 'ElTimelineItemStub',
   inheritAttrs: false,
   setup(_, { slots, attrs }) {
-    return () => h('div', { class: ['el-timeline-item-stub', attrs.class as string] }, [
-      attrs.timestamp ? h('div', { class: 'ts' }, String(attrs.timestamp)) : null,
-      slots.default?.(),
-    ]);
+    return () =>
+      h('div', { class: ['el-timeline-item-stub', attrs.class as string] }, [
+        attrs.timestamp ? h('div', { class: 'ts' }, String(attrs.timestamp)) : null,
+        slots.default?.(),
+      ]);
   },
 });
 
@@ -160,7 +161,11 @@ describe('ProcessChainCard', () => {
   });
 
   it('C3：未选中批次 → 无节点高亮，提示「未选中批次，请点击批次行」', () => {
-    const wrapper = mountCard({ currentStepId: null, selectedBatchId: null, processesLookup: LOOKUP });
+    const wrapper = mountCard({
+      currentStepId: null,
+      selectedBatchId: null,
+      processesLookup: LOOKUP,
+    });
     expect(wrapper.findAll('.current-step')).toHaveLength(0);
     const alert = wrapper.find('.el-alert-stub');
     expect(alert.exists()).toBe(true);

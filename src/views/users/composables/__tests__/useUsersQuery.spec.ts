@@ -116,9 +116,7 @@ describe('useUsersQuery — 账号管理主查询', () => {
     const { scope } = mountHook({ params, enabled: true });
     await sleep(30);
 
-    const found = testQueryClient
-      .getQueryCache()
-      .find({ queryKey: qk.usersList(params.value) });
+    const found = testQueryClient.getQueryCache().find({ queryKey: qk.usersList(params.value) });
     expect(found).toBeTruthy();
     expect(found?.queryKey[0]).toBe('users');
     expect(found?.queryKey[1]).toBe('list');
@@ -130,7 +128,9 @@ describe('useUsersQuery — 账号管理主查询', () => {
     const params = ref(baseParams());
     const { scope, comp } = mountHook({ params, enabled: true });
     await comp.fetchList();
-    expect(listUsersMock).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 20, offset: 0 }));
+    expect(listUsersMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ limit: 20, offset: 0 }),
+    );
 
     params.value = baseParams({ username_like: 'zhang', offset: 40 });
     await sleep(30);

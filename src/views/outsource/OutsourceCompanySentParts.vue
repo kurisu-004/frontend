@@ -12,7 +12,9 @@
         <div class="header-actions">
           <el-button size="small" @click="onResetFilters">重置筛选</el-button>
           <el-button size="small" @click="onBack">返回公司列表</el-button>
-          <span v-if="page.query.total.value > 0" class="total-hint">共 {{ page.query.total.value }} 条</span>
+          <span v-if="page.query.total.value > 0" class="total-hint"
+            >共 {{ page.query.total.value }} 条</span
+          >
         </div>
       </div>
     </el-card>

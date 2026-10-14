@@ -22,7 +22,10 @@
 import { computed, ref, type Ref } from 'vue';
 import { ORDER_STATUS_LABEL, type OrderStatus } from '@/types/parts';
 import { useCustomerTree } from '@/composables/useCustomerTree';
-import { splitLocationSelection, usePartLocationTree } from '@/views/parts/list/composables/usePartLocationTree';
+import {
+  splitLocationSelection,
+  usePartLocationTree,
+} from '@/views/parts/list/composables/usePartLocationTree';
 import type { CustomerTreeNode } from '@/api/customer.tree';
 import type { LocationTreeNode } from '@/types/parts';
 import type { PartsSearchState } from './usePartsListQuery';

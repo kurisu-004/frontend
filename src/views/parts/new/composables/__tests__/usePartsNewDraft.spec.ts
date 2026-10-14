@@ -182,7 +182,7 @@ describe('mergeDraftWithSession', () => {
         ],
         assemblies: [],
         selectedPages: [],
-        },
+      },
     });
     const out = mergeDraftWithSession(draft, null);
     expect(out.restored).toBe(true);
@@ -223,7 +223,7 @@ describe('mergeDraftWithSession', () => {
         ],
         assemblies: [],
         selectedPages: [],
-        },
+      },
     });
     const session = {
       session_id: 'sess-1',
@@ -292,7 +292,7 @@ describe('mergeDraftWithSession', () => {
         ],
         assemblies: [],
         selectedPages: [],
-        },
+      },
     });
     const session = {
       session_id: 'sess-1',
@@ -432,7 +432,7 @@ describe('mergeDraftWithSession', () => {
           },
         ],
         selectedPages: [],
-        },
+      },
     });
     const session = {
       session_id: 'sess-1',

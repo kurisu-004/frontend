@@ -32,14 +32,11 @@
     <div :class="['split-editor__sum', { 'split-editor__sum--bad': !valid }]">
       Σ {{ sum }} / {{ row.quantity ?? '—' }}
       <span class="split-editor__err">{{ errorText }}</span>
-
     </div>
     <div class="split-editor__actions">
       <el-button size="small" @click="addCell">加一份</el-button>
       <el-button size="small" @click="emit('cancel')">取消</el-button>
-      <el-button size="small" type="primary" :disabled="!valid" @click="confirm">
-        确定
-      </el-button>
+      <el-button size="small" type="primary" :disabled="!valid" @click="confirm"> 确定 </el-button>
     </div>
   </div>
 </template>

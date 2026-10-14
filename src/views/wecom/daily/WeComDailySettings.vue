@@ -134,7 +134,10 @@
       </div>
     </el-card>
 
-    <WeComPreviewDialog v-model="store.dialogs.preview.visible" :result="store.dialogs.preview.result" />
+    <WeComPreviewDialog
+      v-model="store.dialogs.preview.visible"
+      :result="store.dialogs.preview.result"
+    />
   </div>
 </template>
 

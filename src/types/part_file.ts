@@ -212,17 +212,14 @@ export const PREVIEW_SELF_HEAL_MAX_RETRY = 1;
 export function isPreviewUnsupportedError(e: unknown): boolean {
   const code = (e as { code?: unknown } | null)?.code;
   return (
-    typeof code === 'number' &&
-    (PREVIEW_UNSUPPORTED_CODES as readonly number[]).includes(code)
+    typeof code === 'number' && (PREVIEW_UNSUPPORTED_CODES as readonly number[]).includes(code)
   );
 }
 
 /** 判断一个后端错误是否命中 `PREVIEW_SELF_HEAL_CODES`（读 `ApiError.code`）。 */
 export function isPreviewSelfHealError(e: unknown): boolean {
   const code = (e as { code?: unknown } | null)?.code;
-  return (
-    typeof code === 'number' && (PREVIEW_SELF_HEAL_CODES as readonly number[]).includes(code)
-  );
+  return typeof code === 'number' && (PREVIEW_SELF_HEAL_CODES as readonly number[]).includes(code);
 }
 
 /**

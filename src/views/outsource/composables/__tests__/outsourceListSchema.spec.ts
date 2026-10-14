@@ -239,9 +239,9 @@ describe('对账域 schema（行 16 / 信封 6 字段）', () => {
   });
 
   it('S12：status 收两值枚举（DB CHECK 里的 CANCELLED 无代码路径写入，是死代码）', () => {
-    expect(outsourceSentPartItemSchema.parse({ ...sentPartFixture, status: 'RECEIVED' }).status).toBe(
-      'RECEIVED',
-    );
+    expect(
+      outsourceSentPartItemSchema.parse({ ...sentPartFixture, status: 'RECEIVED' }).status,
+    ).toBe('RECEIVED');
     expect(() =>
       outsourceSentPartItemSchema.parse({ ...sentPartFixture, status: 'CANCELLED' }),
     ).toThrow();

@@ -28,7 +28,8 @@ const ROW = {
   updated_at: '2026-10-17 08:00:00',
 };
 
-const GOOD_URL = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=693a0000-1111-2222-3333-44445555ffff';
+const GOOD_URL =
+  'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=693a0000-1111-2222-3333-44445555ffff';
 
 describe('weComWebhookSchema — 行（7 键，.strict()）', () => {
   it('S1：好行过守门，键集与契约逐字相等', () => {
@@ -71,10 +72,15 @@ describe('weComWebhookListSchema — 信封（1 键）', () => {
 
 describe('makeWeComWebhookFormSchema', () => {
   it('F1：新建态地址必填', () => {
-    const parsed = makeWeComWebhookFormSchema('create').safeParse({ name: '生产群', webhook_url: '' });
+    const parsed = makeWeComWebhookFormSchema('create').safeParse({
+      name: '生产群',
+      webhook_url: '',
+    });
     expect(parsed.success).toBe(false);
     if (!parsed.success) {
-      expect(toWeComWebhookFieldErrors(parsed.error.issues).webhook_url).toBe('请填写 webhook 地址');
+      expect(toWeComWebhookFieldErrors(parsed.error.issues).webhook_url).toBe(
+        '请填写 webhook 地址',
+      );
     }
   });
 
@@ -85,7 +91,9 @@ describe('makeWeComWebhookFormSchema', () => {
     });
     expect(parsed.success).toBe(false);
     if (!parsed.success) {
-      expect(toWeComWebhookFieldErrors(parsed.error.issues).webhook_url).toContain('地址格式不正确');
+      expect(toWeComWebhookFieldErrors(parsed.error.issues).webhook_url).toContain(
+        '地址格式不正确',
+      );
     }
   });
 
@@ -99,7 +107,10 @@ describe('makeWeComWebhookFormSchema', () => {
   });
 
   it('F4：改档态地址留空**合法**（空串 = 后端「沿用旧密文」）', () => {
-    const parsed = makeWeComWebhookFormSchema('edit').safeParse({ name: '生产群', webhook_url: '' });
+    const parsed = makeWeComWebhookFormSchema('edit').safeParse({
+      name: '生产群',
+      webhook_url: '',
+    });
     expect(parsed.success).toBe(true);
   });
 
@@ -120,9 +131,14 @@ describe('makeWeComWebhookFormSchema', () => {
   });
 
   it('F7：名称必填 + 超长必拒', () => {
-    expect(makeWeComWebhookFormSchema('create').safeParse({ name: '  ', webhook_url: GOOD_URL }).success).toBe(false);
     expect(
-      makeWeComWebhookFormSchema('create').safeParse({ name: 'x'.repeat(51), webhook_url: GOOD_URL }).success,
+      makeWeComWebhookFormSchema('create').safeParse({ name: '  ', webhook_url: GOOD_URL }).success,
+    ).toBe(false);
+    expect(
+      makeWeComWebhookFormSchema('create').safeParse({
+        name: 'x'.repeat(51),
+        webhook_url: GOOD_URL,
+      }).success,
     ).toBe(false);
   });
 

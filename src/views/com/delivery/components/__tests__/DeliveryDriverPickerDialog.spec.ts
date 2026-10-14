@@ -274,7 +274,10 @@ describe('DeliveryDriverPickerDialog', () => {
     withDriverOptions();
     const w = await mountDialog();
     await selectDriver(w, 'W2');
-    await w.findAll('button.mock-el-button').find((b) => b.text().includes('取消'))!.trigger('click');
+    await w
+      .findAll('button.mock-el-button')
+      .find((b) => b.text().includes('取消'))!
+      .trigger('click');
     expect(w.emitted('confirm')).toBeUndefined();
     expect(w.emitted('update:modelValue')?.at(-1)).toEqual([false]);
     expect(apiPostMock).not.toHaveBeenCalled();

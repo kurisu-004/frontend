@@ -29,12 +29,17 @@ const stubs = {
     props: ['label'],
     template: '<div class="mock-el-form-item" :data-label="label"><slot /></div>',
   },
-  'el-input-number': { name: 'ElInputNumberStub', props: ['modelValue', 'min', 'max'], template: '<input class="mock-el-input-number" :max="max" :min="min" />' },
+  'el-input-number': {
+    name: 'ElInputNumberStub',
+    props: ['modelValue', 'min', 'max'],
+    template: '<input class="mock-el-input-number" :max="max" :min="min" />',
+  },
   'el-button': {
     name: 'ElButtonStub',
     props: ['type', 'size', 'disabled'],
     emits: ['click'],
-    template: '<button class="mock-el-button" :disabled="disabled" @click="$emit(\'click\')"><slot /></button>',
+    template:
+      '<button class="mock-el-button" :disabled="disabled" @click="$emit(\'click\')"><slot /></button>',
   },
   'el-tag': { name: 'ElTagStub', template: '<span class="mock-el-tag"><slot /></span>' },
 };
@@ -101,15 +106,11 @@ describe('DeliveryEntryQuantityDialog', () => {
   it('确认时 emit 的 kind / nodeId / quantity 跟着形态走', async () => {
     const part = mount(DeliveryEntryQuantityDialog, { props: partProps, global: { stubs } });
     await part.findAll('button.mock-el-button').at(-1)!.trigger('click');
-    expect(part.emitted('submit')![0]).toEqual([
-      { kind: 'PART', nodeId: 'P1', quantity: 5 },
-    ]);
+    expect(part.emitted('submit')![0]).toEqual([{ kind: 'PART', nodeId: 'P1', quantity: 5 }]);
 
     const asm = mount(DeliveryEntryQuantityDialog, { props: asmProps, global: { stubs } });
     await asm.findAll('button.mock-el-button').at(-1)!.trigger('click');
-    expect(asm.emitted('submit')![0]).toEqual([
-      { kind: 'ASSEMBLY', nodeId: 'A1', quantity: 2 },
-    ]);
+    expect(asm.emitted('submit')![0]).toEqual([{ kind: 'ASSEMBLY', nodeId: 'A1', quantity: 2 }]);
   });
 
   it('可入单上限为 0 的节点 → 「确定」disabled（默认 1 已越界；发出去后端必 21405）', () => {

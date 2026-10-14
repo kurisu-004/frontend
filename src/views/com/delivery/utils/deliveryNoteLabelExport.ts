@@ -50,10 +50,11 @@ export async function exportPartRowsLabels(
       new Blob([bytes.slice().buffer as ArrayBuffer], { type: DELIVERY_NOTE_LABEL_XLSX_MIME }),
       `${note.delivery_note_no}-标签.xlsx`,
     );
-    usePrintedLabels().markPrinted(note.id, written.flatMap((r) => r.member_ids ?? []));
-    ElMessage.success(
-      skipped > 0 ? `已导出标签（跳过 ${skipped} 条数量为空的行）` : '已导出标签',
+    usePrintedLabels().markPrinted(
+      note.id,
+      written.flatMap((r) => r.member_ids ?? []),
     );
+    ElMessage.success(skipped > 0 ? `已导出标签（跳过 ${skipped} 条数量为空的行）` : '已导出标签');
   } catch (e) {
     ElMessage.error((e as Error).message ?? '导出标签失败');
   }

@@ -55,10 +55,7 @@ const never = () => false;
 describe('buildPartTreeRows：同 part 多批次折叠', () => {
   it('数量求和，批次 id 全量收进 batch_ids', () => {
     const rows = buildPartTreeRows(
-      [
-        li({ id: '10', part_id: 'P1', quantity: 3 }),
-        li({ id: '11', part_id: 'P1', quantity: 4 }),
-      ],
+      [li({ id: '10', part_id: 'P1', quantity: 3 }), li({ id: '11', part_id: 'P1', quantity: 4 })],
       never,
     );
     expect(rows).toHaveLength(1);
@@ -85,10 +82,7 @@ describe('buildPartTreeRows：同 part 多批次折叠', () => {
 
   it('row-key 稳定且按零件而非批次（同一 part 多批次只占一行一个 key）', () => {
     const rows = buildPartTreeRows(
-      [
-        li({ id: '10', part_id: 'P1' }),
-        li({ id: '11', part_id: 'P1' }),
-      ],
+      [li({ id: '10', part_id: 'P1' }), li({ id: '11', part_id: 'P1' })],
       never,
     );
     expect(rows[0]!.id).toBe('P:-:P1');
@@ -276,11 +270,7 @@ describe('buildPartTreeRows：装配件父子结构', () => {
       ],
       never,
     );
-    expect(rows.map((r) => r.id)).toEqual([
-      'P:-:P-loose-before',
-      'ASM_A1',
-      'P:-:P-loose-after',
-    ]);
+    expect(rows.map((r) => r.id)).toEqual(['P:-:P-loose-before', 'ASM_A1', 'P:-:P-loose-after']);
   });
 
   it('子件行仍是「件」，与父行「套」区分', () => {
@@ -429,10 +419,7 @@ describe('buildPartTreeRows：「序号」列（加入送货单的先后顺序�
 describe('buildPartTreeRows：绿底口径（零件行 any / 装配件父行 all）', () => {
   it('零件行：任一批次打过标签即整行绿（any，不是 all）', () => {
     const rows = buildPartTreeRows(
-      [
-        li({ id: '10', part_id: 'P1' }),
-        li({ id: '11', part_id: 'P1' }),
-      ],
+      [li({ id: '10', part_id: 'P1' }), li({ id: '11', part_id: 'P1' })],
       (id) => id === '11',
     );
     expect(rows[0]!.label_printed).toBe(true);

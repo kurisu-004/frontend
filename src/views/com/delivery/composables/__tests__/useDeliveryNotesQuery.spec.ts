@@ -57,7 +57,11 @@ describe('useDeliveryNotesQuery', () => {
   it('enabled=false 时不发请求；置 true 后发一次（闸门避免「默认参数 + 持久化参数」双 fetch）', async () => {
     const enabled = ref(false);
     const hook = inSetup(() =>
-      useDeliveryNotesQuery({ params: () => ({ limit: 50, offset: 0 }), enabled, autoRefresh: false }),
+      useDeliveryNotesQuery({
+        params: () => ({ limit: 50, offset: 0 }),
+        enabled,
+        autoRefresh: false,
+      }),
     );
     await settle();
     expect(apiGetMock).not.toHaveBeenCalled();

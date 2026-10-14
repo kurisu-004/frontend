@@ -29,10 +29,7 @@ export const DELIVERY_NOTE_STATUS_TAG: Record<
 
 /** 一览排序键（`sort_by` 的取值集合）。 */
 export type DeliveryNoteSortKey =
-  | 'CREATED_AT'
-  | 'SUBMITTED_AT'
-  | 'PICKED_UP_AT'
-  | 'DELIVERY_NOTE_NO';
+  'CREATED_AT' | 'SUBMITTED_AT' | 'PICKED_UP_AT' | 'DELIVERY_NOTE_NO';
 
 export type DeliveryNoteSortDir = 'ASC' | 'DESC';
 

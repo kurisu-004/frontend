@@ -51,8 +51,8 @@ function makeBoard(processId: string) {
   };
 }
 
-const realFetchQueueBoard = vi.fn<(processId: string) => Promise<unknown>>(
-  async (processId) => makeBoard(processId),
+const realFetchQueueBoard = vi.fn<(processId: string) => Promise<unknown>>(async (processId) =>
+  makeBoard(processId),
 );
 
 vi.mock('@/api/productionQueue', () => ({

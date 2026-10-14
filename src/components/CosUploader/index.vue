@@ -91,11 +91,7 @@
  */
 import { reactive, ref } from 'vue';
 import type { UploadFile, UploadFiles } from 'element-plus';
-import {
-  buildCosUploaderItems,
-  useCosUploader,
-  type CosUploadedItem,
-} from './useCosUploader';
+import { buildCosUploaderItems, useCosUploader, type CosUploadedItem } from './useCosUploader';
 import type { CosUploadGrant, CosUploaderItem, GetUploadGrant } from './types';
 import { planPick } from './pickPlan';
 import UploadArea from './UploadArea.vue';

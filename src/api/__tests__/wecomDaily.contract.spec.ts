@@ -195,7 +195,9 @@ describe('wecomDaily api 的引法纪律', () => {
     // 守 CLAUDE.md「api 层引域内 schema 默认用 import type」。运行时的三条值引入是「写端点没有
     // queryFn 承载」这一条例外（见文件头 N2），所以这里只查 type 那一条。
     const src = readFileSync(new URL('../wecomDaily.ts', import.meta.url), 'utf8');
-    const match = src.match(/import\s+(type\s+)?\{[^}]*\}\s*from\s*'@\/views\/wecom\/daily\/weComDailySchema'/s);
+    const match = src.match(
+      /import\s+(type\s+)?\{[^}]*\}\s*from\s*'@\/views\/wecom\/daily\/weComDailySchema'/s,
+    );
     expect(match).not.toBeNull();
     expect(match?.[1]).toBe('type ');
   });
