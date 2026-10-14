@@ -65,12 +65,15 @@ export type DashboardEventType =
   // 全量快照去就地改某一行。
   | 'TERMINAL_SERIALS_RELEASED';
 
-// 2026-10-13：`DashboardEventPayload` **只剩 id 类键**。
+// `DashboardEventPayload` **不带任何展示字段**，只有 id 类键与少量计数。
 // 旧版在这里声明过 serial_no / drawing_no / name / customer_path / is_urgent /
 // planned_delivery_date / worker_name / shelf_code 八个展示字段 —— 那是 v1 遗留事件
 // （旧横幅支持的 8 个 kind）的契约，v2 后端零产出方，且约 40 个 v2 事件的 payload 里
 // 一个展示字段都不带。带展示字段的唯一事件是 SCAN_BANNER，而它的 payload 由域内
 // `bannerSchema.ts` 单独守门、单独派生类型，不在本壳里声明。
+// ⚠️ **「只剩 id 类键」是一句会被自己推翻的说法**：2026-10-19 的 TERMINAL_SERIALS_RELEASED
+// 就加了两个计数键（assembly_count / part_count）。判据落在「**有没有展示字段**」上
+// —— 计数不是展示文案（没有消费者把它渲染成一句话），所以 SCAN_BANNER 仍是唯一的展示事件。
 export interface DashboardEventPayload {
   /** PART_FORCE_COMPLETED 携带的被强推工单 id（雪花 ID 字符串）。该事件绕过状态机
    *  直写 COMPLETED，不带任何展示字段 —— 消费方要按行定位只能靠这个 id。 */

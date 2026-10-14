@@ -9,10 +9,16 @@
 // 只留跨域共用的基础数据层，序列号释放是单域单端点，留在那里既不归属、也会让读代码的
 // 人多一次「该 import 哪个路径」的判断。
 //
-// **为什么 `.strict()`**：这份响应是**逐格渲染给管理员看的回执** —— 三条计数 + 明细表
-// 每一格都直接上屏，且它是一次不可撤销的破坏性操作前唯一的告知面。形状漂移时若沿用
-// Zod 默认的 strip，多出来的键会被静默丢掉：表少渲染一列而没有任何报错，管理员在确认框
-// 里看到的明细与后端实际释放的集合已经不一致 ⇒ 恰好在最需要如实告知的地方说谎。
+// **为什么 `.strict()` —— 外层与明细行都接**：这份响应是**逐格渲染给管理员看的回执**
+// —— 三条计数 + 明细表每一格都直接上屏，且它是一次不可撤销的破坏性操作前唯一的告知面。
+// 形状漂移时若沿用 Zod 默认的 strip，多出来的键会被静默丢掉：表少渲染一列而没有任何报错，
+// 管理员在确认框里看到的明细与后端实际释放的集合已经不一致 ⇒ 恰好在最需要如实告知的地方
+// 说谎。**行 schema 必须同样接 strict**：后端 `ReleasedSerialItem` 加一个字段时，
+// 外层 strict 只会发现「顶层多了一个键」，**管不到 `affected[i]` 里多出来的键** ——
+// 而这恰恰是本文件头论证的风险真正发生的位置（明细表逐格渲染）。行不接 strict 时，
+// 后端给行 VO 加字段会被 Zod 默认 strip，明细表少渲染一列且 `parse` 全绿
+// （typecheck / lint 同样全绿），正是这段注释声称要防的事。守卫：
+// `__tests__/serialReleaseSchema.spec.ts` 的 R4（顶层多键）/ **R4b（明细行多键）**。
 //
 // **为什么 `drawing_no` 必须显式声明、且值不接 `null`**：
 //   - **键恒在**：漏声明 = Zod 默认 strip 静默丢键 ⇒ 确认框里那一格恒为空白，而
@@ -44,22 +50,29 @@ import { z } from 'zod';
  *  响应被拒 —— 那不是降级，是功能不存在，且失败发生在契约层、不产生任何红色报错。
  *
  *  每一行是各自表上的**一行**（后端装配件表与零件表都清），`id` 是该行主键的雪花 ID 字符串
- *  （全程 string，不经 Number()）。 */
-export const releasedSerialItemSchema = z.object({
-  kind: z.enum(['ASSEMBLY', 'PART']),
-  id: z.string(),
-  serial_no: z.string(),
-  /** ⚠️ **必填键、值非空**（见文件头）：`t_assembly` / `t_part` 两列在 baseline 里都是
-   *  `NOT NULL`，后端因此声明成 `String` 而非 `Option<String>`。 */
-  drawing_no: z.string(),
-  status: z.string(),
-});
+ *  （全程 string，不经 Number()）。
+ *
+ *  **行级 `.strict()` 不是冗余**：本域的表格是逐格渲染的明细表，而「后端给行 VO 加一个键」
+ *  这类漂移恰恰落在行上（外层 strict 管不到 `affected[i]`）—— 详见文件头。 */
+export const releasedSerialItemSchema = z
+  .object({
+    kind: z.enum(['ASSEMBLY', 'PART']),
+    id: z.string(),
+    serial_no: z.string(),
+    /** ⚠️ **必填键、值非空**（见文件头）：`t_assembly` / `t_part` 两列在 baseline 里都是
+     *  `NOT NULL`，后端因此声明成 `String` 而非 `Option<String>`。 */
+    drawing_no: z.string(),
+    status: z.string(),
+  })
+  .strict();
 
 /** `POST /serials/release-terminal` 的出参（后端 `ReleaseTerminalOut`）。
  *
  *  两段式语义：`dry_run: true` 只预览（同一套形状、同一批计数），`dry_run: false` 实跑。
  *  三个计数是**真实总数**，不受明细截断影响 —— 明细被 `RELEASE_DETAIL_LIMIT`（200）截断时
- *  `affected.length < released_total`，界面据此提示「仅显示前 N 条」。 */
+ *  `affected.length < released_total`，界面据此提示「仅显示前 N 条」。
+ *  `affected` 的行 schema **同样接 `.strict()`**（见文件头）—— 逐格渲染的是行，外层 strict
+ *  管不到行上多出来的键。 */
 export const releaseTerminalSerialsOutSchema = z
   .object({
     dry_run: z.boolean(),

@@ -8,8 +8,10 @@
 //     那一格在确认框里恒为空白 / undefined，而管理员看到的明细与服务端实际释放的集合
 //     已经不一致（本域是不可撤销的破坏性操作前唯一的告知面，静默降级的代价特别高）。
 //     这里逐键删除，断言每个被删的键都让 parse 抛 ZodError。
-//  2. **多一个未知键必抛**：守 `.strict()`。若哪天去掉 strict，后端给这个回执加一个
-//     键就会被静默 strip，管理员看到的明细少一列而没有任何报错。
+//  2. **多一个未知键必抛**：守 `.strict()`，且**顶层与明细行各守一次**（R4 / R4b）。若哪天
+//     去掉任一处 strict，后端给这个回执（顶层或行 VO）加一个键就会被静默 strip，管理员
+//     看到的明细少一列而没有任何报错 —— 本域的表格是逐格渲染的明细表，行级才是这条风险
+//     真正落地的位置。
 //  3. **值形态必抛**：R5 / R6 / R7 逐字段钉住「后端给什么形态」。`drawing_no` 尤其关键 ——
 //     它**值恒非空**（后端两列均 NOT NULL ⇒ `dto.rs` 声明成 `String` 而非
 //     `Option<String>`），接了 `.nullable()` 就会养出一个恒不触发的死分支，并把「后端
@@ -98,6 +100,27 @@ describe('releaseTerminalSerialsOutSchema（2026-10-19）', () => {
     expect(() => releaseTerminalSerialsOutSchema.parse({ ...OUT, unexpected_field: 1 })).toThrow(
       ZodError,
     );
+  });
+
+  it('R4b：明细行多一个未知键也必抛（行级 .strict()，外层 strict 管不到这一层）', () => {
+    // ⚠️ **与 R4 是一对，缺一条就是零信号**：R4 只守顶层。外层 strict 对 `affected[i]` 里
+    // 多出来的键**完全无感** —— 后端给 `ReleasedSerialItem` 加一个字段时，本域的表现是
+    // 「明细表少渲染一列 + parse 全绿 + typecheck / lint 全绿」，而它正发生在逐格渲染的
+    // 位置上（serialReleaseSchema.ts 文件头论证要防的就是这件事）。把行 schema 的
+    // `.strict()` 摘掉时，本条必须变红。
+    expect(() =>
+      releaseTerminalSerialsOutSchema.parse({
+        ...OUT,
+        affected: [{ ...AFFECTED[0]!, unexpected_field: 1 }],
+      }),
+    ).toThrow(ZodError);
+    // 反向：行**少**一个键照样必抛（R3 已守），两向都不能少。
+    expect(() =>
+      releaseTerminalSerialsOutSchema.parse({
+        ...OUT,
+        affected: [AFFECTED[0]!, AFFECTED[1]!, { ...AFFECTED[0]!, extra: 'x' }],
+      }),
+    ).toThrow(ZodError);
   });
 
   it('R5：drawing_no 只接字符串 —— 接 null 必抛、接 undefined 必抛', () => {

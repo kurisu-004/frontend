@@ -14,6 +14,10 @@
   禁 × 是因为它是提交路径上唯一的闸门）。本对话框不满足那个前提：关掉它不丢任何状态
   —— 此刻一行都还没写，工具栏那个按钮还在，随时可以重新预览再开。所以 × 是合法出口。
   别照 `QuantityDialog` 的口径把它改成 `:show-close="false"`。
+  ⚠️ × 只 emit `update:modelValue`、不发业务事件，**明细快照的清位不靠本组件**：
+  `useSerialRelease` 在 `previewOpen` 上挂了一个 watch（显隐一落 false 就清 `preview`），
+  所以 × 与「取消」两条路径自动走同一处清位，不会各留一份「上一次的、已消费过的明细」。
+  ⇒ 别在这里补 `@update:model-value` 的清理逻辑（会是第二个清位点）。
 -->
 
 <template>

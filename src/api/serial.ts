@@ -7,7 +7,10 @@
 //
 // 后端约束：
 // - MANAGER-only（handler 层 `require_role(Role::Manager)`）；
-// - 入参只有 `dry_run` 一个键，两段式：`true` 预览、`false` 实跑；
+// - 入参只有 `dry_run` 一个键，两段式：`true` 预览、`false` 实跑。⚠️ 后端 `dry_run` 带
+//   `#[serde(default)]` ⇒ **空 body 等价于实跑**（后端 dto.rs 自称已知风险）；出参又把
+//   `dry_run` 原样回显、注释写明「供前端确认这次到底是预览还是实跑」⇒ 消费侧在 apply
+//   路径上**真的比一次**回显，不符即报错（`useSerialRelease.ts` 的 applyMutation）；
 // - 出参 wire 契约见 `src/views/parts/list/composables/serialReleaseSchema.ts`
 //   （域内 Zod 守门 schema，与消费它的 `useSerialRelease` 同居）。
 //

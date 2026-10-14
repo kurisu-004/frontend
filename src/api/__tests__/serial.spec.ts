@@ -73,7 +73,9 @@ describe('serial api 层不做 Zod 校验（负向守卫）', () => {
 });
 
 describe('serial 端点的 URL 与 body 契约', () => {
-  it('U1：两段式打同一条 POST /serials/release-terminal，dry_run 进 body', async () => {
+  // ⚠️ 编号用 C（契约）而不是 U：U 组是 `useSerialRelease.spec.ts` 的行为组，撞号会让
+  // 「按编号找用例」查到另一个文件去。同域另两份 spec 的前缀：N（负向守卫）/ L + V（跨仓）。
+  it('C1：两段式打同一条 POST /serials/release-terminal，dry_run 进 body', async () => {
     httpPostMock.mockResolvedValue({ data: {} });
     await releaseTerminalSerials({ dry_run: true });
     await releaseTerminalSerials({ dry_run: false });

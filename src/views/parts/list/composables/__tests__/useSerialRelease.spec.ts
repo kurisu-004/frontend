@@ -17,6 +17,8 @@
 //   - U4：实跑成功 ⇒ 五个域前缀**各失效一次**（逐个断言 queryKey）；
 //   - U5：实跑失败 ⇒ 同样失效 + ElMessage.error（响应可能在 commit 之后丢失）；
 //   - U6：入口判据是角色 MANAGER（ADMIN 由 hasRole 通配；CLERK 看不到入口）。
+//   - U8：实跑回显 dry_run=true（请求的是实跑）⇒ 报错而不是报成功（P3-3 的回显断言）；
+//   - U9：关对话框的**两条路径**（× 与「取消」）都清掉已消费的明细快照（P3-2）。
 //
 // 依赖处理：
 // - useSerialRelease 内部调 useQueryClient（需要 app.runWithContext 提供 inject 上下文）；
@@ -312,8 +314,10 @@ describe('useSerialRelease — 一键释放终态序列号（2026-10-19）', () 
     expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: qk.productionQueueSnapshotPrefix });
 
     expect(serial.previewOpen.value).toBe(false);
-    expect(serial.preview.value).toBeNull();
     expect(ElMessage.success).toHaveBeenCalledWith('已释放 3 个装配件 / 5 个零件的序列号');
+    // 明细快照由 previewOpen 的 watch 统一清掉（pre-flush，flush 后才生效，见 U9）
+    await flushPromises();
+    expect(serial.preview.value).toBeNull();
   });
 
   it('U5：实跑失败 ⇒ 同样失效五个前缀 + ElMessage.error（响应可能在 commit 之后丢失）', async () => {
@@ -351,8 +355,73 @@ describe('useSerialRelease — 一键释放终态序列号（2026-10-19）', () 
     serial.onCancelPreview();
 
     expect(serial.previewOpen.value).toBe(false);
+    await flushPromises();
     expect(serial.preview.value).toBeNull();
     expect(releaseMock).not.toHaveBeenCalled();
+  });
+
+  it('U8：确认入口的函数级闸 —— 无 preview / 零条可释放 ⇒ 零请求 + warning（按钮 disabled 不是唯一闸门）', async () => {
+    // 直接调公开方法、**绕过对话框的 `:disabled`**：两个场景都要零请求。
+    // 把 onConfirmRelease 的守卫整段删掉时本条必须变红（对话框那条 disabled 挡不住调用方）。
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const serial = app.runWithContext(() => useSerialRelease());
+
+    // ① 还没预览过（preview === null）
+    await serial.onConfirmRelease();
+    expect(releaseMock).not.toHaveBeenCalled();
+    expect(ElMessage.warning).toHaveBeenCalledWith('没有可释放的序列号，未执行');
+
+    // ② 预览过但一条都不可释放（released_total === 0）
+    releaseMock.mockResolvedValue(
+      makeOut({ assembly_count: 0, part_count: 0, released_total: 0, affected: [] }),
+    );
+    await serial.onOpenPreview();
+    releaseMock.mockClear();
+
+    await serial.onConfirmRelease();
+    expect(releaseMock).not.toHaveBeenCalled();
+    // 两个场景各弹一次 warning（① 的那一次不清 mock，用累计次数断言，避开直接摸 .mock 的类型口子）
+    expect(ElMessage.warning).toHaveBeenCalledTimes(2);
+    expect(ElMessage.warning).toHaveBeenLastCalledWith('没有可释放的序列号，未执行');
+    // 早退不发请求也不做失效对账（一个请求都没发，后端数据原封不动）
+    expect(invalidateSpy).not.toHaveBeenCalled();
+    await flushPromises();
+  });
+
+  it('U9：关对话框的两条路径都清掉已消费的明细快照（× 与「取消」逐字同一条路）', async () => {
+    const serial = app.runWithContext(() => useSerialRelease());
+    await serial.onOpenPreview();
+    expect(serial.preview.value).not.toBeNull();
+
+    // ① 「取消」按钮 → onCancelPreview
+    serial.onCancelPreview();
+    expect(serial.previewOpen.value).toBe(false);
+    await flushPromises();
+    expect(serial.preview.value).toBeNull();
+
+    // ② 右上角 × → 只翻 previewOpen（组件只 emit `update:modelValue`，不发业务事件）
+    await serial.onOpenPreview();
+    expect(serial.preview.value).not.toBeNull();
+    serial.previewOpen.value = false;
+    await flushPromises();
+    expect(serial.preview.value).toBeNull();
+  });
+
+  it('U10：实跑回显 dry_run=true（请求的是实跑）⇒ 报错而非报成功', async () => {
+    // 后端 `dry_run` 是 `#[serde(default)]`，空 body 即真跑；出参承诺「原样回显，供前端确认
+    // 这次到底是预览还是实跑」。回显错位时若照常弹「已释放 N 个」，管理员会以为号已回池。
+    const serial = app.runWithContext(() => useSerialRelease());
+    await serial.onOpenPreview();
+    releaseMock.mockClear();
+
+    releaseMock.mockResolvedValue(makeOut({ dry_run: true, assembly_count: 3, part_count: 5 }));
+    await serial.onConfirmRelease();
+
+    expect(ElMessage.success).not.toHaveBeenCalled();
+    expect(ElMessage.error).toHaveBeenCalledTimes(1);
+    expect(ElMessage.error).toHaveBeenCalledWith(expect.stringContaining('dry_run=true'));
+    // 走的是既有 onError（失效 + 报错），对话框留在原处供管理员重试
+    expect(serial.previewOpen.value).toBe(true);
     await flushPromises();
   });
 });

@@ -24,7 +24,7 @@
 // 两条 mutation 都**不写 `retry`**：全局 `mutations.retry: 0`（CLAUDE.md「TanStack Query」），
 // 非幂等的释放动作也绝不重试。
 
-import { computed, ref, type ComputedRef, type Ref } from 'vue';
+import { computed, ref, watch, type ComputedRef, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/vue-query';
 import { releaseTerminalSerials } from '@/api/serial';
@@ -95,6 +95,22 @@ export function useSerialRelease(): UseSerialReleaseReturn {
   const previewOpen = ref(false);
   const preview = ref<ReleaseTerminalSerialsData | null>(null);
 
+  /**
+   * `preview` 的**唯一清位点**：`previewOpen` 一旦变 false 就把明细一起丢掉。
+   *
+   * ⚠️ 为什么收在这里而不是让每条关闭路径各清一次：对话框有三条关闭路径（右上角 ×、
+   * 「取消」、实跑成功后的自动关闭），只有前两条经过 `onCancelPreview`；× 只 emit
+   * `update:modelValue`、不发业务事件，清位一旦漏在调用方 wiring 上，`preview` 就会留下一份
+   * 「上一次的、已消费过的、对应一次不可逆操作」的明细快照 —— 将来任何人加一条「失败后保留
+   * 上次预览重开」的路径，就会把**已经消费掉的明细**重新摆给管理员看。watch 收口后，
+   * 新增任何关闭路径都自动带上清理，不必记得补第二处。
+   *
+   * 刻意不 `immediate`：初值就是 false，不需要首帧就清一次。
+   */
+  watch(previewOpen, (open) => {
+    if (!open) preview.value = null;
+  });
+
   /** 预览（dry_run）。只有拿到经守门的响应才开对话框 —— 预览失败时对话框内容没意义，
    *  让管理员在一个空框上点「确认释放」比不弹更危险。
    *
@@ -113,17 +129,32 @@ export function useSerialRelease(): UseSerialReleaseReturn {
     onError: (e: Error) => ElMessage.error(e.message ?? '读取待释放序列号失败'),
   });
 
-  /** 实跑（dry_run: false）。不可撤销，成败都要让本端副本与后端对齐。 */
+  /** 实跑（dry_run: false）。不可撤销，成败都要让本端副本与后端对齐。
+   *
+   *  ⚠️ **回显断言**（2026-10-19 补）：后端 `ReleaseTerminalRequest.dry_run` 是
+   *  `#[serde(default)]`，**空 body 等价于 `dry_run: false` 即真跑**（后端 dto.rs 的注释
+   *  把这条登记为已知风险）。它同时承诺「与入参原样回显，供前端确认这次到底是预览还是实跑」
+   *  —— 前端既然在 schema 里要了这个键，就得真的比一次：回显若是 `true`，说明这次拿到的
+   *  是一份**预览口径**的响应，此时若照常弹「已释放 N 个」，管理员会以为号已经回池而实际
+   * 并没有（且下一步新建工单照样拿不到号）。不符即抛，走既有的 `onError`（失效 + 报错），
+   * 绝不报成功。 */
   const applyMutation = useMutation({
     mutationKey: ['serials', 'release-terminal', 'apply'],
-    mutationFn: async () =>
-      releaseTerminalSerialsOutSchema.parse(await releaseTerminalSerials({ dry_run: false })),
+    mutationFn: async () => {
+      const data = releaseTerminalSerialsOutSchema.parse(
+        await releaseTerminalSerials({ dry_run: false }),
+      );
+      if (data.dry_run !== false) {
+        throw new Error('释放结果异常：后端回显 dry_run=true（请求的是实跑），请刷新后核对序列号');
+      }
+      return data;
+    },
     onSuccess: async (data) => {
       ElMessage.success(
         `已释放 ${data.assembly_count} 个装配件 / ${data.part_count} 个零件的序列号`,
       );
+      // 只翻显隐：明细的清位统一由 previewOpen 的 watch 承担（见上方注释），不再各清一次
       previewOpen.value = false;
-      preview.value = null;
       await invalidateSerialReleaseDomain(qc);
     },
     // ⚠️ **失败也失效**：后端是单事务整体成败，但响应可能在 commit 之后丢失（网关超时 /
@@ -143,12 +174,26 @@ export function useSerialRelease(): UseSerialReleaseReturn {
   }
 
   async function onConfirmRelease(): Promise<void> {
+    // ⚠️ **函数里也设一道闸**（对话框 `:disabled` 不是唯一闸门）：`onConfirmRelease` 是挂在
+    // store 切片上的**公开方法**，任何调用方（新增入口、将来的「保留上次预览」重开路径、
+    // 直接在控制台调）都能绕过按钮的 disabled。本仓对不可逆 / 破坏性动作的 house style 是
+    // 「在包装入口也设一道闸」，不是只靠 UI（`useQueueMove` 的 `queue.allocate` 早退 +
+    // warning + 零请求、`usePrintTemplatesStore::uploadChecked` 判不出版式直接拒收、
+    // `usePartBatchPdf` 提交前逐行校验客户）。判据两条与按钮的 `:disabled` **逐字同源**
+    // （同一份 preview），别让它们各写一套。
+    // 早退**不发任何请求、也不做失效对账**（与 `useQueueMove` 的早退相反）：那条路发过请求
+    // 才失败、本端列表可能已经不一致；这里一个请求都没发，后端数据原封不动，失效纯属白刷。
+    if (!preview.value || preview.value.released_total === 0) {
+      ElMessage.warning('没有可释放的序列号，未执行');
+      return;
+    }
     await applyMutation.mutateAsync().catch(() => undefined);
   }
 
   function onCancelPreview(): void {
+    // `preview` 的清位由 previewOpen 的 watch 统一承担（见上方注释），这里只翻显隐 ——
+    // 显隐一落 false 那条 watch 也会把明细丢掉，两处各清一次反而多一个可能漂移的点。
     previewOpen.value = false;
-    preview.value = null;
   }
 
   return {
