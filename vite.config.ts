@@ -119,9 +119,9 @@ function config({ command, mode }: { command: 'build' | 'serve'; mode: string })
       ],
     },
     // 2026-09-20：把 .wasm 视为资源（不参与 import graph 解析）。
-    // occt-wasm 内部用 emscripten 的 fetch 走 `${origin}/occt-wasm.wasm` 直接 GET，
-    // 不走 ES module import，所以 vite 不需要把它当模块；assetsInclude 只是让
-    // 未来如果有 import xxx from '*.wasm' 也能正确处理。
+    // wasm 的定位由 `src/three/OcctStepLoader.ts` 里对 `occt-wasm/dist/occt-wasm.wasm?url`
+    // 的 import 决定（走资源图、拿带 hash 的 URL），不再从 public/ 根路径直接 GET；
+    // assetsInclude 是那条 `?url` import 能被当资源处理的前提。
     assetsInclude: ['**/*.wasm'],
     // 2026-08-21：EP 改按需加载后，统计页(echarts ~700kB)与 PDF 预览(pdfjs ~560kB)仍是
     // 独立的懒加载重 chunk，属合理体积；阈值对齐到 750 避免对已知合理 chunk 重复告警，
@@ -144,13 +144,46 @@ function config({ command, mode }: { command: 'build' | 'serve'; mode: string })
           defaultHandler(warning);
         },
         // 2026-09-20：把 three.js / occt-wasm 拆成独立 chunk，避免与业务 bundle 混在一起
-        // 后每次小幅改动全量重传；occt-wasm 的 wasm 文件 22MB，单独 chunk 后首次加载
+        // 后每次小幅改动全量重传；occt-wasm 的 wasm 文件 21MB，单独 chunk 后首次加载
         // 才会拉，业务代码改动不会触发 occt-wasm chunk 重生。
+        //
+        // 用 rolldown 的 `codeSplitting.groups`（而非已废弃的 `manualChunks`）表达这三条。
+        // 第三条 `vite-preload-helper` 是 2026-10-21 新增的，理由与它的 `priority` 为什么
+        // 不能省，见下方长注释。
         output: {
-          manualChunks: (id: string): string | undefined => {
-            if (id.includes('node_modules/three/')) return 'three';
-            if (id.includes('node_modules/occt-wasm/')) return 'occt-wasm';
-            return undefined;
+          codeSplitting: {
+            groups: [
+              {
+                name: 'occt-wasm',
+                test: (id: string) => id.includes('node_modules/occt-wasm/'),
+              },
+              {
+                name: 'three',
+                test: (id: string) => id.includes('node_modules/three/'),
+              },
+              // 2026-10-21 新增。vite 把懒加载路由的预加载 helper 放在虚拟模块
+              // `\0vite/preload-helper.js`（vite 侧常量 `preloadHelperId`）里，它不被上面
+              // 两条命中。**rolldown 会把没被任何 group 命中的模块塞进它创建的第一个
+              // group**，而那两条里第一个恰好是 occt-wasm ⇒ 入口为了静态引用这个 helper
+              // 而静态依赖整块 occt-wasm，`index.html` 的 modulepreload 列表里于是多出
+              // 110KB（gzip 36KB）的 3D 预览代码 —— 而 3D 预览是低频功能，不该在首屏。
+              //
+              // `priority: 10` 是承重项，不能省：同优先级时 rolldown 按 group 的**声明顺序**
+              // 决胜（实测声明在后就失效），写成显式更高优先级后才与声明位置、chunk 名字
+              // 都无关（实测把本 group 挪到最前 / 最后、把名字改成排序在 `occt-wasm` 之后的
+              // `zzz-preload-helper`，产物字节一致）。守卫见
+              // `src/three/__tests__/occtWasmAssetPipeline.spec.ts`。
+              //
+              // ⚠️ `test` 必须写函数：同一批实测里 `test: /node_modules[\/]occt-wasm[\/]/`
+              // 这种正则写法一条都匹配不到（occt-wasm chunk 退化成只剩 emscripten 胶水层，
+              // 包的 index.js / types.js / svg.js / xcaf-document.js 散回业务 chunk），
+              // 函数写法才与 manualChunks 的捕获范围一致。不要"顺手简化"成正则。
+              {
+                name: 'vite-preload-helper',
+                test: (id: string) => id.includes('vite/preload-helper'),
+                priority: 10,
+              },
+            ],
           },
         },
       },
