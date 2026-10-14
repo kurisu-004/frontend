@@ -5,7 +5,4 @@
 // 注：写 `./parts` 时 TypeScript Bundler 解析会先匹到 `parts.ts` 自身，导致
 // 自循环（`parts.ts → parts.ts`），export 全空；写 `./parts/index` 强制指向
 // 目录入口，行为才符合预期。
-//
-// 2026-08-25 merge fix：worktree 分支新增的 `scanInspect` / `batchScanInspect`
-// 已分别落位到 ./parts/crud.ts（v2 端点）与 ./parts/batch.ts（v2 批量端点）。
 export * from './parts/index';

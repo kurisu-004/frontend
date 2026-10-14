@@ -48,11 +48,9 @@ export function findBySerialNo<T extends { serial_no: string | null }>(
  * 找不到（404 等）→ `ElMessage.warning` 一行。
  *
  * 关键：message 传 VNode（不是拼好的 `lines.join('\n')`）—— Element Plus 对 plain
- * string 的 message **不会**把 `\n` 渲染成换行（参见项目
- * /Users/ren/.claude/plans/scanpickparts-vue-scanreturnparts-vue-sc-luminous-crown.md）。
- * VNode 路径下每行一个 `<div>`，自然换行。
- *
- * `message: VNode` 类型 Element Plus 2.14.x 收口不严，`as any` 是已知 workaround。
+ * string 的 message **不会**把 `\n` 渲染成换行。VNode 路径下每行一个 `<div>`，
+ * 自然换行。`ElMessageBoxOptions['message']` 的类型本就是 `string | VNode |
+ * (() => VNode)`，直接传 VNode 即可，**不需要任何类型断言**。
  *
  * 2026-10-10：本弹窗原有 5 行，其中 3 行读的是 `getPartBySerial` **根本没返**的字段 ——
  * 该端点返的就是 `PartDetailOut`（part 级 VO），不含批次锚点与持有人信息：
@@ -112,7 +110,7 @@ export async function findPartBySerialAndPrompt(code: string): Promise<void> {
       ),
     ],
   );
-  await ElMessageBox.alert(messageVNode as unknown as string, '该零件当前不在本工序', {
+  await ElMessageBox.alert(messageVNode, '该零件当前不在本工序', {
     type: 'warning',
     confirmButtonText: '知道了',
   });
