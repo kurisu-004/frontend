@@ -39,7 +39,7 @@ import { nextTick, reactive, ref } from 'vue';
 // QueryClient 实例，见 beforeEach）。
 import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 // 供 vi.mock 的 importOriginal 泛型使用（@typescript-eslint/consistent-type-imports
-// 禁止 `import()` 形式类型注解；沿 usePendingDispatch.spec.ts:42 同款）
+// 禁止 `import()` 形式类型注解，故在此处单独 import type 整个模块）。
 import type * as ShelvesModule from '@/api/shelves';
 import type { Shelf } from '@/types/shelf';
 // ---------------------------------------------------------------- element-plus

@@ -110,13 +110,11 @@ const canConfig = computed<boolean>(() => auth.hasPermission(PRODUCTION_CONFIG_P
 const wtQuery = useWorkTypesQuery({ limit: 200 });
 const workTypes = computed<WorkType[]>(() => wtQuery.data.value?.items ?? []);
 
-// 右表勾选源：工序。走共享 useProcessesQuery({limit: 200})，与
-// src/views/parts/list/composables/usePartDispatch.ts:110 与
-// src/views/cnc/composables/usePendingProgrammingStore.ts:296 **同一个 queryKey**
-// ⇒ 直接共享缓存（30s 窗口内不再重复发请求），并消掉本 Tab 绕过
-// invalidateProcessesQuery 的独立拉取。
-// 桥接 cast 理由沿 usePartDispatch.ts:115-122：Zod 派生的 description / color 是
-// optional（后端 skip_serializing_if），Process 业务类型是 required。
+// 右表勾选源：工序。走共享 useProcessesQuery({limit: 200})，与仓内其它同样传
+// `limit: 200` 的调用方**共用同一个 queryKey** ⇒ 直接共享缓存（30s 窗口内不再重复
+// 发请求），并消掉本 Tab 绕过 invalidateProcessesQuery 的独立拉取。
+// 桥接 cast 的理由：Zod 派生的 description / color 是 optional（后端
+// skip_serializing_if），Process 业务类型是 required。
 const procQuery = useProcessesQuery({ limit: 200 });
 const processes = computed<Process[]>(() => (procQuery.data.value?.items ?? []) as Process[]);
 

@@ -43,7 +43,7 @@
 //   与 refetch 两条路同时断掉，所以用户必须手动刷新才能看到自己的修改。
 //   修法：删掉注定 100% 失效的就地回填（它还掩盖了「onSuccess 缺失效」这个真正
 //   的 bug），onSuccess 改走 `qc.invalidateQueries({queryKey: qk.partsPrefix})`
-//   —— 与同域 `usePartDispatch.ts:159-162` 的 mutation onSuccess 走**同一条失效链**
+//   —— 与同域 `usePartDispatch` 的 mutation onSuccess 走**同一条失效链**
 //   （同一个 `qk.partsPrefix` 键、同一个后台 refetch 语义），但**刻意不逐字照抄**：
 //   参照物那边 `onSuccess: () => { ElMessage.success(); qc.invalidateQueries(...) }`
 //   既不 await 也把提示排在失效之前；本处反过来（先 await invalidate、后提示）
@@ -233,7 +233,7 @@ export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEdi
   // 2026-10-02：onSuccess 由「就地 Object.assign 回填」改为「失效 parts 域」。
   // 起因见文件头：deps.items 是 vue-query 深只读代理，就地写 100% 失效（每次还
   // 刷一条 [Vue warn]），而当时 onSuccess 又没有失效/refetch/setQueryData，
-  // 导致「改完必须手动刷新」。失效目标与同域 usePartDispatch.ts:159-162 一致，但
+  // 导致「改完必须手动刷新」。失效目标与同域 usePartDispatch 一致，但
   // 写法刻意不同（那边不 await、提示在前）—— 理由见文件头 2026-10-02 段。
   // 失效后 refetch 回来的行自带后端 +1 的新 version 与新 total_price，
   // 2026-09-28 起「不回写 version 则第二次保存假冲突」的隐患由失效覆盖。
