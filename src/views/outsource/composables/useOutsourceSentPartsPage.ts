@@ -26,6 +26,7 @@ import { reconcileUpdateShipment } from '@/api/outsource';
 import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
 import { useCustomerTree } from '@/composables/useCustomerTree';
 import { useListStatePersist } from '@/composables/useListFilterPersist';
+import { useIsActive } from '@/composables/useIsActive';
 import { buildOutsourceSentPartColumnDefs } from '../outsourceSentPartColumnDefs';
 import { useColumnVisibility } from '@/composables/useColumnVisibility';
 import type { OutsourceSentPartItemSchema } from './outsourceListSchema';
@@ -236,6 +237,8 @@ export function useOutsourceSentPartsPage(companyId: string) {
   }
 
   // ============ 切片：行内编辑（双击 → Enter 保存 / Esc 取消）============
+  // 2026-10-22：keep-alive 活跃守卫，见 onEditKeydown 处的说明。
+  const isActive = useIsActive();
   const editingId = ref<string | null>(null);
   const savingEdit = ref(false);
   const editBuffer = reactive<EditBuffer>({ unit_price: null, quantity: null, is_billed: false });
@@ -330,6 +333,12 @@ export function useOutsourceSentPartsPage(companyId: string) {
 
   // Enter 保存 / Esc 取消的键盘事件委托（黑名单：popper / 下拉 / 日期 picker / 对话框）。
   function onEditKeydown(e: KeyboardEvent): void {
+    // ⚠️ **keep-alive 守卫，勿删**：本页在缓存名单里（路由名 `OutsourceCompanySentParts`
+    // = 组件文件名），切标签页只是 deactivate、组件实例与这个 document 级监听都还在；
+    // 而 `OutsourceCompanySentParts.vue` 的退订只挂在 `onBeforeUnmount` 上
+    // （deactivate 不触发）⇒ 不加这道闸，用户编辑到一半切走、在**别的标签页**敲 Enter
+    // 会 `preventDefault()` 并把那一行存了 —— 他根本没在看这张表。
+    if (!isActive.value) return;
     if (editingId.value == null) return;
     const target = e.target as HTMLElement | null;
     if (target && ENTER_BLACKLIST.some((sel) => target.closest(sel))) return;

@@ -427,6 +427,56 @@ v2 后端约 40 个事件里，**只有 `SCAN_BANNER` 的 payload 带展示字�
 - **「后发起的那次 `load()` 赢」由单调序号保证，不由 `loadingTask` 的赋值顺序保证**。切 url 要先 `await` 释放旧 task，而 await 期间完全可能有新的 load 打进来 ⇒ 「谁最后写 `loadingTask`」与「谁最后调 `load()`」分了家：被抢跑的那次醒来后会**再建一个 task 并覆盖 `loadingTask`**，被它盖掉的那一份从此没有任何句柄能 `destroy()`（恰好把上一条要消灭的泄漏又造回来），还会对同一份文档多下一次重复下载。⇒ bail 点一律对照单调序号，且**必须在建 task 之前 bail** —— 建出来就晚了。另一侧不必叠序号：「这份 task 还挂在 `loadingTask` 上」与「没有更新的 load 已接手」是同一件事（每一次新 load 都先摘空/换主 `loadingTask`）。`getDocument()` 那次读的是当时的 `props.url`（`load()` 入口只在判空时读一次，不做快照），所以这条竞态的可见后果是「多建一个孤儿 task」而非「显示错文档」。渲染侧有同族窗口：`render()` 的 `getPage` 在途时醒来可能已经作废，而 `render()` 由复位 / +/- / `ResizeObserver` 以 `void` 调用，抛出去就是未处理拒绝 —— **两种作废的后果不同、守卫也不同，别把 `doc !== pdfDoc` 当冗余项删掉**：· **已卸载** ⇒ 画布随组件被移除，`canvasRef` 已置 null，继续摸 `canvas.width` 是 TypeError（`!canvas` 拦）；· **已换文档** ⇒ 画布还在，**不会 TypeError**，但会把上一份文档的页画到新画布上（工人看到闪一帧旧图纸，`doc !== pdfDoc` 拦）。⇒ `releaseLoadingTask()` 在摘空 `loadingTask` 的同时把 `pdfDoc` 也置 null（那份 doc 是这个 task 的 promise 兑现出来的，task 一销毁它就再也取不到页）；这一步既是让 `render()` 立刻停手，也是让下条判据成立的前提。`getPage` 失败**分两种处置**：已卸载 / 已随 task 被释放（换文件 ⇒ 在途 getPage 以 "Worker was destroyed" 拒绝）属竞态正常收尾，**静默放弃**；当前文档真的取不到页（页码越界、页面损坏、worker 崩溃）**留一行 `console.warn`** —— 零日志地吞掉会让画布静默停在空白或上一帧、排障时没有任何信号（同 SCAN_BANNER 的「丢弃 + 一行 warn」口径，也与 `releaseLoadingTask` 的 warn 一致）。守卫：`src/components/__tests__/PdfViewer.spec.ts` 的 W 组（unmount 销毁 / 切 url 销毁且**销毁先于创建** / 卸载后 resolve 不写回 / 自销毁 task 的拒绝不上屏 / destroy 失败只 warn / **destroy 未返回时又换一次 url** / url 清空释放 / 空 url 不建 task / getPage 在途时卸载 / **url 清空不得停在加载中** / **url 清空连上一份的报错一起清** / **切 url 后旧 doc 的在途 render 不得把旧页画上去** / **真取页失败留 warn** / **换文件的竞态拒绝静默不刷假 warn**）。
 - **用 `el-dialog` 承载预览组件处必须挂对应 class**：`.pdf-preview-dialog`（`PdfViewer`）/ `.img-preview-dialog`（`ImagePager`），两支高度规则在 `src/styles/index.scss` 里逐条并列。同一个弹窗承载两者时**两个 class 都要挂**。**例外**是「宿主自带确定高度、无需该 class」的那些承载点（`DrawingPreviewPane` 的 `.file-preview` flex 链、`PartPreviewDialog` 的 aspect-ratio、`OutsourceQuotePdfPreview` 的 `.drawing-frame-wrap` 自给 `height:70vh` + column）—— 名单以 `src/components/__tests__/PdfPreviewDialogContract.spec.ts` 头注释的清单为准，不在本文件数。守卫同该 spec（白名单是人工判定的，新增承载点要一并加表）。
 
+### keep-alive 与隐藏 iframe 打印（2026-10-22）
+
+现场症状：零件一览批量打印图纸 → 关掉原生打印窗 → **不关标签页** → 切去别的页面 → 切回来 ⇒ **打印窗口自己又弹一次**。零报错、零日志、typecheck / lint 全绿。
+
+**根因四步**（`src/utils/iframePrint.ts` 文件头是同一份，代码改动前先读那份）：
+
+1. `MainLayout.vue` 用 `<keep-alive :include="tags.cachedViewNames">` 缓存路由组件；`cachedViewNames` 存的是 **`route.name`**，而 `:include` 匹配的是**组件名**（`Component.name || __name`，`<script setup>` 的 `__name` 由 vite-plugin-vue 从**文件名**推断）⇒ **路由名必须等于组件文件名，否则该页静默不被缓存**（详见 `router/index.ts:78-97` 记的那次改名迁移）。
+2. Vue 3 的 `<KeepAlive>` **不是**把缓存页 `display:none` 藏起来，而是把整棵 DOM 子树 **`move()` 进一个游离的 `storageContainer`**（`createElement("div")`，**从不 append 到 document**；见 `@vue/runtime-core` 的 KeepAlive 实现）。
+3. 按 HTML 规范，`<iframe>` 被移出文档 = 卸载其 browsing context；**重新插回文档时浏览器会再次导航到 `src`** ⇒ `load` 事件**第二次**触发。
+4. 改前两处打印都是 `iframe.onload = () => { ...; contentWindow.print() }` 且**永不解绑**，blob URL 又只在 `onBeforeUnmount` 里 revoke（**deactivate 不触发 `onBeforeUnmount`**）⇒ 重载成功 ⇒ `print()` 又跑一遍。
+
+⚠️ **第 2 条是一整类 keep-alive 陷阱的通用根因，不止打印**：凡是被缓存页里持有、且「离开文档」会被浏览器重置的东西（`iframe` / `video` / `canvas` 的位图 / `audio` 播放位置），切页回来都会重置。任何对它们挂 imperative handler 的地方都要重看一遍。
+
+**实现收口在 `src/utils/iframePrint.ts::useIframePrint(iframeRef)`**（2026-10-22 从两处逐字重复的代码抽出；消费方：`views/parts/list/composables/useBatchPrint.ts` 批量打印 / `components/FileListCard.vue` 单件打印，宿主是零件详情与装配件详情）。它有**四道闸，各挡一件事，去掉任何一道都留下一个复现路径**，而每条路径的用户可见症状都是同一个「多打印一次」⇒ 回归时看不出是哪道闸失效：
+
+| 闸 | 挡 | 为什么不能少 |
+|---|---|---|
+| handler 体内的 `settled` 旗标 | 第 4 环那个「第二次 load」 | ⚠️ **只把 `iframe.onload` 置 null 是不够的** —— 那依赖「浏览器派发时现查 onload 属性」这条实现细节，handler 一旦被别处捕获就绕过去。旗标写在体内，与从哪儿被调出来无关 |
+| `onDeactivated` 里 `release()`：作废 + 解绑 + **`src = 'about:blank'`** + revoke | 每次切标签页静默重载整份合并 PDF（几十 MB）+ PDF viewer 常驻内存 | 只解绑 handler 只让「不打印」，那整份 PDF 照样被重载 + 重渲染一遍 |
+| `release()` 里置 `settled` | 打印已发起、`load` 还没落地时切走 | — |
+| `active` 标志（`onActivated` / `onDeactivated` 维护，`printBlob` 入口先判、且早于 `URL.createObjectURL`） | **打印在途**那一支 | ⚠️ 这一支**不是** deactivate 能挡的，**时序是反的**：大图纸批量打印要跑几分钟，用户点完就切走 —— 此刻 `deactivate` 与 `release()` 都跑过了、什么 pending 都没有；网络回来后 `printBlob` 才挂 handler，而用户什么时候切回来不由我们决定。判据必须是「此刻页面是否活跃」，不是一个「发生过的事件」 |
+
+`release()` 在「有 pending 未落地」时提示一句「已离开本页，本次打印已取消」—— 取消不可逆地影响用户正在做的事（他点的打印没了），静默比弹窗更糟。`printBlob` 的两种失败各自带提示并返回 `false`，**消费方零分支**。
+
+**不许有第二份实现**：消费方里不得再出现裸 `iframe.onload =` / `contentWindow?.print()` / `window.open(blobUrl` —— 那等于把第 4 环原样抄回去，且没有任何报错提示。守卫 `src/utils/__tests__/iframePrintContract.spec.ts` 扫**整个 `src/`**（同 `echartsContract.spec.ts` 的形态）；行为守卫 `src/utils/__tests__/iframePrint.spec.ts` 用**真 `<KeepAlive>` + 切 `<component :is>`** 触发 `onDeactivated`（不手调 composable 返回值冒充生命周期 —— 手调只能证明「`release` 能拆」，证明不了「deactivate 真的会调到 `release`」，而后者正是改前漏掉的那一环）。⚠️ happy-dom 不实现「iframe 脱离文档后重载」，所以 spec 测的是 helper 的**应对**是否到位，**第 3 环本身是浏览器行为、无需测试**；「第二次 load」的模拟方式是**直接再调一次同一个 handler 闭包**，比任何 mock 都更接近现场。
+
+### keep-alive 的其余三类「后台不该做的事」（2026-10-22 同批修完）
+
+上一条那四步根因不止打印：**凡是「资源在 setup / `onMounted` 拿、只在 `onBeforeUnmount` 放」的东西，在缓存页切走后都还活着**（deactivate 不触发 `onBeforeUnmount`）。全仓巡检一遍后落地的三处，判据统一收在 **`src/composables/useIsActive.ts`**（`onActivated` / `onDeactivated` 维护的只读 ref，**初值必须是 `true`** —— 不在 `<KeepAlive>` 下时两个钩子都不触发 ⇒ 非缓存页行为零变化）。
+
+⚠️ **判据取生命周期而不是 `route.name !== 'X'`** —— 后者一改路由名就静默失效（`tagsView.ts` 已为路由改名踩过一次迁移）。
+
+| 类 | 位置 | 修法 |
+|---|---|---|
+| **后台轮询** | 四个列表页的 `refetchInterval`（待编程 / 待品检 / 账号 / 送货单） | ⚠️ **`refetchIntervalInBackground: true` 管的是浏览器窗口失焦，与 Vue 的 keep-alive 毫无关系** ⇒ 后台标签页照样每 5 分钟打一次请求，而 `autoRefresh` 还持久化到 localStorage、勾过一次就一直轮询。折进 `isActive.value && toValue(options.autoRefresh) ? 300_000 : false`。⚠️ 必须折在 `refetchInterval` **自己的 computed 里**、不能让调用方判 —— 只有 computed 形态才会让开关进依赖收集（见「TanStack Query」一节关于裸函数 + `unrefGetters` 的坑） |
+| **跨页抢键盘** | `usePartInlineEdit.ts` 的 `onEditEnter` / `useOutsourceSentPartsPage.ts` 的 `onEditKeydown`（`document` 级 Enter 存盘 / Esc 取消） | 编辑到一半切走 ⇒ `editingId` 仍非空、监听仍在（退订挂在 `watch(editingId)` 与 `onBeforeUnmount` 上），在**别的标签页**敲 Enter 会 `preventDefault()` 并把用户没在看的那一行存了。两处 handler 首行加 `if (!isActive.value) return;`。⚠️ 选**早退守卫**而不是「按激活态增删监听」：绑定条件是两个轴（`editingId` × 活跃）的四格笛卡尔积，早退是一行、零状态机风险 |
+| **blob URL 卸载兜底** | `FileListCard.vue` / `AssemblyChildrenTable.vue` | `@closed` 只救得了「用户正常关窗」，用户**直接关掉宿主页签**时那个事件永远不来 ⇒ object URL 悬空、那份 PDF 的字节留在内存里（关掉整页也救不了它）。补 `onBeforeUnmount` 释放，与另四个承载点同款 |
+
+⚠️ 第三类**与 keep-alive 无关**：页面被缓存时 `onBeforeUnmount` 根本不触发，但那时弹窗还开着、URL 仍被组件持有 ⇒ 仍是可达的，不构成泄漏。登记在同一批只是因为它同属「只在 `onBeforeUnmount` 收尾的东西」。
+
+**守卫**：`src/composables/__tests__/keepAliveContract.spec.ts` 三组扫源码（剥注释后），行为守卫 `src/composables/__tests__/useIsActive.spec.ts`（真 `<KeepAlive>` 切页）。这三类**行为测试全绿 ⇒ 证明不了没漂移**：改前 `useInspectionQueueQuery` / `usePartInlineEdit.spec.ts` / `PreviewCarriers.spec.ts` 全绿而三条缺陷同时存在，而本仓新增列表页的默认动作就是**复制一个 query hook** ⇒ 只能扫源码。契约 1 与 2 另有「站点表」：站点数或文件位置变了而表没跟着改，当场红。
+
+**全仓可执行 `onActivated` / `onDeactivated` 只有三处**（契约 1 的第二条守着）：`useIsActive.ts`（活跃判据）/ `utils/iframePrint.ts`（打印宿主的同构标志，**不能引 composables** —— 它在 `utils/` 下、判据要独立自持）/ `usePartDetail.ts`（⚠️ **不是**活跃判据：它的 `onActivated` 是「缓存页每次回来补一次 refetch」，方向相反，其注释已写明「不要挂 `onDeactivated`」）。
+
+#### 已巡检、判定无需处理（登记以免重复排查）
+
+`PdfViewer` / `ImagePager` 的 pdf.js worker 与 `ResizeObserver`、`usePreviewPolling` 的轮询链（自带 30 次 / 120 s 预算）、`useColumnDrag` 的 `MutationObserver`（`ensureObserver` 幂等，不会累积）、`StepViewer` 的 rAF —— 全部被 `destroy-on-close` 弹窗或自身预算关着，切页只多占着资源，关闭即释放。`useBarcodeScanner` 的活跃闸门走的是「订阅时记下当时的 `route.path`、分发时只投给 path 相同者」，刻意不改成逐页生命周期钩子（那要改全部 9 个订阅页并维护两套记账）。真要彻底关掉，`src/utils/iframePrint.ts` 是仓内现成模板。
+
+
+
 ### 货架自动选择（2026-10-10）
 
 **目标货架一律由后端选，前端不提供任何货架选择器。** 要恢复某个入口，必须同时确认后端对应端点是否仍接受 `shelf_id` —— 那 8 条写路径的货架入参已全部删除（worker-scan / place-on-shelf / release-from-programming / to-process / to-inspection / scan-inspect / repair-dispatch / outsource-queue/move 的 `to` 侧），`POST /prod/queue/move` 只删了 `to` 侧、`from` 侧仍必填。

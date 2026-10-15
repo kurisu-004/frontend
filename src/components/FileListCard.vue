@@ -284,6 +284,7 @@ import { fileTypeToOcctFormat, isOcctSupported } from '@/utils/stepViewerFile';
 import { deletePartFile, fetchPartFileContent, getPartFileDownloadUrl } from '@/api/files/objects';
 import { usePreviewPolling } from '@/composables/usePreviewPolling';
 import { printPartDrawing } from '@/api/parts';
+import { useIframePrint } from '@/utils/iframePrint';
 import type { PartFileItem, PartFileKind } from '@/types/part_file';
 
 const props = withDefaults(defineProps<Props>(), {
@@ -632,6 +633,20 @@ function onPreviewClosed(): void {
   preview.stop();
 }
 
+// 2026-10-22 补：组件卸载时的**兜底**释放。`@closed` 只救得了「用户正常关窗」，用户
+// 直接把宿主页的标签页关掉时那个事件永远不来 ⇒ object URL 悬空、那份 PDF / 图纸的
+// 字节留在内存里（关掉整页也救不了它）。与另几个预览承载点同款，登记表见
+// `keepAliveContract.spec.ts` 的「blob URL 必须有卸载兜底」一组。
+// ⚠️ 这条与 keep-alive 无关：页面被缓存时 `onBeforeUnmount` 根本不触发，但那时弹窗也
+// 还开着、URL 仍被本组件持有 ⇒ 仍是可达的，不构成泄漏。
+onBeforeUnmount(() => {
+  if (previewBlobUrl.value) {
+    URL.revokeObjectURL(previewBlobUrl.value);
+    previewBlobUrl.value = '';
+  }
+  preview.stop();
+});
+
 async function downloadCurrent(): Promise<void> {
   if (!previewFile.value) return;
   try {
@@ -678,35 +693,25 @@ async function onDelete(f: PartFileItem): Promise<void> {
 }
 
 // ============================================================
-// 双面打印：仅对 ownerType='part' 生效
+// 单件图纸打印：blob URL + 隐藏 iframe 交给 src/utils/iframePrint.ts
 // ============================================================
+// 2026-10-22：原实现是本仓这套「隐藏 iframe 打印」的**源头**（零件一览的批量打印
+// 是照它抄的），两处原本是逐字同款代码、且都漏了同一件事：`iframe.onload` 永不解绑，
+// 而 blob URL 只在 `onBeforeUnmount` 里 revoke。本组件的 iframe 在 el-dialog **之外**
+// 内联于卡片，随宿主页（零件详情 / 装配件详情，路由名都等于文件名 ⇒ 两页都在
+// keep-alive 缓存名单里）一起被 `move()` 进游离容器 ⇒ 切页回来时 iframe 重新加载
+// `src` ⇒ 打印窗口自己又弹一次。根因与四道闸的判据见 iframePrint.ts 文件头。
 const printing = ref(false);
 const printIframeRef = ref<HTMLIFrameElement | null>(null);
-let printBlobUrl = '';
+const { printBlob } = useIframePrint(printIframeRef);
 
 async function onPrint(): Promise<void> {
   if (props.ownerType !== 'part') return;
   printing.value = true;
   try {
     const blob = await printPartDrawing(props.ownerId);
-    if (printBlobUrl) URL.revokeObjectURL(printBlobUrl);
-    printBlobUrl = URL.createObjectURL(blob);
-
-    const iframe = printIframeRef.value;
-    if (!iframe) {
-      ElMessage.error('打印 iframe 未挂载，请刷新页面后重试');
-      return;
-    }
-    iframe.src = printBlobUrl;
-    iframe.onload = () => {
-      try {
-        iframe.contentWindow?.focus();
-        iframe.contentWindow?.print();
-      } catch {
-        const w = window.open(printBlobUrl, '_blank');
-        if (w) w.print();
-      }
-    };
+    // 「iframe 未挂载」的报错由 printBlob 自己发，失败时返回 false，无需调用方分支。
+    printBlob(blob);
   } catch (e) {
     ElMessage.error((e as Error).message ?? '生成打印 PDF 失败');
   } finally {
@@ -715,10 +720,6 @@ async function onPrint(): Promise<void> {
     }, 800);
   }
 }
-
-onBeforeUnmount(() => {
-  if (printBlobUrl) URL.revokeObjectURL(printBlobUrl);
-});
 
 // 2026-09-17 UI 调整：暴露 print / triggerUpload 给父级（PartFilesTabsCard）
 // footer 按钮调用，把「打印图纸 / 上传」入口收敛到外层 footer。

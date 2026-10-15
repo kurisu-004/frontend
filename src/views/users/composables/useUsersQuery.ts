@@ -26,6 +26,10 @@
 //     `autoRefresh` 不进依赖收集 ⇒ 勾选开关不触发 `observer.setOptions` ⇒ 轮询永远
 //     不启动）；
 //   - refetchIntervalInBackground 必须显式 true（默认 false，窗口失焦会暂停轮询）；
+//   - ⚠️ **但它管的是浏览器窗口，与 Vue 的 keep-alive 毫无关系**：本页在 keep-alive
+//     缓存名单里（路由名 `UserList` = 组件文件名），切到别的标签页时页面只是 deactivate、
+//     组件实例与 observer 都还在 ⇒ 不折进 `isActive` 的话后台标签页照样每 5 分钟打一次
+//     请求。autoRefresh 还会持久化到 localStorage，勾过一次就一直轮询。
 //   - 缓存时长：页面级列表，不设 staleTime / gcTime，走 main.ts 全局默认；
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
 
@@ -34,6 +38,7 @@ import { keepPreviousData, useQuery } from '@tanstack/vue-query';
 import { ElMessage } from 'element-plus';
 import { listUsers, type ListUsersParams } from '@/api/iam';
 import { qk } from '@/composables/queries/keys';
+import { useIsActive } from '@/composables/useIsActive';
 import { userListResultSchema } from '../usersSchema';
 import { usersErrorText } from '../usersErrorText';
 
@@ -49,6 +54,8 @@ export interface UsersQueryOptions {
 
 export function useUsersQuery(options: UsersQueryOptions) {
   const queryKey = computed(() => qk.usersList(toValue(options.params)));
+  // 2026-10-22：keep-alive 缓存页切到后台时停止轮询（判据见 useIsActive 文件头）。
+  const isActive = useIsActive();
 
   const query = useQuery({
     queryKey,
@@ -59,7 +66,11 @@ export function useUsersQuery(options: UsersQueryOptions) {
     },
     enabled: computed(() => toValue(options.enabled)),
     placeholderData: keepPreviousData,
-    refetchInterval: computed(() => (toValue(options.autoRefresh) ? 300_000 : false)),
+    // `isActive` 必须折在这里而不是让调用方自己判：只有 computed 形态才会让两个开关
+    // 都进依赖收集（见文件头「设计要点」里关于裸函数的那段）。
+    refetchInterval: computed(() =>
+      isActive.value && toValue(options.autoRefresh) ? 300_000 : false,
+    ),
     refetchIntervalInBackground: true,
   });
 

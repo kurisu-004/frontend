@@ -35,6 +35,12 @@
 //     勾选与取消勾选都会重建定时器。
 //   - refetchIntervalInBackground 必须显式 true —— TanStack Query 默认 false，窗口
 //     失焦时暂停轮询（轮询类刷新要的就是「后台也照跑」）。
+//   - ⚠️ **但它管的是浏览器窗口，与 Vue 的 keep-alive 毫无关系**：切到别的标签页时页面
+//     只是 deactivate、组件实例与 observer 都还在 ⇒ 不折进 `isActive` 的话，后台标签页
+//     照样每 5 分钟打一次请求。autoRefresh 还会持久化到 localStorage，勾过一次就一直轮询。
+//     ⚠️ 本页**当前**不在缓存名单里（路由名 `PendingProgramming` ≠ 组件文件名
+//     `PendingProgrammingList.vue`），这道闸今天是个 no-op；闸在这里是因为路由名与文件名
+//     对齐是本仓的既定方向（见 `router/index.ts:78-97`），别等它变成缓存页再回来补。
 //   - 缓存时长：页面级列表，不设 staleTime / gcTime，走 main.ts 全局默认（共享基础
 //     数据层的 30s / 5min 有限缓存约束不适用于页面级列表）。
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
@@ -47,6 +53,7 @@ import { keepPreviousData, useQuery } from '@tanstack/vue-query';
 import { ElMessage } from 'element-plus';
 import { fetchPendingProgramming, type ListPendingProgrammingParams } from '@/api/programming';
 import { qk } from '@/composables/queries/keys';
+import { useIsActive } from '@/composables/useIsActive';
 import { pendingProgrammingListResultSchema } from './pendingProgrammingSchema';
 
 /** 入参：全部 reactive（Ref / ComputedRef / getter 都可）。 */
@@ -61,6 +68,8 @@ export interface PendingProgrammingQueryOptions {
 
 export function usePendingProgrammingQuery(options: PendingProgrammingQueryOptions) {
   const queryKey = computed(() => qk.programmingList(toValue(options.params)));
+  // 2026-10-22：keep-alive 缓存页切到后台时停止轮询（判据见 useIsActive 文件头）。
+  const isActive = useIsActive();
 
   const query = useQuery({
     queryKey,
@@ -71,7 +80,11 @@ export function usePendingProgrammingQuery(options: PendingProgrammingQueryOptio
     },
     enabled: computed(() => toValue(options.enabled)),
     placeholderData: keepPreviousData,
-    refetchInterval: computed(() => (toValue(options.autoRefresh) ? 300_000 : false)),
+    // `isActive` 必须折在这里而不是让调用方自己判：只有 computed 形态才会让两个开关
+    // 都进依赖收集（见文件头「设计要点」里关于裸函数的那段）。
+    refetchInterval: computed(() =>
+      isActive.value && toValue(options.autoRefresh) ? 300_000 : false,
+    ),
     refetchIntervalInBackground: true,
   });
 

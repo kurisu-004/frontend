@@ -228,7 +228,7 @@
 </template>
 
 <script setup lang="ts">
-import { h, computed, reactive, ref, toRaw, watch } from 'vue';
+import { h, computed, onBeforeUnmount, reactive, ref, toRaw, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import type { UploadFile, FormInstance } from 'element-plus';
 import { ElLink, ElMessage, ElTag } from 'element-plus';
@@ -534,6 +534,16 @@ function onDrawingPreviewClosed(): void {
   drawingShowOriginal.value = false;
   preview.stop();
 }
+
+// 2026-10-22 补：组件卸载时的**兜底**释放。`@closed` 只救得了「用户正常关窗」，用户
+// 直接点标签页的 × 把本页关掉时那个事件永远不来 ⇒ object URL 悬空、那份 PDF 的字节
+// 留在内存里（关掉整页也救不了它）。与另几个预览承载点同款（见 OutsourceQuoteList.vue）。
+// ⚠️ 这条与 keep-alive 无关：页面被缓存时 `onBeforeUnmount` 根本不触发，但那时弹窗也
+// 还开着、URL 仍被本组件持有 ⇒ 仍是可达的，不构成泄漏。
+onBeforeUnmount(() => {
+  setBlobUrl('');
+  preview.stop();
+});
 
 function goPartDetail(id: string): void {
   router.push(`/parts/${id}`);

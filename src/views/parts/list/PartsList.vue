@@ -116,9 +116,12 @@
 
     <PartsBatchBar v-if="store.batch.batchMode" />
 
-    <!-- 隐藏 iframe：批量打印用（仿 FileListCard.vue 的 print 实现）。
+    <!-- 隐藏 iframe：批量打印用（打印落地在 src/utils/iframePrint.ts，本页只提供元素）。
          必须留在壳内：onMounted 时同步赋值给 store.print.iframeRef，确保 onBatchPrint
-         触发时 iframe 已挂载。 -->
+         触发时 iframe 已挂载。
+         ⚠️ 本页在 keep-alive 缓存名单里，元素会随页面被 move 进游离容器又移回来 ⇒
+         每次切回来 iframe 都会重新加载 src。打印宿主必须一次性 onload + deactivate
+         拆解，否则打印窗口会自己再弹一次（根因与判据见 iframePrint.ts 文件头）。 -->
     <iframe
       ref="iframeRef"
       style="

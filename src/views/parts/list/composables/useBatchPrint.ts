@@ -3,11 +3,18 @@
 // 2026-08-22 从 PartsList.vue 抽出：批量打印图纸（iframe + 批次并发 + PDF 合并）。
 //
 // 2026-08-22：PDF 合并已抽到 src/utils/mergePdfs.ts（mergePdfBlobs），这里只调它。
+//
+// 2026-10-22：blob URL + 隐藏 iframe 的打印落地抽到 src/utils/iframePrint.ts。
+// 本页在 keep-alive 缓存名单里（路由名 `PartsList` = 组件文件名），切走再回来时
+// iframe 会因为被 `move()` 进游离容器而**重新加载 `src`** ⇒ 改前那个永不解绑的
+// `iframe.onload` 会把 `print()` 再跑一遍，打印窗口自己弹回来。根因与四道闸的判据
+// 见 iframePrint.ts 文件头，这里不再重复。
 
-import { onBeforeUnmount, ref, type Ref } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ref, type Ref } from 'vue';
+import { ElMessageBox } from 'element-plus';
 import { printPartDrawingBatch } from '@/api/parts';
 import { mergePdfBlobs } from '@/utils/mergePdfs';
+import { useIframePrint } from '@/utils/iframePrint';
 import type { SelectedRowType } from './usePartBatchSelection';
 
 export interface UseBatchPrintDeps {
@@ -31,7 +38,9 @@ export function useBatchPrint(deps: UseBatchPrintDeps): UseBatchPrintReturn {
   const batchPrintCurrent = ref(0);
   const batchPrintTotal = ref(0);
   const iframeRef = ref<HTMLIFrameElement | null>(null);
-  let blobUrl = '';
+  // 2026-10-22：打印宿主（blob URL 生命周期 + 一次性 onload + keep-alive deactivate
+  // 拆解）交给共享 helper，本 composable 只剩「造 PDF」这一段批次编排。
+  const { printBlob } = useIframePrint(iframeRef);
 
   async function onBatchPrint(): Promise<void> {
     if (deps.selectedIds.size === 0) return;
@@ -106,25 +115,8 @@ export function useBatchPrint(deps: UseBatchPrintDeps): UseBatchPrintReturn {
       // 2026-08-22：PDF 合并抽到 src/utils/mergePdfs.ts（纯函数 + 单测覆盖）。
       const mergedBlob = await mergePdfBlobs(batchBlobs);
 
-      if (blobUrl) URL.revokeObjectURL(blobUrl);
-      blobUrl = URL.createObjectURL(mergedBlob);
-
-      const iframe = iframeRef.value;
-      if (!iframe) {
-        ElMessage.error('打印 iframe 未挂载，请刷新页面后重试');
-        return;
-      }
-      iframe.src = blobUrl;
-      iframe.onload = () => {
-        try {
-          iframe.contentWindow?.focus();
-          iframe.contentWindow?.print();
-        } catch {
-          // sandbox / cross-origin 等极端情况下 fallback 到新窗口打印
-          const w = window.open(blobUrl, '_blank');
-          if (w) w.print();
-        }
-      };
+      // 「iframe 未挂载」的报错由 printBlob 自己发，失败时返回 false，无需调用方分支。
+      printBlob(mergedBlob);
     } catch (e) {
       await ElMessageBox.alert((e as Error).message ?? '批量打印失败', '错误', {
         confirmButtonText: '确定',
@@ -139,13 +131,6 @@ export function useBatchPrint(deps: UseBatchPrintDeps): UseBatchPrintReturn {
       }, 800);
     }
   }
-
-  onBeforeUnmount(() => {
-    if (blobUrl) {
-      URL.revokeObjectURL(blobUrl);
-      blobUrl = '';
-    }
-  });
 
   return {
     batchPrinting,

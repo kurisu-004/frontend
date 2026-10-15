@@ -65,6 +65,7 @@ import { updatePart, type PartUpdatePayload } from '@/api/parts';
 import { updateAssembly } from '@/api/assembly';
 import type { AssemblyUpdatePayload } from '@/types/assembly';
 import { useApplicantSearch } from '@/composables/useApplicantSearch';
+import { useIsActive } from '@/composables/useIsActive';
 import { qk } from '@/composables/queries/keys';
 import type { PartListItem } from '@/types/parts';
 import type { Applicant } from '@/types/applicant';
@@ -123,6 +124,8 @@ export interface UsePartInlineEditReturn {
 }
 
 export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEditReturn {
+  // 2026-10-22：keep-alive 活跃守卫，见 onEditEnter 开头的说明。
+  const isActive = useIsActive();
   const editingId = ref<string | null>(null);
   const qc = useQueryClient();
   const editBuffer = reactive<EditBuffer>({
@@ -378,6 +381,14 @@ export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEdi
     '.el-date-picker',
   ];
   function onEditEnter(e: KeyboardEvent): void {
+    // ⚠️ **keep-alive 守卫，勿删**：消费方之一是零件一览（在缓存名单里，路由名
+    // `PartsList` = 组件文件名）。切标签页只是 deactivate、组件实例与这个 document 级
+    // 监听都还在，而下面的退订挂在 `watch(editingId)` 与 `onBeforeUnmount` 上 ——
+    // 编辑到一半切走时 `editingId` 仍非空 ⇒ 用户在**别的标签页**敲 Enter 会
+    // `preventDefault()` 并把那一行存了，他根本没在看这张表。
+    // 另一个消费方 `ProcessWorkTypeMappingTab` 所在页没进缓存 ⇒ isActive 恒 true，
+    // 行为不变。
+    if (!isActive.value) return;
     if (e.key === 'Escape') {
       if (editingId.value == null) return;
       const target = e.target as HTMLElement | null;
