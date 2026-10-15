@@ -45,12 +45,19 @@ vi.mock('@/api/printTemplates', async (importOriginal) => {
   const actual = await importOriginal<typeof PrintTemplateApi>();
   return {
     ...actual,
-    uploadPrintTemplate: (...args: unknown[]) => uploadMock(...args),
     deletePrintTemplate: (...args: unknown[]) => deleteMock(...args),
     fetchPrintTemplateContent: (...args: unknown[]) => fetchContentMock(...args),
     listPrintTemplates: (...args: unknown[]) => listMock(...args),
   };
 });
+
+// 2026-10-15：上传从 `uploadPrintTemplate(customerId, file)`（multipart 代理）改成直传
+// 引擎 `directUpload({ ownerKind, ownerId, kind, file })`。下面这层 shim 把对象入参摊回
+// 旧的位置参数 ⇒ 各条用例的「customer_id 透传 / 文件名」断言逐字保留。
+vi.mock('@/utils/directUpload', () => ({
+  directUpload: (o: { ownerKind: string; ownerId: string; kind: string; file: File }) =>
+    uploadMock(o.ownerId, o.file, o),
+}));
 
 vi.mock('element-plus', () => ({
   ElMessage: { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn() },
@@ -193,7 +200,9 @@ describe('usePrintTemplatesStore 上传前的两道闸（核心判据）', () =>
     expect(store.upload.busy).toBe(false);
   });
 
-  it('G3：文件根本解不开（不是 xlsx）⇒ **零请求** + 报「模板解析失败」', async () => {
+  // 2026-10-15：ZIP magic 校验是**新增**的一道闸（职责从后端 confirm 端点移交过来
+  // —— 直传链路的后端拿不到字节）。它排在逐格校验之前，因为它只要读 4 个字节。
+  it('G3a：文件头不是 ZIP（改了后缀名的 .txt）⇒ **零请求** + 说清原因', async () => {
     const store = usePrintTemplatesStore();
     const ok = await store.upload.run(
       new File([new Uint8Array([1, 2, 3, 4, 5])], 'not-a-zip.xlsx'),
@@ -202,7 +211,19 @@ describe('usePrintTemplatesStore 上传前的两道闸（核心判据）', () =>
 
     expect(ok).toBe(false);
     expect(uploadMock).not.toHaveBeenCalled();
-    expect(store.upload.diffs[0]).toContain('模板解析失败');
+    expect(store.upload.diffs.join('；')).toContain('不是 ZIP');
+    expect(String(errorCalls()[0]![0])).toContain('文件头');
+  });
+
+  it('G3b：是 ZIP 但内部解不开（不是 xlsx）⇒ **零请求** + 报「模板解析失败」', async () => {
+    const store = usePrintTemplatesStore();
+    // 合法 ZIP 头 + 垃圾字节：过得了 magic 闸，过不了 hucre 解包 / 版式探测。
+    const zipHead = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0, 0, 0, 0]);
+    const ok = await store.upload.run(new File([zipHead], 'broken.xlsx'), 'C1');
+
+    expect(ok).toBe(false);
+    expect(uploadMock).not.toHaveBeenCalled();
+    expect(store.upload.diffs.join('；')).toContain('模板');
   });
 
   it('G4：校验通过 ⇒ 发**恰好一次**请求，customer_id 透传（G1/G2 的「零请求」不是恒真断言）', async () => {
@@ -213,6 +234,10 @@ describe('usePrintTemplatesStore 上传前的两道闸（核心判据）', () =>
     expect(uploadMock).toHaveBeenCalledTimes(1);
     expect(uploadMock.mock.calls[0]![0]).toBe('C1');
     expect((uploadMock.mock.calls[0]![1] as File).name).toBe('delivery_note_fala.xlsx');
+    // 2026-10-15：owner 是**一级客户**（不是零件 / 装配件），kind 恒为 DELIVERY_TEMPLATE。
+    const opts = uploadMock.mock.calls[0]![2] as { ownerKind: string; kind: string };
+    expect(opts.ownerKind).toBe('CUSTOMER');
+    expect(opts.kind).toBe('DELIVERY_TEMPLATE');
     expect(store.upload.diffs).toEqual([]);
     expect(store.upload.busy).toBe(false);
   });
@@ -271,8 +296,10 @@ describe('usePrintTemplatesStore 上传失败归因（2026-10-16 review 第 1 �
 
   it('E3：解析失败与请求失败走**不同**文案（两条路径各弹各的，不互相污染）', async () => {
     const store = usePrintTemplatesStore();
-    await store.upload.run(new File([new Uint8Array([1, 2, 3])], 'x.xlsx'), 'C1');
-    expect(String(errorCalls()[0]![0])).toContain('模板解析失败');
+    // ZIP magic 过、逐格校验解析不过 —— 这才走「模板解析失败」那一支。
+    const zipHead = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0, 0, 0, 0]);
+    await store.upload.run(new File([zipHead], 'x.xlsx'), 'C1');
+    expect(String(errorCalls()[0]![0])).not.toContain('无权限');
 
     vi.clearAllMocks();
     uploadMock.mockRejectedValue(Object.assign(new Error('无权限'), { code: 40300 }));

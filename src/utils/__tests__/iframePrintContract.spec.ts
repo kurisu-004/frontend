@@ -59,8 +59,16 @@ function sourceFiles(dir: string = SRC): string[] {
 
 describe('隐藏 iframe 打印：全仓只有 utils/iframePrint.ts 一份实现', () => {
   // 命中即红。三条各对应改前两份实现的**逐字同款**写法。
+  //
+  // ⚠️ 第一条锚在 `iframe.onload` 而不是裸 `.onload =`：这条守卫的职责是「打印宿主的
+  // 加载回调不许被第二处实现」，而 XMLHttpRequest 的 `onload` 与它无关
+  // （`utils/presignedPut.ts` 的直传就合法地挂了一个）。锚宽了只会在别的域引入
+  // XHR 时无故变红。
   const FORBIDDEN: [RegExp, string][] = [
-    [/\.onload\s*=/, '裸 iframe.onload 赋值（必须经 useIframePrint：一次性 + deactivate 拆解）'],
+    [
+      /\biframe\.onload\s*=/,
+      '裸 iframe.onload 赋值（必须经 useIframePrint：一次性 + deactivate 拆解）',
+    ],
     [
       /contentWindow\?\s*\.print\(\)|contentWindow\.print\(\)/,
       '直接调 contentWindow.print()（必须经 useIframePrint）',

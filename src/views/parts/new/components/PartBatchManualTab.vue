@@ -197,12 +197,7 @@
     :applicant-loading="applicantLoading"
     :query-search="querySearch"
     :dialog-submitting="dialogSubmitting"
-    :drawing-uploading="drawingUploading"
-    :request-drawing-upload="requestDrawingUpload"
-    :drawing-uploaded="onDrawingUploaded"
-    :drawing-items-change="onDrawingItemsChange"
-    :drawing-all-done="onDrawingAllDone"
-    :drawing-upload-error="onDrawingUploadError"
+    :drawing-file-change="onDrawingFileChange"
     :customer-change="onCustomerChange"
     :applicant-select="onApplicantSelect"
     @update:form="onManualFormChange"
@@ -210,11 +205,40 @@
     @close="closeAddDialog"
     @closed="onDialogClosed"
     @validateField="validateField"
-    @drawingItemsChange="onDrawingItemsChange"
-    @drawingUploaded="onDrawingUploaded"
-    @drawingAllDone="onDrawingAllDone"
-    @drawingUploadError="onDrawingUploadError"
   />
+
+  <!-- 2026-10-15：建单成功但图纸上传失败时的失败面板。
+       ⚠️ 这个面板存在的全部理由是「**零件已经落库了**」：绝不能让用户以为整次提交
+       失败而再点一次「提交创建」（那就是重复建单）。面板上只有「重试上传」——
+       重试只补文件，不重建单。 -->
+  <el-alert
+    v-if="drawingUploadFailedCount > 0"
+    type="error"
+    :closable="false"
+    show-icon
+    class="drawing-upload-failures"
+  >
+    <template #title>
+      <span>
+        零件已创建成功，但有 {{ drawingUploadFailedCount }} 份图纸未上传成功（下方清单）。
+        零件已经在库里了，<strong>不要重新提交</strong> —— 点「重试上传」只会补传文件。
+      </span>
+    </template>
+    <ul class="failure-list">
+      <li v-for="line in drawingUploadFailures" :key="line">{{ line }}</li>
+    </ul>
+    <div class="failure-actions">
+      <el-button
+        type="primary"
+        size="small"
+        :loading="drawingUploadingNow"
+        @click="retryDrawingUploads"
+      >
+        重试上传（{{ drawingUploadFailedCount }}）
+      </el-button>
+      <el-button size="small" @click="dismissDrawingUploadResult">不再重试</el-button>
+    </div>
+  </el-alert>
 
   <!-- 图纸 PDF 预览 Dialog -->
   <!-- X / Esc / 遮罩 → emit('update:model-value', false)；父组件 addDialogVisible
@@ -303,11 +327,6 @@ import {
 import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag';
 import type { StagedEntry, FormState } from '../composables/usePartBatchManual';
 import type { PartEntryFieldErrors, PartEntryInput } from '../partEntrySchema';
-import type {
-  CosUploadedItem,
-  CosUploaderItem,
-  CosUploadGrant,
-} from '@/components/CosUploader/useCosUploader';
 import type { Applicant } from '@/types/applicant';
 // 2026-10-17（客户无限层级改造）：cascader options 改吃 buildCustomerTree 的产物
 // （任意深度；每级带 customer_path），不再只透 id / name 两字段。
@@ -334,8 +353,22 @@ const props = defineProps<{
   // 2026-09-24 替代 EP FormRules：父 composable formErrors ref。
   formErrors: PartEntryFieldErrors;
   validateField: (field: keyof PartEntryInput) => void;
-  /** 2026-09-17 M4：图纸上传中标记。「加入列表」按钮 :disabled 用。 */
-  drawingUploading: boolean;
+  /**
+   * 2026-10-15：对话框里选 / 换 / 移除图纸（**只暂存，不上传**）。上传发生在建单
+   * 成功之后，由 `usePartBatchManual::runDrawingUploadPhase` 负责。
+   */
+  onDrawingFileChange: (file: File | null) => void;
+  // ============ 2026-10-15：建单成功后的图纸上传阶段 ============
+  /** 是否正在传图纸。 */
+  drawingUploadingNow: boolean;
+  /** 失败清单的可读文案（零件已落库，这里是唯一的补救入口）。 */
+  drawingUploadFailures: string[];
+  /** 失败项数（> 0 时页面显示失败面板）。 */
+  drawingUploadFailedCount: number;
+  /** 重跑全部失败项（只补文件，不重建单）。 */
+  retryDrawingUploads: () => Promise<void>;
+  /** 用户放弃重试：清本地上传现场。 */
+  dismissDrawingUploadResult: () => void;
   // 2026-09-18 A3：hydrate 结果（顶部 el-alert + 孤儿文件面板）
   hydrateRestoredCount: number;
   // 2026-09-28 删 useUploadSession：orphanFileRefs 类型从 SessionFile[] 收到 DraftSessionFile[]
@@ -358,14 +391,6 @@ const props = defineProps<{
   openAddDialog: () => void;
   onCustomerChange: (pickedId: unknown) => Promise<void>;
   onApplicantSelect: (item: Record<string, unknown>) => void;
-  // 2026-09-17 M4：图纸上传回调五件套（替代 beforeDrawingUpload +
-  // onDrawingChange + onDrawingRemoveUpload + onDrawingRemove 四件套）。
-  // 2026-09-28 重命名：CosUploadSession → CosUploadGrant。
-  requestDrawingUpload: (files: File[]) => Promise<CosUploadGrant>;
-  onDrawingUploaded: (item: CosUploadedItem) => void;
-  onDrawingItemsChange: (items: CosUploaderItem[]) => void;
-  onDrawingAllDone: () => void;
-  onDrawingUploadError: (item: CosUploaderItem) => void;
   // 2026-09-24 重构：onAddConfirm / onDialogClosed 不再吃 FormInstance。
   onAddConfirm: () => Promise<void>;
   onDialogClosed: () => void;
@@ -413,19 +438,19 @@ const columnDefs: ColumnDef[] = [
       return h('span', { class: 'mono' }, r.drawingNo ?? '');
     },
   },
-  // 2026-09-18 A3：图纸上传状态列。
+  // 2026-10-15：图纸列的语义从「上传状态」改成「**待提交**」。
+  // 改前这一列显示「已上传 / 需重传」，因为文件在加入列表之前就已经传到 COS tmp 区了；
+  // 改后（翻转时序）用户在加入列表那一刻图纸只在本地暂存，**一条请求都还没发** ⇒
+  // 此刻任何「已上传」都是骗人的。真正的成败在提交后由下面的失败面板呈现。
   {
     key: 'drawingUpload',
-    label: '图纸上传',
+    label: '图纸',
     minWidth: 90,
     align: 'center',
     cellRender: ({ row }) => {
       const r = row as StagedEntry;
-      if (r.drawingClientRef && r.drawingBinding) {
-        return h(ElTag, { type: 'success', size: 'small' }, () => '已上传');
-      }
-      if (r.drawingName && !r.drawingBinding && !r.drawingFile) {
-        return h(ElTag, { type: 'warning', size: 'small' }, () => '需重传');
+      if (r.drawingFile) {
+        return h(ElTag, { type: 'warning', size: 'small' }, () => '待提交');
       }
       return h('span', { class: 'muted' }, '—');
     },
@@ -603,6 +628,22 @@ function onManualFormChange(v: FormState): void {
   margin: 6px 0 0;
   color: var(--text-secondary);
   font-size: 12px;
+}
+
+/* 2026-10-15：建单成功后的图纸上传失败面板 */
+.drawing-upload-failures {
+  margin: 12px 0 0;
+}
+.failure-list {
+  margin: 6px 0;
+  padding-left: 20px;
+  font-size: 13px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.failure-actions {
+  display: flex;
+  gap: 8px;
 }
 
 :deep(.row-urgent) {

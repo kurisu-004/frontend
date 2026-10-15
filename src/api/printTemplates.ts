@@ -1,7 +1,8 @@
 // 后端 print-templates 域（送货单打印模板）API。走 `@/api/http` 统一 axios 客户端。
 //
 // 2026-10-16 新建。端点表（URL / method / body 冻结，与本文件逐字对齐）：
-//   POST /print-templates                    → 上传 xlsx 并绑定一级客户（成功返 HTTP 201）
+//   （2026-10-15 删除：POST /print-templates 上传端点 —— 改走直传链路 upload-intents +
+//    files/objects/confirm，owner_kind='CUSTOMER'、kind='DELIVERY_TEMPLATE'）
 //   GET  /print-templates?customer_id=&limit=&offset= → 列表（**出参只有 `{items, total}`**）
 //   GET  /print-templates/resolve?customer_id=      → 打印时按一级客户自动选用（出参**嵌套**）
 //   GET  /print-templates/{id}/content              → 取 xlsx 字节（**裸响应体，不是信封**）
@@ -22,9 +23,8 @@
 // router nest 到 `/print-templates` 之下、域内首条路由注册在 `/`，nest 会把它折叠成 prefix
 // 本身 —— 带尾斜杠会 404。上面那张端点表里 `POST /print-templates` 的准确读法是「后端源码
 // 里注册的是 `.route("/", get(list).post(upload))`，被 nest 折叠后就是 prefix 本身」。
-// 本仓同款形态的既有实证见 `api/files/objects.ts` 的 `uploadFileObject`
+// 本仓同款形态的既有实证见 `api/files/objects.ts` 里各端点的 URL 写法
 // （「URL 无尾斜杠：后端 nest 把内层的 `/` 折叠成 prefix 本身，带尾斜杠会 404」）。
-// **不要**给上传端点补一个尾斜杠。
 //
 // ⚠️ **后端不渲染 xlsx**：送货单 xlsx 的生成自 2026-10-08 起完全在前端本地完成（hucre），
 // 后端只负责「存模板字节 + 绑一级客户 + 取字节」。本文件因此**没有**任何「渲染 / 转 PDF /
@@ -40,8 +40,11 @@
 //   - `listPrintTemplates` 只发请求 + 类型标注，**不 parse** —— 守门在 queryFn
 //     （`views/printTemplates/composables/usePrintTemplateListQuery.ts`），parse 返回深拷贝，
 //     多一层等于每屏数据被校验并克隆两遍；
-//   - `uploadPrintTemplate` / `resolvePrintTemplate` 走 useMutation / 组件单次拉取、**没有
-//     queryFn 承载**，守门留在本层（同 `api/com/deliveryNote.ts::getDeliveryScanTree`）；
+//   - `resolvePrintTemplate` 走组件单次拉取、**没有 queryFn 承载**，守门留在本层
+//     （同 `api/com/deliveryNote.ts::getDeliveryScanTree`）；
+//     ⚠️ 2026-10-15：原 `uploadPrintTemplate` 的守门点随 multipart 端点一起下线 ——
+//     上传改走直传链路（`utils/directUpload.ts`），登记返回的是通用 `PartFileItem`，
+//     打印模板的读侧（列表 / 解析）仍读本域 schema，两者不再共用一个出参。
 //   - `deletePrintTemplate` **不 parse**：后端返 `R<()>`，信封 `data` 是 `null`，没有形状可守
 //     （`parse(null)` 必抛，而那正是「删除永远失败」的成因）。
 //
@@ -57,11 +60,7 @@ import type {
 import {
   PRINT_TEMPLATE_ACCEPT_EXT,
   printTemplateResolveSchema,
-  printTemplateSchema,
 } from '@/views/printTemplates/printTemplateSchema';
-// 模板文件的 MIME 的唯一来源：送货单打印模板契约（不在本文件另抄一份字面量 —— 那就是第二
-// 真源，后端改判据时它不会报错、只会静默让上传被 21102 挡回）。
-import { XLSX_MIME } from '@/views/com/delivery/utils/deliveryNoteTemplateContract';
 
 /** `GET /print-templates` 查询参数。三个键都可选（缺省 = 不过滤 / 后端默认分页）。 */
 export interface ListPrintTemplatesParams {
@@ -77,7 +76,7 @@ export interface DeletePrintTemplatePayload {
 }
 
 /**
- * 上传的 content type 归一：**恒为 `XLSX_MIME`，按扩展名判的那一处在别处**。
+ * 扩展名闸与 content-type 的关系。
  *
  * 2026-10-16 review 第 1 轮 NIT-1：本文件原先有一个 `normalizeUploadContentType(file)`
  * —— 签名承诺「按扩展名给」，实现却是 `void file; return XLSX_MIME`（本域只允许一种扩展名，
@@ -86,59 +85,39 @@ export interface DeletePrintTemplatePayload {
  * 「按扩展名算 MIME」的函数只会让后人以为这两处可以各改一半。故**删掉函数、直接取契约
  * 常量**，扩展名闸仍是唯一判据。
  *
- * 为什么必须重包一个 `File` 而不是在 FormData 上设 content-type：multipart 的每段 content
- * type 是**跟着段走**的，改 form 的 header 改不到已经 append 进去的那一段。
- * 口径同 `api/files/objects.ts::normalizeUploadContentType`。
+ * 2026-10-15：上传改走直传链路后，这条注释仍然成立且更重要 —— `content_type` 会被签进
+ * SigV4 的 SignedHeaders，PUT 时必须原样回填，所以 MIME 的唯一来源仍是
+ * `XLSX_MIME` 契约常量，不是 `file.type`（浏览器对 xlsx 给的值极不稳定）。
  */
 
 /** 扩展名是不是 `.xlsx`（大小写不敏感）。调用方在**发请求之前**用它拦一道：
  *  坏模板不该占一次往返，更不该先落库再报错。
  *
- *  ⚠️ 这也是「合法扩展名」的**唯一**判据：mime 恒取契约常量 `XLSX_MIME`（见
- *  `uploadPrintTemplate` 处的说明），两者不再各判一遍。
+ *  ⚠️ 这也是「合法扩展名」的**唯一**判据：mime 恒取契约常量 `XLSX_MIME`，两者不再
+ *  各判一遍。
  *
  *  为什么 MIME 不能用 `file.type`：浏览器给的 `file.type` 对 xlsx 极不稳定（Windows Chrome
- *  常给空串或 `application/octet-stream`，部分环境给 `application/vnd.ms-excel`），后端按
- *  「扩展名 → 允许的 content_type」比对 ⇒ 直传会被 21102 挡回。 */
+ *  常给空串或 `application/octet-stream`，部分环境给 `application/vnd.ms-excel`），签名与
+ *  后端 policy 都按 `XLSX_MIME` 比对 ⇒ 照抄 `file.type` 会被拒。 */
 export function isPrintTemplateXlsxName(name: string): boolean {
   return name.toLowerCase().endsWith(PRINT_TEMPLATE_ACCEPT_EXT);
 }
 
-/**
- * 上传 xlsx 模板并绑定一级客户（`POST /api/v2/print-templates`）。
- *
- * multipart body **恰好两个字段**（多 append 一个、缺字段或换个字段名后端都返 40001）：
- *   - `data`：`JSON.stringify({ customer_id })` —— 雪花 id 是 **JSON 字符串**，不是数字；
- *   - `file`：二进制。
- *
- * 同一 L1 二次上传 = 替换那一行（不是新增），前端不用做任何去重。
- *
- * 守门在本层（没有 queryFn 承载）。
- *
- * 失败抛 `ApiError`（按后端校验顺序，**逐字对齐后端 handler.rs 的错误码表**）：
- * - 40300 非 MANAGER（守卫先于 multipart 解析）；
- * - 40001 空字节 / 缺 `data` / 缺 `file` / 缺文件名 / `customer_id` 非数字；
- * - 20104 客户不存在 · 已软删 · **不是一级客户** —— ⚠️ 与 21105「owner 不存在」在后端是
- *   两条码，前端文案按「不是一级客户或已不存在」统一表述即可，不必区分；
- * - 21102 扩展名非 xlsx / **前 4 字节不是 `PK\x03\x04`**（不是 ZIP）；
- * - 21103 超大小上限；
- * - 21105 owner 不存在（`upload_file_for_owner` 内的**兜底**，正常流程走不到 ——
- *   2026-10-16 review 第 1 轮 NIT-3 由「只在括注里出现」提升为独立列出）；
- * - 21108 撞 `uk_t_part_file_single`（并发双传同一 L1 的极端形态）。
- */
-export async function uploadPrintTemplate(
-  customerId: string,
-  file: File,
-): Promise<PrintTemplateData> {
-  const form = new FormData();
-  form.append('data', JSON.stringify({ customer_id: customerId }));
-  // ⚠️ 重包 File 是为了把 file 段的 content-type 钉成 `XLSX_MIME`（见文件头那条归一注释）；
-  // 段名 / 段数（恰好 `data` + `file` 两段）都是契约 —— 多 append 一个、缺字段或换个字段名
-  // 后端都返 40001。
-  form.append('file', new File([file], file.name, { type: XLSX_MIME }));
-  const resp = await api.post<PrintTemplateData>('/print-templates', form);
-  return printTemplateSchema.parse(resp.data);
-}
+// 2026-10-15：删除 `uploadPrintTemplate`（`POST /api/v2/print-templates`，multipart）。
+// 模板字节改走直传链路：`views/printTemplates/composables/usePrintTemplatesStore.ts`
+// 调 `utils/directUpload.ts`（owner_kind='CUSTOMER' + kind='DELIVERY_TEMPLATE'），
+// 校验闸（逐格 + ZIP magic 切片）留在 store 里、位置不变。
+// 下面这段错误码表随之失效 —— 直传链路的错误码由 upload-intents / confirm 两个端点
+// 各自定义，不再由本域汇总：
+// - 40300 非 MANAGER（守卫先于 body 解析）；
+// - 40001 空字节 / 缺 `data` / 缺 `file` / 缺文件名 / `customer_id` 非数字；
+// - 20104 客户不存在 · 已软删 · **不是一级客户** —— ⚠️ 与 21105「owner 不存在」在后端是
+//   两条码，前端文案按「不是一级客户或已不存在」统一表述即可，不必区分；
+// - 21102 扩展名非 xlsx / **前 4 字节不是 `PK\x03\x04`**（不是 ZIP）—— ⚠️ 这一条在
+//   直传链路里**移到了前端**（store 的 ZIP magic 切片校验，见该文件注释）；
+// - 21103 超大小上限；
+// - 21105 owner 不存在（`upload_file_for_owner` 内的**兜底**，正常流程走不到）；
+// - 21108 撞 `uk_t_part_file_single`（并发双传同一 L1 的极端形态）。
 
 /**
  * 模板列表（`GET /api/v2/print-templates?customer_id=&limit=&offset=`）。

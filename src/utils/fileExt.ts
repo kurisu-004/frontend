@@ -14,9 +14,10 @@
 // - 长度 1-7 字符（rust schema `length(min=1, max=7)`）。
 // 解析失败 → 抛 Error('invalid ext')，caller 接住后走 ElMessage 错误通道。
 //
-// 注意：本函数只解 ext，**不**做 MIME / 类型白名单校验——白名单走
-// uploadPlan.pickPlan.accept（CosUploader 组件层）。这里仅承担「文件名末段
-// → 后端 ext 字段」的字面转换。
+// 注意：本函数只解 ext，**不**做 MIME / 类型白名单校验 —— MIME 归一走
+// `utils/fileContentType.ts::normalizeUploadContentType`（它会被签进 SigV4 的
+// SignedHeaders，与 ext 是两条独立的判据）。这里仅承担「文件名末段 → 后端 ext 字段」
+// 的字面转换。
 
 /** 从文件名解析扩展名（小写字母数字、1-7 字符）。
  *

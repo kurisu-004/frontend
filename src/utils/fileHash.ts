@@ -1,9 +1,13 @@
 // 2026-09-16 新增：前端文件 SHA-256 流式哈希工具。
 //
-// 背景：M3 前端直传 COS 改造要求"先 hash 再传"，与 cos-js-sdk-v5 的 STS 临时
-// 凭证 + content_sha256 后端校验配套。FileReader 一次性 readAsArrayBuffer 对
-// 300MB 大文件会触发浏览器 OOM；hash-wasm 提供 createSHA256() 流式 API（init /
+// 背景：前端直传 COS 要求「先 hash 再传」—— upload-intents 的 content_sha256
+// 既是后端的秒传判据，也是 confirm 的登记依据。FileReader 一次性 readAsArrayBuffer
+// 对 300MB 大文件会触发浏览器 OOM；hash-wasm 提供 createSHA256() 流式 API（init /
 // update / digest），支持 8MB 分块增量更新，恒定内存。
+//
+// 2026-10-15：上传链路从「STS 临时凭证 + cos-js-sdk-v5」换成「预签 PUT URL + XHR」
+// 之后，本文件的**入参没有变**（仍是 File），但下游用途变了一处：sha 现在由
+// `utils/directUpload.ts` 在签发 intent 之前算，仍是每个文件恰好算一次。
 //
 // 用法：
 // ```ts

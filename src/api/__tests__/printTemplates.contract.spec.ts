@@ -16,9 +16,12 @@
 // ⚠️ **守门点分工**（照 mailAccounts 那组的 N1 / N2 / N2b 三段式，两侧都要有人在）：
 //   - N1：`listPrintTemplates` **不 parse** —— 它有 queryFn 承载（`usePrintTemplateListQuery`），
 //     在 api 层再走一遍等于每屏数据被校验并克隆两遍；
-//   - N2：`uploadPrintTemplate` / `resolvePrintTemplate` **必须 parse** —— 走 useMutation /
-//     组件单次拉取，**没有 queryFn 承载**（CLAUDE.md 为这类调用留的口子）。漏掉时坏响应会一路
-//     流到「刚传的模板 `id` 是 undefined / `version` 是 undefined」；
+//   - N2：`resolvePrintTemplate` **必须 parse** —— 走组件单次拉取，**没有 queryFn 承载**
+//     （CLAUDE.md 为这类调用留的口子）。漏掉时坏响应会一路流到「刚解析的模板
+//     `id` 是 undefined / `version` 是 undefined」；
+//     ⚠️ 2026-10-15：原 `uploadPrintTemplate` 的 parse 随 multipart 上传端点一起下线 ——
+//     上传改走直传链路（`utils/directUpload.ts` → files/objects/confirm），出参是通用
+//     `PartFileItem`，本域的 `.strict()` schema 只服务读侧（列表 / 解析）。
 //   - N2b：`deletePrintTemplate` **不 parse** —— 后端返 `R<()>`、信封 `data` 是 `null`，
 //     `parse(null)` 必抛，那正是「删除永远失败」的成因。
 //   本文件用**真实 zod schema + 喂坏数据**来判这三段（而不是 parse 计数桩）：坏响应时
@@ -83,7 +86,6 @@ import {
   isPrintTemplateXlsxName,
   listPrintTemplates,
   resolvePrintTemplate,
-  uploadPrintTemplate,
 } from '../printTemplates';
 import {
   printTemplateListResultSchema,
@@ -213,7 +215,7 @@ const RESOLVE_ROW = {
 } as const;
 
 /** `el-upload` 给的那种 File（happy-dom / node 都有 File 全局）。 */
-function xlsxFile(name = 'fala.xlsx'): File {
+function _xlsxFileUnused(name = 'fala.xlsx'): File {
   return new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], name, { type: '' });
 }
 
@@ -225,27 +227,19 @@ beforeEach(() => {
 });
 
 describe('printTemplates api — 五个端点的 URL / method / body 契约', () => {
-  it('U1：上传打 POST /print-templates（**无尾斜杠**），multipart 恰好 data + file 两段', async () => {
-    await uploadPrintTemplate('9000000000000900', xlsxFile());
-    expect(apiPostMock).toHaveBeenCalledTimes(1);
-    const [url, body] = apiPostMock.mock.calls[0]!;
-    // ⚠️ 尾斜杠 = 404（后端 nest 把内层 `/` 折叠成 prefix 本身）。这条断言就是防住
-    // 「照注释里的表格『修正』成 `/print-templates/`」的那道闸。
-    expect(url).toBe('/print-templates');
-    expect(url).not.toBe('/print-templates/');
-
-    const form = body as FormData;
-    expect(form).toBeInstanceOf(FormData);
-    // ⚠️ **恰好两段**：多 append 一个 / 缺一段 / 换个字段名，后端都返 40001。
-    const names = [...form.keys()].sort();
-    expect(names).toEqual(['data', 'file']);
-    // `customer_id` 是**雪花 id 的 JSON 字符串**，不是数字（19 位 id 在 JS Number 下丢精度）。
-    expect(JSON.parse(form.get('data') as string)).toEqual({ customer_id: '9000000000000900' });
-    const filePart = form.get('file') as File;
-    expect(filePart.name).toBe('fala.xlsx');
-    // 段 content-type 恒为契约 MIME（绝不用 `file.type` —— 浏览器给 xlsx 的 type 极不稳定）。
-    expect(filePart.type).toBe(XLSX_MIME);
-    expect(XLSX_MIME).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  // ⚠️ 2026-10-15：原 U1（上传打 POST /print-templates，multipart 恰好 data + file 两段）
+  // 随 multipart 端点下线。直传链路的 URL / body 契约改由
+  // `src/api/files/__tests__/intents.spec.ts` 守（upload-intents + objects/confirm）。
+  // 这里保留一条**反向**断言：上传端点必须**不再**被打 —— 否则就说明有人把旧实现
+  // 复活了，而旧路径在后端已 404。
+  it('U1：打印模板上传不再打 POST /print-templates（直传链路接管，旧端点已下线）', () => {
+    const src = readFileSync(new URL('../printTemplates.ts', import.meta.url), 'utf8')
+      .split('\n')
+      .map((l) => (/^\s*(\/\/|\*)/.test(l) ? l.replace(/[^\n]/g, ' ') : l))
+      .join('\n');
+    // 注释里仍留着旧端点的留档（错误码表），所以先剥注释再查**可执行代码**。
+    expect(src).not.toMatch(/uploadPrintTemplate\s*[=(]/);
+    expect(src).not.toMatch(/api\.post<[^>]*>\(\s*'\/print-templates'/);
   });
 
   // ⚠️ **强度有限，别当 URL 纪律的守卫**（2026-10-16 review 第 2 轮 M-4 复核）：它只认**单引号**
@@ -317,11 +311,6 @@ describe('printTemplates api — 守门点分工（N1 / N2 / N2b）', () => {
     await expect(listPrintTemplates()).resolves.toEqual({ items: [], total: 7 });
   });
 
-  it('N2a：uploadPrintTemplate 必须 parse（坏响应照抛，不把坏数据交给调用方）', async () => {
-    apiPostMock.mockResolvedValue({ data: { id: 'X' } });
-    await expect(uploadPrintTemplate('C1', xlsxFile())).rejects.toThrow();
-  });
-
   it('N2b：resolvePrintTemplate 必须 parse（坏响应照抛）', async () => {
     // ⚠️ resolve 出参刻意**不** `.strict()`（读侧，见 printTemplateSchema 的 doc）⇒ 多出来的
     // 键被 strip 而不是抛。这里只断「少字段抛」这一半：parse 这道闸确实在返回路径上。
@@ -368,7 +357,15 @@ describe('printTemplates 的扩展名闸（与后端 21102 判据同源）', () 
     // 允许的是从契约模块 import 后的**使用**；不允许的是把字面量抄进来。
     expect(src).not.toContain('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     expect(src).not.toContain("'.xlsx'");
-    expect(src).toContain("from '@/views/com/delivery/utils/deliveryNoteTemplateContract'");
+    // ⚠️ 2026-10-15：MIME 的实际消费方搬到了 `usePrintTemplatesStore`（直传链路的
+    // content_type 要签进 SigV4），api 层已经不再拼 File 段 ⇒ 那条 import 一并搬走。
+    // 「唯一的 MIME 真源仍是契约常量」这条不变，只是取它的文件换了。
+    expect(
+      readFileSync(
+        new URL('../../views/printTemplates/composables/usePrintTemplatesStore.ts', import.meta.url),
+        'utf8',
+      ),
+    ).not.toContain('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   });
 });
 
@@ -406,7 +403,11 @@ describe('V：出参形状的行为侧断言（C-1；「后端长什么样」由
     // 后端 `PrintTemplateOut` 逐字给了这三个字段（取值恒定，但类型是必填 string）。
     // ⚠️ 前端一度只声明了 `file_type`，少了 `kind` 与 `content_type` ⇒ 每次 parse 都抛。
     expect(Object.keys(ROW)).toEqual(expect.arrayContaining(['kind', 'file_type', 'content_type']));
-    await expect(uploadPrintTemplate('C1', xlsxFile())).resolves.toMatchObject({
+    // ⚠️ 2026-10-15：上传不再返回本域行 VO（走直传链路，回通用 PartFileItem），
+    // 所以守门点改验 **resolve** 这条读路径 —— `printTemplateResolveSchema` 仍必须
+    // 真的接在返回路径上（下面的坏响应用例就是证据）。
+    const out = await resolvePrintTemplate('C1');
+    expect(out.template).toMatchObject({
       kind: 'DELIVERY_TEMPLATE',
       // ⚠️ `file_type` 是**短码**、`content_type` 才是 MIME —— 两个字段值形态不同不是笔误。
       file_type: 'XLSX',
@@ -415,10 +416,11 @@ describe('V：出参形状的行为侧断言（C-1；「后端长什么样」由
   });
 
   it('V2：行 VO 的 customer_name 可为 null（客户软删 / 查不到时后端给 null，不是必填）', async () => {
-    apiPostMock.mockResolvedValue({ data: { ...ROW, customer_name: null } });
-    await expect(uploadPrintTemplate('C1', xlsxFile())).resolves.toMatchObject({
-      customer_name: null,
+    apiGetMock.mockResolvedValue({
+      data: { template: { ...ROW, customer_name: null }, customer_name: null },
     });
+    const out = await resolvePrintTemplate('C1');
+    expect(out.template).toMatchObject({ customer_name: null });
   });
 
   it('V3：resolve 出参是「嵌套信封」而非平铺（取字段一律走 hit.template.*）', async () => {

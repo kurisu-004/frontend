@@ -15,7 +15,9 @@
     - retry：点击「重试」按钮触发（仅 cell.status === 'error' 时显示）
 
   状态映射：
-    - 'uploading'：空进度条（multipart 无进度回调，progress 恒 0）+ 文字「上传中」
+    - 'uploading'：真实字节进度条 + 文字「上传中」
+      （2026-10-15 起传输是预签 URL 直传，XHR onprogress 有回调 ⇒ progress 是真的；
+       multipart 代理上传时代这一格恒为 0，进度条是空的）
     - 'done'：✓ 绿色文字「上传完成」
     - 'error'：红色文字 + 「重试」按钮
     - 'pending'：灰色「待上传」（已排队、还没跑到该文件）

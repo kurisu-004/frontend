@@ -1,8 +1,12 @@
 // 装配体 REST API（走 @/api/http 统一 axios 客户端）。
-// 本文件只实现 `/assemblies/*` 与 `/prod/assemblies/*`；文件对象域的 6 条
-// `/files/objects/*` 端点实现在 `@/api/files/objects`，这里仅有两个装配件语义上的
-// 薄封装（`uploadAssemblyPdf` 转 `uploadFileObject`、`getDownloadUrl` 的 deprecation
-// alias）。
+// 本文件只实现 `/assemblies/*` 与 `/prod/assemblies/*`；文件对象域的 5 条
+// `/files/objects/*` 端点实现在 `@/api/files/objects`，这里只保留 `getDownloadUrl`
+// 这一个 deprecation alias。
+//
+// 2026-10-15：删掉 `uploadAssemblyPdf`（它只是转调 multipart 代理上传的薄封装）。
+// 总装图上传改走直传引擎 `utils/directUpload.ts`（owner=ASSEMBLY +
+// kind=ASSEMBLY_MASTER），调用点在 `views/assemblies/composables/useAssemblyDetail.ts` ——
+// 端点与 kind 都没变，只是传输从「后端代理」变成「浏览器直传对象存储」。
 
 import { api, cleanParams } from '@/api/http';
 import {
@@ -14,7 +18,6 @@ import {
   type AssemblyFileRefSchema,
   type AssemblyOutSchema,
 } from '@/composables/queries/schemas';
-import { uploadFileObject } from '@/api/files/objects';
 import type { Customer } from '@/api/customer';
 import type {
   AssemblyCreatePayload,
@@ -26,7 +29,7 @@ import type {
   AssemblyItem,
   AssemblyUpdatePayload,
 } from '@/types/assembly';
-import type { DrawingFileItem, PartFileItem } from '@/types/part_file';
+import type { DrawingFileItem } from '@/types/part_file';
 import type { PartListItem } from '@/types/parts';
 
 /**
@@ -272,7 +275,8 @@ export async function getAssemblyForPart(partId: string): Promise<AssemblyDetail
  * 消费方（`usePartBatchPdf` 的建单记账）把 `created_children[i]` 按下标对回本地子件行，
  * 响应形状不对时若无守门，会在**零报错**的情况下把子件图纸挂到错误的行上。
  *
- * 不传文件字段：总装图走 `POST /api/v2/files/objects`（`uploadAssemblyPdf`）单独上传。
+ * 不传文件字段：总装图走直传链路单独上传（`utils/directUpload.ts`，owner=ASSEMBLY +
+ * kind=ASSEMBLY_MASTER）。
  * 2026-10-05 起该端点无条件派装配件序列号、无条件建子件，不传 PDF 也能建出完整装配件。
  */
 export async function createAssembly(
@@ -286,7 +290,7 @@ export async function createAssembly(
 
 // 2026-10-13：删除 `createAssemblyWithFile`。
 // 理由：2026-10-05 起即标注「零调用点」，零件批量建单走 `createAssembly`（不传 PDF）
-// + `uploadAssemblyPdf` 补总装图这条两段式；2026-10-13 rg 复核**仍为零调用方**
+// + 建单后补总装图这条两段式；2026-10-13 rg 复核**仍为零调用方**
 // （唯一的名字提及只在 `types/assembly.ts` 的一句注释里，本轮一并清掉）。且它与
 // `createAssembly` 打同一个 `POST /assemblies`，差别只在 multipart 字段名（`files`
 // vs 不传）—— 留着等于给「静默丢弃文件」那条 2026-10-05 陷阱留一个后门。
@@ -298,25 +302,10 @@ export async function createAssembly(
 // 「兼容未迁移 import」而留，rg 核实全仓已无任何 import 方，兼容期早已结束。
 // `getDownloadUrl` alias 反之**仍有活调用方**，见下方。
 
-/** 装配件总装图上传（`POST /api/v2/files/objects`，multipart field=`file`，只收 PDF）。
- *
- * 端点是**纯文件入库** —— COS PUT + `INSERT t_part_file`（`owner_kind='ASSEMBLY'`、
- * `kind='ASSEMBLY_MASTER'`），**不拆页、不建子件**。装配件的子件由 `POST /assemblies`
- * 建单时按 `children` 入参一并建出。
- *
- * 2026-10-13：随文件对象域端点合并，本函数改为包 `uploadFileObject`（零件图纸 /
- * 3D 模型 / 装配件总装图同端点，差别只在 owner + kind 两个字段）。响应随之由
- * `AssemblyFileRef[]`（`{id, original_filename, page_count}`）变为**单个
- * `PartFileItem`**：`page_count` 键消失，但上传路径本就恒为 `null`，无信息损失。
- * ⚠️ 返回类型是**前端的 `PartFileItem`**（12 字段），不是后端出参全貌：后端
- * `PartFileOut` 有 15 字段，多出的 `owner_kind` / `object_key` / `created_by`
- * 前端未建模。
- *
- * 保持 `uploadAssemblyPdf` 这个名字：调用方（装配件详情页补传总装图、零件批量建单
- * 的总装图补传）都是「上传一份总装图」这一个动作，端点合并不改变它们的意图。 */
-export async function uploadAssemblyPdf(id: string, file: File): Promise<PartFileItem> {
-  return uploadFileObject('ASSEMBLY', id, 'ASSEMBLY_MASTER', file);
-}
+// 2026-10-15：删除 `uploadAssemblyPdf`（multipart 代理上传下线后它失去存在意义）。
+// 装配件总装图改走直传引擎 `utils/directUpload.ts`（owner=ASSEMBLY +
+// kind=ASSEMBLY_MASTER），调用点 `views/assemblies/composables/useAssemblyDetail.ts`
+// 的一行 `directUpload({...})` 就够了，不值得再包一层只做参数转发的薄函数。
 
 /** 详情页添加单个子件（无 PDF；如需 PDF 走 uploadPartFile）。
  *  2026-09-25 修正：与 backend-rust 新加的 `POST /api/v2/assemblies/{id}/children`

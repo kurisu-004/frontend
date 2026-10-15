@@ -4,13 +4,19 @@
 // 整段抽到本文件 + PartBatchManualTab.vue。Shell 通过 `v-bind="manual"` 把本 composable 返回
 // 的对象铺给 tab 组件。
 //
-// 2026-09-18 接入 backend-rust `/api/v2/upload-sessions/*` 共享 STS session pool：
-// - `requestDrawingUpload` 不再并发调 grantStsTmpKey（每文件 1-key），
-//   改用 `useUploadSession.allocate(files)` 单次签整批 tmp_key；
-// - onCommit 成功后调 `session.consumeFiles(submittedClientRefs)` 通知后端
-//   延长 tmp 保留窗口；
-// - mount 时 `useUploadSession.init('parts_new')` + draft 持久化（与 PDF
-//   Tab 共享同一单例 session）。
+// 2026-10-15 翻转时序（本次改造的语义核心）：
+// 改前「选 PDF → 立刻直传 → 提交时把 tmp_key 塞进 batchCreateParts」；
+// 改后「选 PDF → **只暂存本地 File，不发任何请求** → 点提交 → batchCreateParts 建单
+//      → 拿到 created[].id 之后，对每条有图纸的 staged entry 走直传上传」。
+// 于是 `requestDrawingUpload` / `onDrawingUploaded` / `onDrawingItemsChange` /
+// `onDrawingAllDone` / `onDrawingUploadError` 五个上传回调连同 `drawingBinding` /
+// `drawingClientRef` 两个字段全部删除，PartEntryFormDialog 里的 `<CosUploader>`
+// 换成 `<el-upload :auto-upload="false">`（只暂存）。
+//
+// 失败语义随之分家（本文件最需要被记住的一条）：
+//   - 建单失败 ⇒ 「这一行没建出来」，可以原样重提（回 idle）；
+//   - 建单成功但图纸上传失败 ⇒ **零件已经落库**，重提就是重复建单。所以上传阶段的失败
+//     走独立的失败清单 + 独立重试，且提示语必须讲清「零件已创建、只是图纸没传上去」。
 //
 // 2026-09-24 接入 auth 范本：Zod schema 校验 + useMutation 提交。
 // - 删 EP FormRules 与 formRef 管道；走 partEntrySchema.safeParse(form) +
@@ -29,27 +35,15 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { useMutation } from '@tanstack/vue-query';
 import { getOrCreateApplicant } from '@/api/applicant';
 import { batchCreateParts, type PartBatchCreatePayload, type PartBatchResult } from '@/api/parts';
-import { grantStsTmpKeyFiles } from '@/api/files/sts';
 import {
   usePartsNewDraft,
   type MergeResult,
   type SerializedStagedEntry,
 } from '@/views/parts/new/composables/usePartsNewDraft';
-import { stsToCosUploadGrant } from '@/views/parts/new/composables/_grantMappers';
-import { computeSha256 } from '@/utils/fileHash';
-import { parseFileExt } from '@/utils/fileExt';
 import type { Applicant } from '@/types/applicant';
-import type { FileBinding } from '@/types/part_file';
 import type { Customer } from '@/api/customer';
 import { buildCustomerTree, leafCustomersOf, type CustomerTreeNode } from '@/api/customer.tree';
-// 2026-09-28 子任务 #5：useUploadSession 已删除，requestDrawingUpload 改走
-// grantStsTmpKeyFiles 单批签名路径；CosUploader 契约 (File[]) => Promise<CosUploadGrant>
-// 完全保留，仅 caller 实现从「共享 STS session」变为「批量新签 STS + item 拼 grant」。
-import type {
-  CosUploadedItem,
-  CosUploaderItem,
-  CosUploadGrant,
-} from '@/components/CosUploader/useCosUploader';
+import { usePostSubmitUploads, type PostSubmitUploadJob } from '@/composables/usePostSubmitUploads';
 import { useConfirm } from '@/composables/useConfirm';
 import { useDialogSize, type DialogSizeResult } from '@/composables/useDialogSize';
 import {
@@ -86,14 +80,6 @@ export interface StagedEntry {
   drawingFile: File | null;
   drawingName: string | null;
   drawingUrl: string | null;
-  /** 2026-09-17 M4：图纸上传走 COS 直传，提交时挂 FileBinding 给后端 batch 事务 */
-  drawingBinding: FileBinding | null;
-  /**
-   * 2026-09-18 接入 upload_session：图纸对应的 upload session client_ref。
-   * 新图纸上传成功（onDrawingUploaded）时由 session.allocate 写入；commit 成功后
-   * 用此字段调 session.consumeFiles。
-   */
-  drawingClientRef?: string;
 }
 
 export interface FormState {
@@ -113,8 +99,6 @@ export interface FormState {
   drawingFile: File | null;
   drawingName: string | null;
   drawingUrl: string | null;
-  /** 2026-09-17 M4：图纸上传走 COS 直传，提交时挂 FileBinding 给后端 batch 事务 */
-  drawingBinding: FileBinding | null;
 }
 
 export interface UsePartBatchManualOptions {
@@ -166,12 +150,8 @@ export interface UsePartBatchManualReturn {
   // 2026-09-24 新增：单字段校验入口（LoginView 同款）。onBlur / onChange 触发。
   validateField: (field: keyof PartEntryInput) => void;
   form: FormState;
-  drawingUploading: Ref<boolean>;
   hydrateRestoredCount: ComputedRef<number>;
-  // 2026-09-28 删 useUploadSession：orphanFileRefs 从 SessionFile[] 改为 DraftSessionFile[]
-  // （usePartsNewDraft.ts 内联松散结构类型，仅保 client_ref / kind / status / tmp_key /
-  // file_size / original_filename / uploaded_at）。UI 只读 client_ref / original_filename
-  // 等基础字段，类型收紧留待子任务 #5 重写 grantStsTmpKeyFiles 后回收。
+  // orphanFileRefs 的 session 来源早已下线，值恒为空数组；这里保留只是为了不动页面结构。
   orphanFileRefs: ComputedRef<
     Array<{
       client_ref: string;
@@ -191,11 +171,12 @@ export interface UsePartBatchManualReturn {
   openAddDialog: () => void;
   onCustomerChange: (pickedId: unknown) => Promise<void>;
   onApplicantSelect: (item: Record<string, unknown>) => void;
-  requestDrawingUpload: (files: File[]) => Promise<CosUploadGrant>;
-  onDrawingUploaded: (item: CosUploadedItem) => void;
-  onDrawingItemsChange: (items: CosUploaderItem[]) => void;
-  onDrawingAllDone: () => void;
-  onDrawingUploadError: (item: CosUploaderItem) => void;
+  /**
+   * 2026-10-15：对话框里选图纸（`<el-upload :auto-upload="false">` 的 on-change）。
+   * **只暂存本地 File，不发任何请求** —— 上传发生在建单成功之后。
+   * 第二参数是新选的文件（null = 用户移除），单 PDF 限：选了新的就替换旧的。
+   */
+  onDrawingFileChange: (file: File | null) => void;
   // 2026-09-24 重构：onAddConfirm / onDialogClosed 不再吃 FormInstance（zod 化后
   // formRef.validate / clearValidate 失去存在意义）。
   onAddConfirm: () => Promise<void>;
@@ -207,6 +188,20 @@ export interface UsePartBatchManualReturn {
   rowClassName: (ctx: { row: unknown }) => string;
   // 2026-09-24 重构：onSubmit 走 useMutation，handler 内仅做空守卫 + confirm + mutate()。
   onSubmit: () => Promise<void>;
+  // ============ 2026-10-15：建单成功后的图纸上传阶段 ============
+  /** 是否正在传图纸（提交按钮 loading 的一部分）。 */
+  drawingUploadingNow: ComputedRef<boolean>;
+  /**
+   * 上传失败的清单（每行 = 「图号 xxx · 文件名：原因」）。**零件此时已经落库**，
+   * 这张清单是唯一的补救入口。
+   */
+  drawingUploadFailures: ComputedRef<string[]>;
+  /** 失败项数（0 = 没有失败，页面不显示失败面板）。 */
+  drawingUploadFailedCount: ComputedRef<number>;
+  /** 重跑全部失败项。 */
+  retryDrawingUploads: () => Promise<void>;
+  /** 清掉上传阶段的现场（失败清单 / 状态），不碰已落库的零件。 */
+  dismissDrawingUploadResult: () => void;
 }
 
 export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatchManualReturn {
@@ -243,42 +238,29 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
   // 提交前整体校验失败时同样写此 ref。
   const formErrors = ref<PartEntryFieldErrors>({});
 
-  // ============ 图纸 COS 上传（2026-09-17 M4）============
-  /**
-   * 图纸上传中标记：onAddConfirm 据此守卫"上传未完成不允许提交"。
-   *
-   * 设计要点：保持 drawingUploading 在 module-scope ref（而非在每个 item 上）
-   * 是为了让组件模板能直接 v-bind 一个 bool 给"加入列表"按钮 `:disabled`，
-   * 不必遍历 items 数组。composable 内部维护模块级 Map<File, sha>，
-   * 因为 upload 回调内我们直接拿到 raw File，用 Map<File, string> 按 File
-   * identity 取 sha 最稳（无 getter/setter 序列化问题）。
-   */
-  const drawingUploading = ref(false);
-  const drawingShaMap = new Map<File, string>();
+  // ============ 图纸暂存（2026-10-15 翻转时序）============
+  //
+  // 对话框里的 `<el-upload :auto-upload="false">` 只做一件事：**把选中的 File 暂存到
+  // form 上**。不发任何请求、不签任何 URL、不算 sha。真正的上传发生在
+  // `submitMutation.onSuccess` 之后 —— 那时零件已经有 id 了。
+  //
+  // 为什么值得这么翻：改前「选文件即传」让用户在「还在改表单、随时可能点取消」的阶段就
+  // 把几百 MB 传上去了，而这份字节最终能不能用取决于建单成不成功（不成功就白传）。
+  // 翻转之后字节只在**确定会建单**的那一刻才开始流动。
 
-  // ============================================================
-  // 2026-09-28 删 useUploadSession 模块级 Map 单例池：详见 plan §3.1。
-  // ============================================================
-  //
-  // 原块内容（2026-09-18 接入）：与 PDF Tab 共享 `parts_new` scope session；
-  // mount 时 mergeDraftWithSession 把 session.files 中 status='done' 的条目
-  // hydrate 到 staged（drawingBinding）；commit / discard 时清空。
-  //
-  // 本次删除：useUploadSession.ts + @/types/upload_session 已整文件下线，
-  // session 来源不再存在。draft 仍持有（持久化 staged 列表），但 hydrate 路径
-  // 无数据来源。本任务保留 hydrateResult / hydrateRestoredCount / orphanFileRefs
-  // 三件 API 暴露（给 UI 顶部 el-alert 与孤儿文件面板），值恒为「未恢复」/0/[]，
-  // 由子任务 #5 重写实现 grantStsTmpKeyFiles 后重新挂上 session 来源。
-  //
-  // 同步下线 onMounted 中的 await session.init('parts_new') 预申请逻辑；
-  // applyHydrate / deserializeStaged 整段删除（前者仅由 onMounted 调用，
-  // 后者内部依赖 session.files.value）。
-  // ============================================================
+  // draft 持久化（staged 列表）。图纸**不进草稿** —— 它是内存里的 File 对象，
+  // 刷新即失效；刷新后这一行的图纸位显示为空，用户重新选一次即可（与 pdf_tab 整段
+  // 「只写不读」是同款取舍，见 usePartsNewDraft 的注释）。
   const draft = usePartsNewDraft();
+
+  // 建单成功后的图纸上传状态机（2026-10-15）。它是**本 Tab 独有**的一份实例，不与
+  // Tab2 的 `usePartBatchPdfUploads` 共享 —— 后者的状态与「行集合世代号」深度耦合，
+  // 共享会把 Tab2 的表格语义泄漏过来（见 usePostSubmitUploads 文件头）。
+  const uploads = usePostSubmitUploads();
 
   // 暴露 hydrateResult / hydrateRestoredCount / orphanFileRefs 给 UI 渲染
   // 「已恢复 N 条」顶部 el-alert + 「孤儿文件待认领」面板（A3）。
-  // 2026-09-28：值恒为空（session 来源下线），子任务 #5 重新挂真实 session 后会自然恢复。
+  // 值恒为空（session 来源早已下线），两个计数恒 0 / 空数组。
   const hydrateResult = ref<MergeResult | null>(null);
   const hydrateRestoredCount = computed<number>(() => {
     const r = hydrateResult.value;
@@ -286,13 +268,6 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
     return r.manualStaged.filter((s) => s.drawing === 'done').length;
   });
   const orphanFileRefs = computed(() => hydrateResult.value?.orphanFileRefs ?? []);
-
-  /** drawingClientRef → file 的反向索引：上传完成时按 File 取 client_ref。
-   *  2026-09-28 注：useUploadSession 删除后 session.consumeFiles 不复存在，
-   *  此 Map 暂保留字段语义（onDrawingUploaded 仍写入）；commit 路径的
-   *  consumeFiles 调用在 submitStagedEntries 内 stub 为 no-op。
-   *  子任务 #5 重写 requestDrawingUpload / commit 流水后此 Map 可能调整。 */
-  const drawingClientRefByFile = new Map<File, string>();
 
   /** PDF 弹窗预览（图号列点击触发） */
   const drawingPreviewVisible = ref(false);
@@ -333,7 +308,6 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
     drawingFile: null,
     drawingName: null,
     drawingUrl: null,
-    drawingBinding: null,
   });
 
   const form = reactive<FormState>(initialForm());
@@ -397,112 +371,19 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
     // form.applicantName 由 v-model 自动同步为 item.name，无需手动设
   }
 
-  // ============ 图纸 COS 上传（2026-09-17 M4 + 2026-09-18 upload_session → 2026-09-28 grantStsTmpKeyFiles）============
+  // ============ 图纸暂存（2026-10-15 翻转时序）============
   //
-  // CosUploader 走「前端直传 COS tmp 区 → 提交时挂 FileBinding → 后端 batch 事务内
-  // head + copy tmp → 正式 CAS key + 插 t_part_file(READY)」两段式链路。
-  //
-  // 2026-09-18 原实现：每文件独立调 grantStsTmpKey（python 单端口 1-key）→ 2026-09-18
-  // 升级为共享 STS session：单次 `session.allocate(files)` 拿整批 tmp_key + 续期定时器
-  // → 2026-09-28 删 useUploadSession 后改回"批调用 grantStsTmpKeyFiles 单签名批"。
-  //
-  // 2026-09-28 子任务 #5：caller 改造为 grantStsTmpKeyFiles 数组入参。
-  // - 入参：files[]（User 选中的图纸文件，按 ElUpload 接受顺序）；
-  // - 调用：POST /api/v2/files/sts-tmp-keys body {scope: 'parts_new', files: [...]}
-  //   单 HTTP + 单签名批；不再有 session / renew / 24h TTL；
-  // - 出参：response.items[i].tmp_key 与 files[i] 一一对应（下标对齐），caller 用
-  //   _grantMappers.stsToCosUploadGrant 拼成 CosUploadGrant 返回给 CosUploader。
-  // - CosUploader 组件层契约 `(files: File[]) => Promise<CosUploadGrant>` 不变。
-  //
-  // 仍保留的字段：drawingShaMap（onDrawingUploaded 内按 File 身份取 sha）、
-  // drawingClientRefByFile（commit 阶段反查 client_ref，2026-09-18 upload_session 适配
-  // 时引入；2026-09-28 退化为"CosUploader tmp_key → File"反向索引，commit 时不再
-  // 上报 session.consumeFiles）。
+  // 对话框里的 `<el-upload :auto-upload="false">` 只做一件事：**把选中的 File 暂存到
+  // form 上**（外加一个 blob URL 给预览）。不发任何请求、不签 URL、不算 sha。
+  // 真正的上传发生在 `submitMutation.onSuccess` 之后 —— 那时零件已经有 id 了。
 
   /**
-   * 2026-09-28 子任务 #5：caller 改为 grantStsTmpKeyFiles 单批签名。
-   * 2026-09-29：caller 在 grant 之前必传 content_sha256（完整 64 hex）+ ext；
-   * 本函数负责先算 SHA-256 + 解析 ext，再喂 grantStsTmpKeyFiles。
+   * 对话框内选 / 换 / 移除图纸（2026-10-15）。**只暂存，不上传**。
    *
-   * 流程：
-   * 1) 对每个 file 跑 computeSha256（流式 hash-wasm 8MB 分块，~30MB PDF 不阻塞 UI）；
-   *    并用 parseFileExt 从文件名取 ext（小写字母数字 1-7）；
-   * 2) 把 files 映射成 grantStsTmpKeyFiles 入参（purpose / filename / content_type /
-   *    content_sha256 / ext）；
-   * 3) 单 HTTP 拿回 N 个 STS 凭证 + tmp_key；
-   * 4) 用 _grantMappers.stsToCosUploadGrant 拼成「共享 credentials / bucket /
-   *    region + items[].tmp_key」格式返回给 CosUploader。
-   *
-   * 与 usePartBatchPdf.allocate 的差异：本函数只处理 'drawing' kind（手工录入 Tab
-   * 只挂图纸），kind 写死；PDF Tab 还要按 entry.kind 派生 'drawing' / '3d_model'。
-   *
-   * 本调用点为「单次 getUploadGrant」路径：CosUploader 拿回 grant 后不会主动
-   * refetch（useCosUploader 的 ensureFreshCredentials 仅在 initialGrant 未传时
-   * 才兜底），因此 client_ref 用 crypto.randomUUID() 生成后无需跨 refetch 复用。
-   *
-   * 2026-09-29 升级：算出的 sha + ext 同步写入 drawingShaMap（File→sha），
-   * 让 onDrawingUploaded 不依赖 CosUploader.computeHash 也能拿到 sha 写 binding。
-   * 同时保持 CosUploader :compute-hash="false" 不变（避免大 PDF 算两次 hash）。
+   * 传 null 表示用户移除了当前图纸。选中新文件时按「替换」语义处理：先 revoke 旧的
+   * blob URL 再挂新的（否则那一份几百 MB 的字节会一直挂在内存里直到刷新页面）。
    */
-  async function requestDrawingUpload(files: File[]): Promise<CosUploadGrant> {
-    if (files.length === 0) {
-      throw new Error('requestDrawingUpload: files 不能为空');
-    }
-    // 2026-09-29：先逐文件算 sha + 解析 ext，再喂 grantStsTmpKeyFiles。
-    // 用 Promise.all 并行 hash。
-    const shaExtPairs = await Promise.all(
-      files.map(async (f) => {
-        const sha = await computeSha256(f);
-        const ext = parseFileExt(f.name);
-        return { sha, ext };
-      }),
-    );
-    // 缓存 sha 到 drawingShaMap（onDrawingUploaded 内按 File 身份取 sha 写 binding）
-    files.forEach((f, idx) => {
-      const pair = shaExtPairs[idx]!;
-      drawingShaMap.set(f, pair.sha);
-    });
-    const grants = await grantStsTmpKeyFiles({
-      scope: 'parts_new',
-      files: files.map((f, idx) => {
-        const pair = shaExtPairs[idx]!;
-        return {
-          purpose: 'drawing',
-          // 与现有 StsTmpKeysRequest 字段一致；python 端 schema 接受此 snake_case。
-          filename: f.name,
-          content_type: f.type || 'application/octet-stream',
-          // 2026-09-29：必传完整 64 hex SHA-256（rust schema 收紧 required）。
-          content_sha256: pair.sha,
-          // 2026-09-29：必传 ext（utils/fileExt.parseFileExt 解析）。
-          ext: pair.ext,
-        };
-      }),
-    });
-    if (grants.items.length !== files.length) {
-      throw new Error(
-        `grantStsTmpKeyFiles 返回项数（${grants.items.length}）≠ files 长度（${files.length}）`,
-      );
-    }
-    // client_ref 用 crypto.randomUUID() 生成；本调用点不跨 refetch 复用。
-    const clientRefs = files.map(() => crypto.randomUUID());
-    // 共享 STS 凭证：python 端 batch 签发同一 scope 共享一组 credentials / bucket / region
-    // （响应 items[0..N-1] 应一致；任取 items[0] 作为批级元数据载体）。
-    const head = grants.items[0]!;
-    return stsToCosUploadGrant(head, clientRefs);
-  }
-
-  /**
-   * 单文件上传完成后回调：写 binding + 新建 blob URL 给 PdfViewer 预览。
-   *
-   * sha 丢失说明 drawingShaMap 被错误清理（不可能发生在组件正常生命周期），
-   * 抛 ElMessage.error 让 caller 重传。
-   */
-  function onDrawingUploaded(item: CosUploadedItem): void {
-    const sha = drawingShaMap.get(item.file) ?? '';
-    if (!sha) {
-      ElMessage.error('图纸 hash 记录丢失，请重新上传');
-      return;
-    }
+  function onDrawingFileChange(file: File | null): void {
     // 替换旧文件 → 撤销旧 blob URL 防止内存泄漏
     if (form.drawingUrl) {
       try {
@@ -511,80 +392,17 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
         /* ignore */
       }
     }
-    form.drawingBinding = {
-      tmp_key: item.tmp_key,
-      content_sha256: sha,
-      original_filename: item.file.name,
-      file_size: String(item.file.size),
-      content_type: item.file.type || 'application/pdf',
-    };
-    form.drawingFile = item.file;
-    form.drawingName = item.file.name;
-    form.drawingUrl = URL.createObjectURL(item.file);
-
-    // 2026-09-18 接入 upload_session：
-    // 1) 记录 client_ref（CosUploader 通过 item.client_ref 传回），便于后续
-    //    onAddConfirm 写入 staged.drawingClientRef；
-    // 2) 通知 session 该 file 已 done（后端 SessionFile.status=done，tmp_key +
-    //    sha 由 caller 提供，etag 由 COS 返回）。
-    //
-    // 2026-09-28 删 useUploadSession：session.markComplete 不复存在，本 best-effort
-    // 调用整体删除（status=done 已本地落地，不影响 batch commit）。
-    drawingClientRefByFile.set(item.file, item.client_ref);
-  }
-
-  /**
-   * 清空 form 上图纸相关字段 + revoke blob URL。
-   * 复用于：列表清空 + 替换中间态 + 关闭对话框。
-   */
-  function clearDrawingForm(): void {
-    if (form.drawingUrl) {
-      try {
-        URL.revokeObjectURL(form.drawingUrl);
-      } catch {
-        /* ignore */
-      }
-    }
-    form.drawingBinding = null;
-    form.drawingFile = null;
-    form.drawingName = null;
-    form.drawingUrl = null;
-  }
-
-  /**
-   * CosUploader @change：维护 drawingUploading 状态 + 处理空列表 / 替换中间态。
-   *
-   * 不变量：「form drawing 字段反映 last successful upload」——
-   * - 用户移除所有项 → 清空 form 图纸字段；
-   * - 用户换图但最新一项仍在 hashing/uploading/pending → 保留旧 binding（直到新项
-   *   uploaded 事件触发 onDrawingUploaded 覆盖）；同时清 preview（保持"上传中时不展示旧预览"
-   *   的 UX）。这里我们选择更保守的策略：只要 latest item 不在 done，就清 binding + 预览，
-   *   上传成功后由 onDrawingUploaded 重新写回。
-   */
-  function onDrawingItemsChange(items: CosUploaderItem[]): void {
-    drawingUploading.value = items.some(
-      (it) => it.status === 'pending' || it.status === 'hashing' || it.status === 'uploading',
-    );
-    if (items.length === 0) {
-      clearDrawingForm();
+    if (!file) {
+      form.drawingFile = null;
+      form.drawingName = null;
+      form.drawingUrl = null;
       return;
     }
-    const newest = items[items.length - 1]!;
-    if (newest.status !== 'done' && (form.drawingBinding || form.drawingUrl)) {
-      clearDrawingForm();
-    }
+    form.drawingFile = file;
+    form.drawingName = file.name;
+    form.drawingUrl = URL.createObjectURL(file);
   }
 
-  /** @all-done：全部进入终态（done / error），关闭 uploading 标记。 */
-  function onDrawingAllDone(): void {
-    drawingUploading.value = false;
-  }
-
-  /** @error：单文件上传或 confirm 失败，关闭 uploading 标记 + 提示用户。 */
-  function onDrawingUploadError(item: CosUploaderItem): void {
-    drawingUploading.value = false;
-    ElMessage.error(`图纸上传失败：${item.error ?? '未知错误'}`);
-  }
 
   /**
    * 「加入列表 / 保存到列表」按钮：Zod 全表单校验 + 业务校验（客户存在性）→ 入队。
@@ -595,13 +413,6 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
    * 字段 trim 由 schema 安全处理（safeParse 返回的 result.data 已 trim）。
    */
   async function onAddConfirm(): Promise<void> {
-    // 2026-09-17 M4：图纸上传中守卫。M3-C 后端要求 binding 与图片必须同时提交；
-    // 上传未完成时拒绝 addConfirm，避免 staged 条目带 stale binding。
-    if (drawingUploading.value) {
-      ElMessage.error('图纸上传中，请稍候');
-      return;
-    }
-
     // 1) Zod 全表单校验
     const result = partEntrySchema.safeParse(form);
     if (!result.success) {
@@ -655,12 +466,6 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
         drawingFile: form.drawingFile,
         drawingName: form.drawingName,
         drawingUrl: form.drawingUrl,
-        drawingBinding: form.drawingBinding,
-        // 2026-09-18：从 drawingClientRefByFile 反查当前图纸对应的 client_ref；
-        // 编辑模式下也允许 client_ref 跟随新 file 更新。
-        drawingClientRef: form.drawingFile
-          ? drawingClientRefByFile.get(form.drawingFile)
-          : undefined,
       };
 
       if (editingUid.value) {
@@ -675,7 +480,6 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
         form.drawingUrl = null;
         form.drawingFile = null;
         form.drawingName = null;
-        form.drawingBinding = null;
         staged.value.push(entry);
       }
       addDialogVisible.value = false;
@@ -703,11 +507,6 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
     formErrors.value = {};
     Object.assign(form, initialForm());
     editingUid.value = null;
-    // 2026-09-17 M4：清模块级上传状态。下次打开 dialog 不会继承旧 File 的 sha 记录。
-    drawingShaMap.clear();
-    drawingUploading.value = false;
-    // 2026-09-18 C1：清 drawingClientRefByFile Map（防止 File 引用堆积 → 内存泄漏）。
-    drawingClientRefByFile.clear();
   }
 
   // ============ 行操作：查看 / 删除 / 编辑 ============
@@ -741,7 +540,6 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
       drawingFile: target.drawingFile,
       drawingName: target.drawingName,
       drawingUrl: target.drawingUrl,
-      drawingBinding: target.drawingBinding,
     });
     formErrors.value = {};
     addDialogVisible.value = true;
@@ -750,7 +548,6 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
     target.drawingUrl = null;
     target.drawingFile = null;
     target.drawingName = null;
-    target.drawingBinding = null;
     // 同步刷新 rootCustomerId 与申请人候选（让下拉带回原选项）
     if (target.customerId) {
       void applicantSearch.loadForCustomer(target.customerId);
@@ -893,12 +690,64 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
       note: s.note,
       // customer_id 雪花 ID 字符串（CLAUDE.md §3）
       customer_id: s.customerId!,
-      // 2026-09-17 M4：图纸 FileBinding。后端 PartBatchCreatePayload.drawing_file
-      // 必传 FileBindingIn（可选？null 触发后端跳过）；未上传图纸时给 undefined
-      // 让 v2 后端 schema 跳过该字段。
-      drawing_file: s.drawingBinding ?? undefined,
     }));
     return batchCreateParts(items);
+  }
+
+  /**
+   * 建单成功后的「传图纸」阶段（2026-10-15）。
+   *
+   * `created[i].sourceIndex` 是本次请求 items 数组的全局下标，而 items 正是
+   * `staged.value.map(...)` 逐字构造的 ⇒ **下标就是 staged 的下标**，据此把「建出来的
+   * 零件」对回「本地哪一行」。只有那些**既建成了、又带了图纸**的行才产生 job。
+   *
+   * 三种收场：
+   * 1. 一份图纸都没有 ⇒ 直接提示成功 + 跳页（与改造前一致）；
+   * 2. 全部传完 ⇒ 同样提示成功 + 跳页；
+   * 3. 有失败 ⇒ **停在当前页**，弹一条讲清「零件已创建、图纸没传上去」的 warning，
+   *    失败清单由页面渲染。用户点清单上的「重试」只重传文件，绝不重建单。
+   */
+  async function runDrawingUploadPhase(res: PartBatchResult): Promise<void> {
+    const jobs: PostSubmitUploadJob[] = res.created
+      .filter((c) => {
+        const entry = staged.value[c.sourceIndex];
+        return !!entry?.drawingFile;
+      })
+      .map((c) => {
+        const entry = staged.value[c.sourceIndex]!;
+        return {
+          // job id 取 staged 的 uid：同一份 File 被两行引用时是两个独立 job（各自的目标
+          // 零件不同），粒度必须是 job 而不是文件，否则失败一个会把另一个也重跑。
+          id: `manual:${entry.uid}`,
+          filename: entry.drawingName ?? entry.drawingFile!.name,
+          // ⚠️ 标签必须**此刻**存进去：`runDrawingUploadPhase` 返回后 staged 会被清空，
+          // 失败清单那时再回头查「这条 job 对应哪一行」已经查不到了。
+          label: `图号 ${entry.drawingNo}`,
+          file: entry.drawingFile!,
+          ownerKind: 'PART' as const,
+          ownerId: c.id,
+          kind: 'DRAWING' as const,
+        };
+      });
+
+    if (jobs.length === 0) {
+      ElMessage.success(`成功新建 ${res.created.length} 条零件`);
+      await router.push({ path: '/parts', query: { status: 'PENDING' } });
+      return;
+    }
+
+    uploads.registerJobs(jobs);
+    await uploads.runJobs(jobs);
+    const failures = uploads.failedJobs.value;
+    if (failures.length === 0) {
+      ElMessage.success(`成功新建 ${res.created.length} 条零件`);
+      await router.push({ path: '/parts', query: { status: 'PENDING' } });
+      return;
+    }
+    ElMessage.warning(
+      `零件已创建 ${res.created.length} 条，其中 ${failures.length} 份图纸未上传成功。` +
+        `请在页面下方「图纸上传失败」面板里重试（零件已经建出来了，不要重新提交）。`,
+    );
   }
 
   const submitMutation = useMutation<PartBatchResult, Error, undefined>({
@@ -921,27 +770,21 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
         return;
       }
 
-      // 2026-09-18 接入 upload_session：通知后端「本批 tmp 文件已被消费」。
-      // consume 仅延长 tmp 保留窗口（便于 batch_create_parts 事务内 head + copy
-      // tmp → 正式 CAS key 完成）；tmp 物理删除由 batch_create_parts 端点 spawn
-      // delete 兜底（详见 backend-rust `src/handlers/parts/batch.rs`），前端不感知。
-      // submittedClientRefs 仅含本批实际走 COS 上传的新图纸（不含编辑模式
-      // 复用旧 FileBinding 的条目——那些走原 binding 路径，不经过 session）。
+      // 2026-10-15：建单成功 → 追加「传图纸」阶段。
       //
-      // 2026-09-28 删 useUploadSession：session.consumeFiles 不复存在。子任务 #5
-      // 重写 grantStsTmpKeyFiles 路径后会重新挂上 commit 完成通知（如果你不再需要，
-      // 可删除本块整段）。当前 stub：暂保留 submittedClientRefs 收集 + skip。
-      void staged.value.map((s) => s.drawingClientRef).filter((r): r is string => !!r);
+      // ⚠️ **这是本次改造的失败语义核心**：到这里零件**已经落库**了。上传失败绝不
+      // 能让用户以为「整次提交失败了」而再点一次提交（那就是重复建单）。所以这一段：
+      //   - 不回 idle、不重置 staged 的建单结果；
+      //   - 失败项进独立的 `drawingUploadFailures` 清单，由页面渲染成可重试的面板；
+      //   - 有失败时**不跳页**（跳过去用户就没地方看见清单、也没地方点重试）。
+      await runDrawingUploadPhase(res);
 
       // 释放所有 blob URL
       staged.value.forEach(revokeEntryUrls);
       staged.value = [];
-      // 2026-09-18：提交成功后清空 draft（保留 session 单例，下一批次继续复用）
+      // 提交成功后清空 draft
       draft.saver.cancel();
       draft.clear();
-      ElMessage.success(`成功新建 ${res.created.length} 条零件`);
-      // 跳到零件一览并筛选「待生产」，便于核对刚添加的零件
-      router.push({ path: '/parts', query: { status: 'PENDING' } });
     },
     onError: (err) => {
       ElMessage.error(err.message ?? '提交失败');
@@ -1011,7 +854,14 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
     );
   }
 
-  /** staged 数组 → SerializedStagedEntry[]（不含 File / blob URL，只存 binding）。 */
+  /**
+   * staged 数组 → SerializedStagedEntry[]。
+   *
+   * 2026-10-15：图纸**不进草稿**。改前草稿存的是 binding 的五个字段（tmp_key /
+   * sha / filename / size / content_type），可那些 tmp_key 在刷新后早已失效；改后
+   * 图纸是内存里的 File，刷新即失效 ⇒ 两者都不可恢复，索性一条不存（刷新后该行图纸位
+   * 显示为空，用户重选一次即可）。
+   */
   function serializeManualTab(): { staged: SerializedStagedEntry[]; form_draft?: unknown } {
     return {
       staged: staged.value.map((s) => ({
@@ -1029,18 +879,42 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
         orderNo: s.orderNo,
         systemDeliveryDate: s.systemDeliveryDate,
         note: s.note,
-        ...(s.drawingBinding
-          ? {
-              drawingTmpKey: s.drawingBinding.tmp_key,
-              drawingSha256: s.drawingBinding.content_sha256,
-              drawingFilename: s.drawingBinding.original_filename,
-              drawingFileSize: s.drawingBinding.file_size,
-              drawingContentType: s.drawingBinding.content_type,
-            }
-          : {}),
-        ...(s.drawingClientRef ? { drawingClientRef: s.drawingClientRef } : {}),
       })),
     };
+  }
+
+  // ============ 2026-10-15：图纸上传阶段的展示面 ============
+
+  /**
+   * 失败清单的可读文案（每行 = 「图号 xxx · 文件名：原因」）。
+   *
+   * 文案全部取自 job 上登记时就存好的字段（`label` / `filename`）—— staged 在上传阶段
+   * 结束后会被清空，那时已经没法反查是哪一行了。
+   */
+  const drawingUploadFailures = computed<string[]>(() =>
+    uploads.failedJobs.value.map(
+      (f) => `${f.job.label ?? '零件'} · ${f.job.filename}：${f.error}`,
+    ),
+  );
+  const drawingUploadFailedCount = computed<number>(() => uploads.failedJobs.value.length);
+
+  /**
+   * 重试全部失败项。**只重传文件**，绝不重建单 —— 零件此时已经落库，重建单就是重复建单。
+   * 全部成功后面板自动消失（失败清单为空），并补一条成功提示。
+   */
+  async function retryDrawingUploads(): Promise<void> {
+    await uploads.retryFailed();
+    const left = uploads.failedJobs.value.length;
+    if (left === 0) {
+      ElMessage.success('图纸全部上传成功');
+    } else {
+      ElMessage.warning(`仍有 ${left} 份图纸未上传成功`);
+    }
+  }
+
+  /** 用户手动关掉失败面板（放弃重试）。零件已落库，这里只清本地上传现场。 */
+  function dismissDrawingUploadResult(): void {
+    uploads.clear();
   }
 
   return {
@@ -1070,10 +944,8 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
     formErrors,
     validateField,
     form,
-    // 2026-09-17 M4：图纸上传状态（CosUploader 守卫 + 子组件 disabled 绑定）
-    drawingUploading,
-    // 2026-09-18 A3：hydrate 结果给 UI 渲染顶部「已恢复 N 条」el-alert +
-    // 孤儿文件待认领面板（合并 dry-run 由 usePartsNewDraft.mergeDraftWithSession 完成）
+    // hydrate 结果给 UI 渲染顶部「已恢复 N 条」el-alert + 「孤儿文件待认领」面板。
+    // 恒为空（session 来源早已下线），保留是为了不动页面结构。
     hydrateRestoredCount,
     orphanFileRefs,
     // handlers
@@ -1088,11 +960,7 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
     // 2026-09-17 M4：图纸上传回调（替代 beforeDrawingUpload + onDrawingChange +
     // onDrawingRemoveUpload + onDrawingRemove 四件套）。CosUploader 通过这五
     // 个回调驱动 form 图纸状态机。
-    requestDrawingUpload,
-    onDrawingUploaded,
-    onDrawingItemsChange,
-    onDrawingAllDone,
-    onDrawingUploadError,
+    onDrawingFileChange,
     onAddConfirm,
     onDialogClosed,
     onRowPreview,
@@ -1101,5 +969,11 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
     onClearAll,
     rowClassName,
     onSubmit,
+    // ============ 2026-10-15：建单成功后的图纸上传阶段 ============
+    drawingUploadingNow: uploads.running,
+    drawingUploadFailures,
+    drawingUploadFailedCount,
+    retryDrawingUploads,
+    dismissDrawingUploadResult,
   };
 }

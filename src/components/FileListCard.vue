@@ -327,6 +327,11 @@ const StepViewer = defineAsyncComponent(() => import('./cad-viewer/StepViewer.vu
 // ----- ACCEPT 与 title 按 kind 自动派生 -----
 // 2026-07-14：DRAWING 加 9 种图片（PNG/JPG/.../HEIC，与 PDF 同槽）；
 // 3D_MODEL 加 IGES/STL/OBJ/3MF；新增 CAD_2D (DWG/DXF)
+// ⚠️ 四张表都是 `Record<PartFileKind, string>`（**穷举**，不是 Partial）：新增 kind 时
+// 漏改任意一张会当场编译报错。`DELIVERY_TEMPLATE`（送货单打印模板）**不属于本组件的
+// 消费范围** —— 它的上传入口在「打印模板」页、读侧走 print-templates 端点，永远不会
+// 被这里渲染成文件卡片 ⇒ 四格都填成「本组件不会走到」的兜底值，而不是让它成为一个
+// 看起来能用、实际永远走不到的真入口。
 const ACCEPT_BY_KIND: Record<PartFileKind, string> = {
   DRAWING: '.pdf,.png,.jpg,.jpeg,.gif,.bmp,.tif,.tiff,.webp,.heic',
   '3D_MODEL': '.step,.stp,.iges,.igs,.stl,.obj,.3mf',
@@ -334,6 +339,7 @@ const ACCEPT_BY_KIND: Record<PartFileKind, string> = {
   SETUP_SHEET: '.pdf',
   ASSEMBLY_MASTER: '.pdf',
   CAD_2D: '.dwg,.dxf',
+  DELIVERY_TEMPLATE: '',
 };
 
 const TITLE_BY_KIND: Record<PartFileKind, string> = {
@@ -343,6 +349,7 @@ const TITLE_BY_KIND: Record<PartFileKind, string> = {
   SETUP_SHEET: 'CNC 设定单',
   ASSEMBLY_MASTER: '总装图',
   CAD_2D: 'CAD 源文件',
+  DELIVERY_TEMPLATE: '送货单模板',
 };
 
 const EMPTY_TEXT_BY_KIND: Record<PartFileKind, string> = {
@@ -352,6 +359,7 @@ const EMPTY_TEXT_BY_KIND: Record<PartFileKind, string> = {
   SETUP_SHEET: '暂无 CNC 设定单',
   ASSEMBLY_MASTER: '暂无总装图',
   CAD_2D: '暂无 CAD 源文件',
+  DELIVERY_TEMPLATE: '暂无送货单模板',
 };
 
 const UPLOAD_LABEL_BY_KIND: Record<PartFileKind, string> = {
@@ -361,6 +369,7 @@ const UPLOAD_LABEL_BY_KIND: Record<PartFileKind, string> = {
   SETUP_SHEET: '设定单',
   ASSEMBLY_MASTER: '总装图',
   CAD_2D: 'CAD 源文件',
+  DELIVERY_TEMPLATE: '送货单模板',
 };
 
 interface Props {

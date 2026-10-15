@@ -6,8 +6,10 @@
 //   - formErrors prop 渲染到 el-form-item :error；
 //   - 「加入列表」按钮 @click → emit('confirm')；
 //   - 「取消」 / 关闭按钮 → emit('close')；
-//   - drawingUploading=true 时确认按钮 disabled；
-//   - dialogSubmitting=true 时确认按钮 loading。
+//   - dialogSubmitting=true 时确认按钮 loading；
+//   - 2026-10-15（翻转时序）：图纸区是 `<el-upload :auto-upload="false">`，只把选中的
+//     File 交给父组件（drawingFileChange），**不发任何请求**；el-upload 的 file-list 是
+//     由父组件暂存的 File 反推出来的受控视图。
 // @vitest-environment happy-dom
 
 import { defineComponent, h } from 'vue';
@@ -146,11 +148,20 @@ const ElIconStub = defineComponent({
   },
 });
 
-const CosUploaderStub = defineComponent({
-  name: 'CosUploaderStub',
-  emits: ['change', 'uploaded', 'all-done', 'error'],
-  setup() {
-    return () => h('div', { class: 'cos-uploader-stub' }, 'cos-uploader-stub');
+/** 2026-10-15：图纸区换成 el-upload（只暂存、不上传）。这里只需要一个渲染 stub，
+ *  真正的行为断言（on-change / on-remove 转发）由下面的用例直接调组件方法验。 */
+const ElUploadStub = defineComponent({
+  name: 'ElUploadStub',
+  props: ['fileList', 'limit', 'accept'],
+  emits: ['change', 'remove'],
+  setup(props, { slots }) {
+    return () =>
+      h('div', { class: 'el-upload-stub' }, [
+        slots.default?.(),
+        ...(props.fileList as Array<{ name: string }>).map((f) =>
+          h('div', { class: 'el-upload-stub__row' }, f.name),
+        ),
+      ]);
   },
 });
 
@@ -167,7 +178,7 @@ const globalConfig = {
     ElSwitch: ElSwitchStub,
     ElDatePicker: ElDatePickerStub,
     ElIcon: ElIconStub,
-    CosUploader: CosUploaderStub,
+    ElUpload: ElUploadStub,
   },
 };
 
@@ -187,7 +198,6 @@ const baseForm = {
   drawingFile: null,
   drawingName: null,
   drawingUrl: null,
-  drawingBinding: null,
 };
 
 const baseProps = () => ({
@@ -202,18 +212,8 @@ const baseProps = () => ({
   querySearch: () => undefined,
   customerChange: async () => undefined,
   applicantSelect: () => undefined,
-  requestDrawingUpload: async () => ({
-    credentials: { tmp_secret_id: '', tmp_secret_key: '', session_token: '', expired_time: 0 },
-    bucket: '',
-    region: '',
-    items: [],
-  }),
-  drawingUploaded: () => undefined,
-  drawingItemsChange: () => undefined,
-  drawingAllDone: () => undefined,
-  drawingUploadError: () => undefined,
+  drawingFileChange: () => undefined,
   dialogSubmitting: false,
-  drawingUploading: false,
 });
 
 describe('PartEntryFormDialog', () => {
@@ -278,26 +278,61 @@ describe('PartEntryFormDialog', () => {
     expect(wrapper.emitted('close')).toHaveLength(1);
   });
 
-  it('drawingUploading=true 时确认按钮 DOM disabled', () => {
-    const wrapper = mount(PartEntryFormDialog, {
-      props: { ...baseProps(), drawingUploading: true },
+  it('dialogSubmitting=true 时确认按钮 loading、其余时候不 loading', () => {
+    const busy = mount(PartEntryFormDialog, {
+      props: { ...baseProps(), dialogSubmitting: true },
       global: globalConfig,
     });
-    const buttons = wrapper.findAll('button');
-    const confirmBtn = buttons.find((b) => b.text().includes('加入列表'));
-    expect(confirmBtn!.attributes('disabled')).toBeDefined();
+    // ElButtonStub 把 attrs 原样透传给真实 <button>，EP 的 loading 落在 `loading`
+    // 属性上（stub 不实现 EP 的 spinner 渲染）。
+    const busyConfirm = busy.findAll('button').find((b) => b.text().includes('加入列表'));
+    expect(busyConfirm!.attributes('loading')).toBe('true');
+
+    const idle = mount(PartEntryFormDialog, { props: baseProps(), global: globalConfig });
+    const idleConfirm = idle.findAll('button').find((b) => b.text().includes('加入列表'));
+    expect(idleConfirm!.attributes('loading')).toBe('false');
   });
 
-  it('editing=true 且有 drawingName 时显示「当前图纸」提示', () => {
+  it('2026-10-15 翻转时序：图纸区不再上传，on-change 只把 File 交给父组件暂存', async () => {
+    const seen: Array<File | null> = [];
+    const wrapper = mount(PartEntryFormDialog, {
+      props: { ...baseProps(), drawingFileChange: (f: File | null) => seen.push(f) },
+      global: globalConfig,
+    });
+    // 模拟 el-upload 选中一个文件。
+    const vm = wrapper.vm as unknown as {
+      onDrawingChange: (f: unknown, fs: unknown) => void;
+      onDrawingRemove: () => void;
+    };
+    const file = new File([new Uint8Array(4)], 'a.pdf', { type: 'application/pdf' });
+    vm.onDrawingChange({ raw: file }, []);
+    expect(seen).toEqual([file]);
+    // 移除：传 null
+    vm.onDrawingRemove();
+    expect(seen).toEqual([file, null]);
+  });
+
+  it('暂存的图纸以受控 file-list 呈现在上传控件里', () => {
+    const f = new File([new Uint8Array(4)], 'foo.pdf', { type: 'application/pdf' });
+    const wrapper = mount(PartEntryFormDialog, {
+      props: { ...baseProps(), form: { ...baseForm, drawingFile: f, drawingName: 'foo.pdf' } },
+      global: globalConfig,
+    });
+    expect(wrapper.find('.el-upload-stub__row').text()).toBe('foo.pdf');
+  });
+
+  it('editing=true 且有图纸时提示「重新选择将替换」', () => {
+    const f = new File([new Uint8Array(4)], 'foo.pdf', { type: 'application/pdf' });
     const wrapper = mount(PartEntryFormDialog, {
       props: {
         ...baseProps(),
         editing: true,
-        form: { ...baseForm, drawingName: 'foo.pdf' },
+        form: { ...baseForm, drawingFile: f, drawingName: 'foo.pdf' },
       },
       global: globalConfig,
     });
-    expect(wrapper.text()).toContain('当前图纸：foo.pdf');
+    expect(wrapper.text()).toContain('已选择：foo.pdf');
+    expect(wrapper.text()).toContain('重新选择将替换');
   });
 
   it('本地 form 改动 → emit update:form 回写父组件', async () => {

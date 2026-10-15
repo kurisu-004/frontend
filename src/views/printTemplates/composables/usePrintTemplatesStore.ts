@@ -16,6 +16,14 @@
 // 若先落库，打印对话框打开时会被自动选用 → 导出的送货单在客户签字那页就是废纸。把闸门前移到
 // 入库之前，代价只是用户当场看到差异，收益是库里永远只有「能打印」的模板。
 //
+// ⚠️ **ZIP magic 切片校验（2026-10-15 新增，校验职责从后端移交到前端）**：直传链路的
+// 后端 confirm 端点只拿到**文件元数据**（大小 / mime / 扩展名），拿不到字节 ⇒ 后端
+// 「前 4 字节必须是 `PK\x03\x04`」这条闸在新链路上**不再存在**。它必须在上传前由前端
+// 自己判：`file.slice(0, 4)` 读出首 4 字节比对，xlsx 本质是 ZIP、magic 必然是那四个。
+// 这是「把一条校验从后端挪到前端」而不是「新增一条校验」—— 后端那条在旧 multipart
+// 链路上确实存在过，删掉端点就得有人接手，否则一份改名的 .txt 能进库、到打印那一刻
+// 才炸。
+//
 // ⚠️ **版式（零件版 / 检具版）先探测、再按该版式逐格校验**：后端模板行的 `kind` 恒是
 // `DELIVERY_TEMPLATE`、不带版式信息，所以「这份文件是哪一套版式」只能由前端从模板结构判定
 // （`detectTemplateContract`）。判不出版式就直接拒收 —— 不知道该按哪套判据校验的文件没有
@@ -33,9 +41,9 @@ import {
   deletePrintTemplate,
   fetchPrintTemplateContent,
   isPrintTemplateXlsxName,
-  uploadPrintTemplate,
   type ListPrintTemplatesParams,
 } from '@/api/printTemplates';
+import { directUpload } from '@/utils/directUpload';
 import { qk } from '@/composables/queries/keys';
 import { triggerBrowserDownload } from '@/utils/download';
 import {
@@ -58,6 +66,27 @@ import { usePrintTemplateListQuery } from './usePrintTemplateListQuery';
  * 不一致就说明后端 clamp 上限被调低了。所以 `total` 必须上屏（见 `query.total` 的注释与
  * `PrintTemplateList.vue` 的工具栏），让截断当场可见，而不是等某个客户抱怨「他的模板不见了」。*/
 const LIST_PAGE_SIZE = 200;
+
+/** ZIP（也就是 xlsx）的首 4 字节 magic：`PK\x03\x04`。 */
+const ZIP_MAGIC = [0x50, 0x4b, 0x03, 0x04] as const;
+
+/**
+ * 读首 4 字节判是不是 ZIP 包（2026-10-15）。
+ *
+ * 为什么必须是前端判：直传链路的 confirm 端点只拿到文件元数据、拿不到字节，后端那条
+ * 「前 4 字节必须是 PK\x03\x04」的闸随 multipart 端点一起下线了。
+ *
+ * 用 `slice(0, 4)` 而不是 `arrayBuffer()`：只读 4 字节，一份几百 KB 的模板不必整份拷进
+ * 内存。文件本身读不出来（极少见）时按「不是 ZIP」处理 —— 判据宁严勿松。
+ */
+async function isZipMagic(file: File): Promise<boolean> {
+  try {
+    const head = new Uint8Array(await file.slice(0, 4).arrayBuffer());
+    return ZIP_MAGIC.every((b, i) => head[i] === b);
+  } catch {
+    return false;
+  }
+}
 
 export const usePrintTemplatesStore = defineStore('print-templates', () => {
   // ⚠️ 必须在 setup 第一行捕获（Pinia 不给 action wrapper / listener 注入上下文，
@@ -127,8 +156,15 @@ export const usePrintTemplatesStore = defineStore('print-templates', () => {
 
   const uploadMutation = useMutation({
     mutationKey: ['print-templates', 'upload'],
+    // 2026-10-15：直传链路（upload-intents → XHR PUT → confirm），owner 是**一级客户**
+    // （不是零件 / 装配件），kind 恒为 `DELIVERY_TEMPLATE`。
     mutationFn: (vars: { customerId: string; file: File }) =>
-      uploadPrintTemplate(vars.customerId, vars.file),
+      directUpload({
+        ownerKind: 'CUSTOMER',
+        ownerId: vars.customerId,
+        kind: 'DELIVERY_TEMPLATE',
+        file: vars.file,
+      }).then((r) => r.item),
     onSuccess: async () => {
       await invalidatePrintTemplatesQuery();
       ElMessage.success('模板已保存并绑定到该一级客户（同一客户再次上传即替换）');
@@ -171,8 +207,8 @@ export const usePrintTemplatesStore = defineStore('print-templates', () => {
   /**
    * `upload` 的真正实现（**busy 的 finally 由调用方管**，见上面那层）。
    *
-   * ⚠️ 两段 try/catch 是刻意的分界：第二段只包「读字节 + 解 zip + 探版式 + 逐格比对」，第三段的
-   * 请求失败**不允许**进第二段那个 catch（理由见 `upload` 的 doc）。
+   * ⚠️ 三段 try/catch 是刻意的分界：第二段只包「读字节 + 解 zip + 探版式 + 逐格比对」，
+   * 第三段的请求失败**不允许**进第二段那个 catch（理由见 `upload` 的 doc）。
    *
    * ⚠️ **「上传逐格校验、打印只探测」是两件事**（2026-10-18）：这里（上传闸）是全仓**唯一**
    * 能在**入库前**拦住坏模板的时机 —— 打印对话框打开时那份模板已经过了这道闸，它只做
@@ -181,12 +217,25 @@ export const usePrintTemplatesStore = defineStore('print-templates', () => {
    * 要联系管理员才能打印。所以「逐条差异」这份清单**必须**留在这里。
    */
   async function uploadChecked(file: File, targetCustomerId: string): Promise<boolean> {
-    // ---- 第二道闸：先探版式、再按该版式逐格比对。⚠️ 这一段单独一个 try/catch，**只有它**归
+    // ---- 第二道闸：ZIP magic 切片校验（2026-10-15，职责从后端 confirm 端点移交过来）。
+    // 只读首 4 字节（slice 不复制整份几十 KB..几百 KB 的文件），xlsx 是 ZIP ⇒ magic 恒为
+    // `50 4B 03 04`。不合即拒：**在入库前**判掉，避免一份改名的 .txt 进了库、到打印那一刻
+    // 才以「打开失败」的形式炸给用户。
+    const isZip = await isZipMagic(file);
+    if (!isZip) {
+      uploadDiffs.value = [
+        '文件头不是 ZIP（xlsx 本质是 ZIP 包）—— 很可能只是改了后缀名的其它格式，请用 Excel 另存为 .xlsx',
+      ];
+      ElMessage.error('模板不是有效的 xlsx（文件头校验未通过），已取消上传');
+      return false;
+    }
+
+    // ---- 第三道闸：先探版式、再按该版式逐格比对。⚠️ 这一段单独一个 try/catch，**只有它**归
     // 「模板解析失败」—— 见上方 doc 说的「两段失败必须分开归因」。
     let diffs: string[];
     try {
-      // ⚠️ 校验本身不能省 —— 后端只认「是 xlsx 且是 ZIP」，一份列位错位的模板在库里是完全
-      // 合法的，坏在打印那一刻才发现已经晚了。
+      // ⚠️ 校验本身不能省 —— 一份列位错位的模板在库里是完全合法的，坏在打印那一刻才发现
+      // 已经晚了。
       const bytes = new Uint8Array(await file.arrayBuffer());
       const { openXlsx } = await import('hucre');
       const wb = await openXlsx(bytes);
@@ -211,7 +260,7 @@ export const usePrintTemplatesStore = defineStore('print-templates', () => {
       ElMessage.error(`模板校验未通过（${diffs.length} 处差异），已取消上传`);
       return false;
     }
-    // ---- 第三段：请求。失败由 uploadMutation 的 onError 提示，这里只回落成 false ----
+    // ---- 第四段：请求。失败由 uploadMutation 的 onError 提示，这里只回落成 false ----
     // ⚠️ 回落而不是继续向上抛（2026-10-16 review 第 1 轮 MAJOR-2）：页面壳那侧是
     // `await store.upload.run(...)`，让 reject 冒出去就是一个未捕获的 rejection。真正给用户
     // 的提示由 mutation 的 `onError` 弹（**只弹那一次**），这里既不重复弹、也**不把 API

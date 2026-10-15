@@ -140,12 +140,16 @@ export interface PdfPreviewState {
  * 2026-09-21 显式返回类型需要：模块级 export UploadStatusCell 接口，
  * UsePartBatchPdfReturn 在文件较前位置引用它。
  *
- * 状态机只四态：后置上传链路不算本地摘要、multipart 也没有进度回调。
+ * 状态机只四态：后置上传链路不算本地摘要（hash 阶段的进度不进 UI，那段只有一两秒）。
+ *
+ * 2026-10-15：`progress` 从「上传期间恒为 0」变成**真进度** —— 传输改成预签 URL 直传，
+ * XHR 的 `upload.onprogress` 有回调，`usePartBatchPdfUploads` 的 `markJobProgress`
+ * 把它回写到本 cell。
  */
 export interface UploadStatusCell {
   /** 当前阶段：pending（已排队未跑）/ uploading / done / error。 */
   status: 'pending' | 'uploading' | 'done' | 'error';
-  /** 0-100；multipart 无进度回调，上传中固定 0、完成时 100（不伪造百分比）。 */
+  /** 0-100；上传期间是真实字节进度（直传的 XHR onprogress），完成时 100。 */
   progress: number;
   /** 错误信息（status='error' 时）。 */
   error?: string;

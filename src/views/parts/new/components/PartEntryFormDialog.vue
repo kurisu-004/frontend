@@ -21,6 +21,10 @@
   - 2026-10-17（客户无限层级改造）：options 改吃 `buildCustomerTree` 的产物（任意
     深度），cascader label 改走 `customer_path`；「必须落叶子」的校验在父组件
     `onAddConfirm`，本组件只负责展示。
+  - 2026-10-15（翻转时序）：图纸区的 `<CosUploader>` 换成 `<el-upload
+    :auto-upload="false">`，**只暂存本地 File**。五个上传回调 prop 与对应的 emit 全部
+    删除，改成一个 `drawingFileChange(file: File | null)`。上传发生在建单成功之后，
+    由父 composable 的 `runDrawingUploadPhase` 负责。
 -->
 
 <template>
@@ -160,33 +164,31 @@
 
       <el-form-item label="图纸">
         <div class="drawing-uploader">
-          <!-- 2026-09-17 M4：图纸上传走 CosUploader（前端直传 COS tmp 区）。
-               - accept=".pdf" + :multiple=false：单 PDF 限；
-               - :max-size-m-b="300"：与 nginx 300m 上限对齐；
-               - 不开 computeHash：sha 由 composable.requestDrawingUpload 内
-                 computeSha256 算一次（避免大 PDF 算两次）；
-               - @change 本地 wrapper trim 旧项只留最新；
-               2026-09-28：组件侧 el-upload 内部列表泄漏已修（clearFiles +
-               自实现 limit），trim hack 可保留作为 UX（replace 语义）。
-               2026-09-28 迁移拆分：组件路径 @/components/CosUploader.vue →
-               @/components/CosUploader/index.vue；prop 名 :request-upload →
-               :get-upload-grant（2026-09-28 重命名）。 -->
-          <CosUploader
-            ref="uploaderRef"
-            :get-upload-grant="requestDrawingUpload"
+          <!-- 2026-10-15 翻转时序：这里**只暂存本地 File，不发任何请求**。
+               - :auto-upload="false" + 不给 action：el-upload 不会把文件发给任何地址；
+               - :limit="1"：单 PDF 限（换选 = 替换）；
+               - :on-change：选中新文件 → 暂存并重建 blob URL（预览用）；
+               - :on-remove：清暂存。
+               真正的上传发生在「提交创建」成功之后（`usePartBatchManual` 的
+               `runDrawingUploadPhase`），走直传链路。 -->
+          <el-upload
+            :auto-upload="false"
+            :show-file-list="true"
+            :limit="1"
             accept=".pdf"
-            :multiple="false"
-            :max-size-m-b="300"
-            tip="仅支持 PDF；提交时自动随表图号列点击预览（待新增一览 → 点图号）。"
-            empty-text="未选择图纸（可选）"
-            @change="handleUploaderChange"
-            @uploaded="onDrawingUploadedLocal"
-            @all-done="emit('drawingAllDone')"
-            @error="onDrawingUploadErrorLocal"
-            @pick-error="onPickErrorLocal"
-          />
-          <p v-if="editing && localForm.drawingName" class="form-hint">
-            当前图纸：{{ localForm.drawingName }}；重新上传将替换。
+            :file-list="drawingFileList"
+            :on-change="onDrawingChange"
+            :on-remove="onDrawingRemove"
+          >
+            <el-button plain>选择 PDF 图纸（可选）</el-button>
+          </el-upload>
+          <p class="form-hint">
+            仅支持 PDF（最大 300MB）。图纸会在**零件创建成功后**自动上传；点「提交创建」之前不会
+            发起任何上传。
+          </p>
+          <p v-if="localForm.drawingName" class="form-hint">
+            已选择：{{ localForm.drawingName }}
+            <template v-if="editing">（重新选择将替换）</template>
           </p>
         </div>
       </el-form-item>
@@ -197,7 +199,6 @@
       <el-button
         type="primary"
         :loading="dialogSubmitting"
-        :disabled="drawingUploading"
         @click="emit('confirm')"
       >
         {{ editing ? '保存到列表' : '加入列表' }}
@@ -214,14 +215,13 @@
 // emit 命名遵循 vue/custom-event-name-casing（仓库 lint 规则）：camelCase，
 // 仅 update:* 协议事件可含连字符。
 
-import { computed, reactive, ref, toRaw, watch } from 'vue';
-import { ElMessage, type CascaderOption } from 'element-plus';
-import CosUploader from '@/components/CosUploader/index.vue';
+import { computed, reactive, toRaw, watch } from 'vue';
 import type {
-  CosUploadedItem,
-  CosUploaderItem,
-  CosUploadGrant,
-} from '@/components/CosUploader/useCosUploader';
+  CascaderOption,
+  UploadFile,
+  UploadFiles,
+  UploadRawFile,
+} from 'element-plus';
 import type { FormState } from '../composables/usePartBatchManual';
 import type { PartEntryFieldErrors, PartEntryInput } from '../partEntrySchema';
 import type { Applicant } from '@/types/applicant';
@@ -251,16 +251,13 @@ interface Props {
    *  命名不带 on 前缀（与 script 内 helper 区分，避免 vue/no-dupe-keys）。 */
   customerChange: (pickedId: unknown) => Promise<void>;
   applicantSelect: (item: Record<string, unknown>) => void;
-  /** 2026-09-17 M4：图纸上传五回调。
-   * 2026-09-28 重命名：返回类型 CosUploadSession → CosUploadGrant。 */
-  requestDrawingUpload: (files: File[]) => Promise<CosUploadGrant>;
-  drawingUploaded: (item: CosUploadedItem) => void;
-  drawingItemsChange: (items: CosUploaderItem[]) => void;
-  drawingAllDone: () => void;
-  drawingUploadError: (item: CosUploaderItem) => void;
-  /** 「加入列表」按钮 loading + 图纸上传中 disabled。 */
+  /**
+   * 2026-10-15：图纸暂存回调（**不是上传**）。传新选的文件；传 null 表示用户移除。
+   * 父组件只暂存 File，真正的上传发生在建单成功之后。
+   */
+  drawingFileChange: (file: File | null) => void;
+  /** 「加入列表」按钮 loading。 */
   dialogSubmitting: boolean;
-  drawingUploading: boolean;
 }
 
 const props = defineProps<Props>();
@@ -271,10 +268,6 @@ const emit = defineEmits<{
   close: [];
   closed: [];
   validateField: [field: keyof PartEntryInput];
-  drawingItemsChange: [items: CosUploaderItem[]];
-  drawingUploaded: [item: CosUploadedItem];
-  drawingAllDone: [];
-  drawingUploadError: [item: CosUploaderItem];
 }>();
 
 /** el-cascader 的 props 配置（2026-10-17 客户无限层级改造后重写注释）。
@@ -326,61 +319,61 @@ watch(
   { deep: true },
 );
 
-// 2026-09-17 M4：CosUploader ref（用于 handleUploaderChange trim + @closed 清队列）。
-const uploaderRef = ref<InstanceType<typeof CosUploader> | null>(null);
-
 /**
- * 本地 @change wrapper：组件侧 :limit="0" + :multiple="false"，配合自实现
- * planPick 拦截超限（2026-09-28 整改）。trim hack 保留作为 UX（replace 语义）
- * ——选第 N 个 PDF 后保留最新一条，把前 N-1 条从 cos-uploader 内部移出。
+ * el-upload 的 `:file-list`：把父 composable 暂存的 File 包成一条 el-upload 行。
+ *
+ * 受控用法（而不是让 el-upload 自管内部列表）—— 暂存的权威是父组件的 `form`，
+ * el-upload 只是它的视图。
+ *
+ * ⚠️ `uid` 是 **number**（EP 的 `UploadFile.uid` 声明），所以不能拿文件名当键；这里用
+ * 「字节数 + 修改时间」哈希成整数（同一份文件在两次渲染里必须落同一个 uid，否则
+ * el-upload 会把它当新行、列表越点越长）。纯前端展示用的键，不需要跨会话唯一。
  */
-async function handleUploaderChange(items: CosUploaderItem[]): Promise<void> {
-  if (items.length > 1) {
-    const trimCount = items.length - 1;
-    for (let i = 0; i < trimCount; i += 1) {
-      const it = items[i];
-      if (it) {
-        await uploaderRef.value?.removeItem(it.client_ref);
-      }
-    }
-  }
-  emit('drawingItemsChange', items);
+function fileUidOf(f: File): number {
+  let h = f.size % 2147483647;
+  for (const ch of f.name) h = (h * 31 + ch.charCodeAt(0)) % 2147483647;
+  return h;
+}
+
+const drawingFileList = computed<UploadFile[]>(() => {
+  const f = props.form.drawingFile;
+  if (!f) return [];
+  const uid = fileUidOf(f);
+  // ⚠️ EP 的 `UploadFile.raw` 类型是 `UploadRawFile`（= File & { uid: number }），
+  // 所以这里要包一层带 uid 的 File。`new File([f], ...)` **不复制字节**（Blob 按引用
+  // 传），成本可忽略；而省掉它就会在 on-change 里丢 uid。
+  const raw = Object.assign(new File([f], f.name, { type: f.type }), { uid }) as UploadRawFile;
+  return [{ name: props.form.drawingName ?? f.name, uid, status: 'ready', raw }];
+});
+
+/** el-upload on-change：只暂存，不上传。选了新文件即替换（:limit=1 的语义）。 */
+function onDrawingChange(file: UploadFile, _files: UploadFiles): void {
+  const raw = file.raw as File | undefined;
+  if (!raw) return;
+  props.drawingFileChange(raw);
+}
+
+/** el-upload on-remove：清暂存。 */
+function onDrawingRemove(): void {
+  props.drawingFileChange(null);
 }
 
 /**
- * el-dialog @closed 钩子：先清 CosUploader 队列（best-effort 清理 COS tmp 对象），
- * 再发 'closed' 让父 composable 走 onDialogClosed 清 form / formErrors / 临时状态。
+ * el-dialog @closed 钩子：让父 composable 走 onDialogClosed 清 form / formErrors。
+ *
+ * 2026-10-15：这里原本还要 `await uploaderRef.value?.clear()`（清理 COS tmp 对象）——
+ * 直传链路下对话框里根本没有上传过任何东西，那一步整体删除。
  */
 function handleClosed(): void {
-  void uploaderRef.value?.clear();
   emit('closed');
 }
 
-// cascader / applicant / drawing 事件直接透传 — 父 composable 持有状态机。
+// cascader / applicant 事件直接透传 — 父 composable 持有状态机。
 function onCustomerChangeLocal(pickedId: unknown): Promise<void> {
   return props.customerChange(pickedId);
 }
 function onApplicantSelectLocal(item: Record<string, unknown>): void {
   props.applicantSelect(item);
-}
-function onDrawingUploadedLocal(item: CosUploadedItem): void {
-  emit('drawingUploaded', item);
-}
-function onDrawingUploadErrorLocal(item: CosUploaderItem): void {
-  emit('drawingUploadError', item);
-}
-
-/**
- * 2026-09-28 新增：pickError 统一展示。caller 侧用 ElMessage 显示组件产出的
- * 选文件阶段错误消息（size/accept/getUploadGrant/multiple）。
- *
- * 组件自身不再直接弹 ElMessage（沿 P2 错误反馈通道统一约定）：业务侧 handler
- * 由 caller 决定，本视图用 ElMessage.error 展示。
- *
- * 2026-09-28 重命名：requestUpload → getUploadGrant。
- */
-function onPickErrorLocal(message: string, _file: File): void {
-  ElMessage.error(message);
 }
 </script>
 

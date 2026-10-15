@@ -13,7 +13,7 @@
 // 函数会写 `commitStage` 或 `pdfSubmitting`。
 
 import { computed, ref, watch, type ComputedRef } from 'vue';
-import { uploadFileObject } from '@/api/files/objects';
+import { directUpload } from '@/utils/directUpload';
 import { isPartFileDuplicateError, type PartFileKind } from '@/types/part_file';
 import { runWithConcurrency } from './usePartBatchShared';
 import type { PdfBatchState } from './usePartBatchPdfState';
@@ -65,11 +65,12 @@ export function usePartBatchPdfUploads(
   const { effectiveChildren } = rowSeg;
 
   /**
-   * 2026-10-04 定：并发上限。瓶颈在后端内存 —— `upload_part_file` 把整份 multipart
-   * 读进内存（`&[u8]`）再转存对象存储，单文件上限 300MB（`cos.max_file_size`），
-   * 所以 6 是「几路并发不至于把后端内存打爆」的保守值，不是吞吐最优值。
-   * 不取更小的 3：文件字节现在全过后端，限制在服务端一侧（对象存储直传链路才是
-   * 浏览器侧受限），按浏览器侧的余量取值对后端没有意义。
+   * 并发上限 6。
+   *
+   * 2026-10-04 定的 6，理由是「几路并发不至于把后端内存打爆」（那时整份 multipart 读进
+   * 后端进程）。2026-10-15 改直传后瓶颈换到了浏览器：每个 job 是一次全文件 PUT，6 路是
+   * 「不会把单台工位机的上行带宽被十几路分片打散、也不会超出浏览器对同域并发连接的上限」
+   * 的保守值。数值沿用，没有实测数据支撑改它。
    */
   const PART_UPLOAD_CONCURRENCY = 6;
 
@@ -280,6 +281,21 @@ export function usePartBatchPdfUploads(
   }
 
   /**
+   * 2026-10-15：把一个 job 的**上传进度**回写到它所属的 cell。
+   *
+   * 直传后进度是真的（multipart 时代这一格恒为 0，见 `UploadStatusCellView.vue` 的说明），
+   * 而 cell 是按 jobKey 聚合的：一份原件被多个 row 共享时该 cell 名下有多个 job，此刻取
+   * 「任何一个在途 job 的最新进度」。`syncCells` 在状态转 done / error 时会覆写 progress，
+   * 所以本函数只管「uploading 那一段」；cell 不在 uploading 态时直接忽略（该 job 的进度
+   * 已经不该显示了）。
+   */
+  function markJobProgress(jobKey: string, kind: PartFileKind, percent: number): void {
+    const cell = cellOf(jobKey, kind);
+    if (!cell || cell.status !== 'uploading') return;
+    cell.progress = percent;
+  }
+
+  /**
    * 2026-10-21：记一个 job 的**终局**（成功清错 / 失败记原因）并立刻把 cell 同步过来。
    *
    * `error` 省略即判成功（清掉该 job 的失败记录），给出即记进失败清单。
@@ -381,12 +397,13 @@ export function usePartBatchPdfUploads(
       markJobState(job.id, 'uploading');
       try {
         const isAssembly = job.target === 'assembly';
-        await uploadFileObject(
-          isAssembly ? 'ASSEMBLY' : 'PART',
-          job.ownerId,
-          isAssembly ? 'ASSEMBLY_MASTER' : job.kind,
-          job.entry.file,
-        );
+        await directUpload({
+          ownerKind: isAssembly ? 'ASSEMBLY' : 'PART',
+          ownerId: job.ownerId,
+          kind: isAssembly ? 'ASSEMBLY_MASTER' : job.kind,
+          file: job.entry.file,
+          onProgress: (percent) => markJobProgress(job.jobKey, job.kind, percent),
+        });
         settleJob(job, 'done');
       } catch (e) {
         if (isPartFileDuplicateError(e)) {

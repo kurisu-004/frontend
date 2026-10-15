@@ -64,14 +64,14 @@ vi.mock('pdf-lib', () => {
 });
 
 // Tab 2 走「建工单 + 逐 owner 后置上传」，composable 从 @/api/parts 导入
-// batchCreateParts、从 @/api/files/objects 导入 uploadFileObject —— mock 必须覆盖
+// batchCreateParts、从 @/utils/directUpload 导入 directUpload —— mock 必须覆盖
 // 全部被 import 的导出，否则模块解析失败。
 vi.mock('@/api/parts', () => ({
   batchCreateParts: vi.fn(),
 }));
 
-vi.mock('@/api/files/objects', () => ({
-  uploadFileObject: vi.fn(),
+vi.mock('@/utils/directUpload', () => ({
+  directUpload: vi.fn(async () => ({ item: { id: 'f' }, alreadyExists: false })),
 }));
 
 vi.mock('@/views/parts/new/composables/usePartsNewDraft', () => ({

@@ -579,10 +579,9 @@ export type AssemblyDetailFlatSchema = z.infer<typeof assemblyDetailFlatSchema>;
 /** 装配件详情 `files[]` 的元素形状（`AssemblyFileRef`，3 字段）。
  *
  * 唯一消费方是 `assemblyDetailFlatSchema` 的 files 段（`GET /assemblies/{id}` 的
- * 详情响应）。⚠️ 它**不是**文件对象域的形状：上传端点 `POST /files/objects` 的响应是
- * **单个 `PartFileItem`**（前端 12 字段，后端 `PartFileOut` 15 字段，见
- * `@/types/part_file.ts::PartFileItem`，由 `api/assembly.ts::uploadAssemblyPdf` 包
- * `uploadFileObject` 发出），两者字段集不通用。
+ * 详情响应）。⚠️ 它**不是**文件对象域的形状：写入链路的登记端点
+ * `POST /files/objects/confirm` 回的是**单个 `PartFileItem`**（前端 12 字段，后端
+ * `PartFileOut` 15 字段，见 `@/types/part_file.ts::PartFileItem`），两者字段集不通用。
  * `PartFileItem` 走列文件路径的 `partFileSchema` 守门（见上）。 */
 
 /** 装配件创建响应（`POST /api/v2/assemblies` 的 201 body）：顶层实体 + 刚建出的子件。

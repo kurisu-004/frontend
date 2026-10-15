@@ -11,22 +11,22 @@
 //
 // 2026-09-29 修复：cncPrograms / setupSheets 改为从 usePartFilesListQuery 派生
 //（owner 全量按 kind 桶），砍 1 个冗余 RTT（原本 listPartCncPrograms +
-// listPartSetupSheets 两个独立 alias 端点）。download / delete / upload 改走
-// 文件对象 native 端点（`GET /files/objects/{id}/url`、`POST /files/objects/{id}/delete`）
-// / files 域配对端点（`POST /files/cnc/pairs`）。`api/files/cnc.ts` 仅
-// 保留 uploadCncPair 一条函数。
+// listPartSetupSheets 两个独立 alias 端点）。download / delete 改走文件对象 native 端点
+//（`GET /files/objects/{id}/url`、`POST /files/objects/{id}/delete`）。
 //
-// 2026-10-13 files 域重组：上述 3 条端点硬切
-// `/part-files/*` + `/cnc-programs/pairs` → `/files/objects/*` + `/files/cnc/pairs`
-// （旧路径 404、无 alias），api 模块同步由 `api/parts/file` + `api/cnc` 迁到
-// `api/files/objects` + `api/files/cnc`。下方注释里提到的 4 条 cnc alias 端点
+// 2026-10-15：配对上传从 `POST /files/cnc/pairs`（multipart 一次带两份文件）改为
+// 直传链路（`utils/directUpload.ts`：upload-intents → XHR PUT → confirm），配对关系
+// 由 confirm 的 `pair_with_file_id` 表达；`api/files/cnc.ts` 随之整文件删除。
+//
+// 2026-10-13 files 域重组：download / delete 两条端点硬切 `/part-files/*` →
+// `/files/objects/*`（旧路径 404、无 alias）。下方注释里提到的 4 条 cnc alias 端点
 // （download-url / delete 等）已被后端删除。
 
 import { computed, type ComputedRef, type Ref } from 'vue';
 import { ElMessage, type UploadFile } from 'element-plus';
 import { useQueryClient } from '@tanstack/vue-query';
-import { uploadCncPair } from '@/api/files/cnc';
 import { deletePartFile, getPartFileDownloadUrl } from '@/api/files/objects';
+import { directUpload } from '@/utils/directUpload';
 import type { PartFileItem } from '@/types/part_file';
 import { usePermissions } from '@/composables/usePermissions';
 import {
@@ -181,23 +181,42 @@ export function usePartCncGroups(partId: Ref<string>): UsePartCncGroupsReturn {
   }
 
   /**
-   * 配对上传业务：逐个上传 G 代码 + 一次设定单（setup 走 SHA-256 dedup）。
+   * 配对上传业务：对每个 G 代码依次传 G_CODE + SETUP_SHEET 两个文件。
    * 由 PartCncCard 调起，参数为 dialog 内收集的 raw File 列表。
    *
-   * 2026-09-29 修复：uploadCncPair 已迁到 canonical 配对端点
-   * （field 重映射：gcode_file → g_code、setup_file → setup_sheet；新增 data
-   * JSON 文本字段含 part_id）。2026-10-13 随 files 域重组硬切为
-   * `POST /api/v2/files/cnc/pairs`（原 `/api/v2/cnc-programs/pairs`，旧路径 404、无 alias）。
-   * 成功后 invalidate owner 文件列表让 UI 自动 refresh pair 列表。
+   * 2026-10-15：改走直传链路（upload-intents → XHR PUT → confirm），配对关系由
+   * confirm 的 `pair_with_file_id` 表达。两个方向不能反：配对是**有向的**，
+   *   1. G_CODE 先单独传完（confirm **不带** `pair_with_file_id`），拿到它的文件行 id；
+   *   2. SETUP_SHEET 再传，confirm 时带 `pair_with_file_id: gFile.id`。
+   * 反过来（先传设定单）拿不到 G_CODE 的 id，配不上。N 个 G 代码共用**同一份**
+   * SETUP_SHEET，即设定单只传一次、与第一个 G 代码配对 —— 后端按 (part, kind) 唯一，
+   * 同一份设定单传第二遍必撞 21108。
    */
   async function onPairUpload(rawGcodes: File[], setupFile: File): Promise<boolean> {
     if (rawGcodes.length === 0 || !setupFile) return false;
+    const ownerId = partId.value;
     try {
       for (const gcode of rawGcodes) {
-        await uploadCncPair(partId.value, gcode, setupFile);
+        // 1) G 代码：单独传，拿到文件行 id 作为配对锚。
+        const gRes = await directUpload({
+          ownerKind: 'PART',
+          ownerId,
+          kind: 'G_CODE',
+          file: gcode,
+        });
+        // 2) 设定单：confirm 时带上 G 代码的文件 id 完成配对。
+        //    秒传命中（内容与库里已有设定单相同）时后端直接返回那一行，
+        //    本次没有真的 PUT —— 这一行仍然按成功收（文件确实已存在且配对信息由后端维护）。
+        await directUpload({
+          ownerKind: 'PART',
+          ownerId,
+          kind: 'SETUP_SHEET',
+          file: setupFile,
+          pairWithFileId: gRes.item.id,
+        });
       }
       ElMessage.success(`配对上传成功（${rawGcodes.length} 个 G 代码 + 1 个设定单）`);
-      await invalidatePartFilesListQuery(qc, partId.value);
+      await invalidatePartFilesListQuery(qc, ownerId);
       return true;
     } catch (e) {
       ElMessage.error((e as Error).message ?? '配对上传失败');

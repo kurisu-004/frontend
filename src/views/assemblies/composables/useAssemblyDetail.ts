@@ -30,8 +30,8 @@ import {
   getAssembly,
   softDeleteAssembly,
   updateAssembly,
-  uploadAssemblyPdf,
 } from '@/api/assembly';
+import { directUpload } from '@/utils/directUpload';
 import { api } from '@/api/http';
 import type { Customer } from '@/api/customer';
 // 2026-09-26：客户全集改走共享 query useCustomersQuery（CustomerList 写后失效自动 refetch）。
@@ -445,10 +445,13 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
     }
   }
 
-  /** 上传一份总装 PDF（`uploadAssemblyPdf` → `POST /files/objects`，owner_kind=ASSEMBLY
-   *  + kind=ASSEMBLY_MASTER）。该端点是纯文件入库：只做 SHA-256 CAS + COS PUT +
-   *  INSERT `t_part_file`，**不建任何子件** ⇒ 成功文案只说总装图已保存，子件请另行
-   *  添加。响应是单个 `PartFileItem`（detail / children 走 fetchData() 重拉）。 */
+  /** 上传一份总装 PDF（直传链路：upload-intents → XHR PUT → confirm，owner=ASSEMBLY
+   *  + kind=ASSEMBLY_MASTER）。这条链路的终点是纯文件入库：登记 `t_part_file` 一行，
+   *  **不建任何子件** ⇒ 成功文案只说总装图已保存，子件请另行添加。detail / children
+   *  走 fetchData() 重拉。
+   *
+   *  2026-10-15：传输由「后端 multipart 代理」改为「预签 URL 直传对象存储」。交互不变
+   *  （选文件即上传），受益是文件字节不再过后端进程、且能拿到真进度。 */
   async function uploadPdfFn(file: UploadFile): Promise<boolean> {
     if (!file.raw) return false;
     if (!file.name.toLowerCase().endsWith('.pdf')) {
@@ -457,7 +460,12 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
     }
     if (!assemblyId.value) return false;
     try {
-      await uploadAssemblyPdf(assemblyId.value, file.raw);
+      await directUpload({
+        ownerKind: 'ASSEMBLY',
+        ownerId: assemblyId.value,
+        kind: 'ASSEMBLY_MASTER',
+        file: file.raw,
+      });
       await fetchData();
       ElMessage.success('上传成功：总装 PDF 已保存（子件请单独添加）');
       return true;

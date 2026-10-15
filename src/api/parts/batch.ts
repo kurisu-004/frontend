@@ -14,7 +14,6 @@
 // 运行时不会产生 ESM 循环。
 
 import { api } from '@/api/http';
-import type { FileBinding } from '@/types/part_file';
 import type { PartCreatePayload, PartDetailDto, PartOutDto } from './crud';
 
 export interface PartBatchFailure {
@@ -75,10 +74,10 @@ export interface PartBatchFilePayload {
  *  `serde-with-str`，**只认字符串**，且标度固定 2 位（`NUMERIC(12,2)` / `NUMERIC(14,2)`）
  *  ⇒ 这里声明成 string，别用 number（浮点尾数会被 Decimal 如实解析成 13 位小数）。
  *
- *  `drawing_file` / `model3d_file` 是后端契约字段：填了就由后端在建单事务内
- *  head + copy tmp → 正式 CAS key（入参形状见 `types/part_file.ts` 的 `FileBinding`）；
- *  不填则这一步跳过，文件改在建单之后由
- *  `POST /files/objects` 补传。 */
+ *  2026-10-15：文件字段（`drawing_file` / `model3d_file`）整体删除 —— 建单请求现在是
+ *  **纯 JSON、不带任何文件**：文件一律在建单成功后由 `utils/directUpload.ts` 走直传
+ *  链路（upload-intents → XHR PUT → confirm）补传。这样建单这一条链路不再需要「先把
+ *  字节传到 tmp 区、再让后端 head + copy 到正式位置」。 */
 interface PartBatchCreateItemFE {
   name: string;
   drawing_no: string;
@@ -97,10 +96,6 @@ interface PartBatchCreateItemFE {
    *  （`total_price: item.total_price`）、SQL 侧 `COALESCE(…, 0::numeric)`，
    *  **不**按 `unit_price × quantity` 重算 ⇒ 总额必须前端算好一并发，只发单价会落 0。 */
   total_price?: string | null;
-  /** 可选图纸文件绑定（DRAWING kind）。后端在建单事务内 head + copy tmp → 正式 CAS key。 */
-  drawing_file?: FileBinding;
-  /** 可选 3D 模型绑定（3D_MODEL kind），语义同上。 */
-  model3d_file?: FileBinding;
 }
 
 interface PartBatchCreateRequestFE {
@@ -124,29 +119,23 @@ interface PartBatchCreateOutFE {
   cleanup_tmp_keys?: string[];
 }
 
-/** `POST /parts/batch` 单 item 入参（含可选文件绑定）。
+/**
+ * `POST /parts/batch` 单 item 入参（**纯 JSON，不带文件**）。
  *
- *  `drawing_file` / `model3d_file` 是后端契约字段：填了就由后端在建单事务内
- *  head + copy tmp → 正式 CAS key；不填则建单不挂文件，文件走建单后的
- *  `POST /files/objects` 补传。 */
-export interface PartBatchCreatePayload extends PartCreatePayload {
-  /** 选填：图纸文件绑定。 */
-  drawing_file?: FileBinding;
-  /** 选填：3D 模型文件绑定。 */
-  model3d_file?: FileBinding;
-}
+ * 2026-10-15：原 `drawing_file` / `model3d_file` 两个文件绑定字段整体删除。文件一律在
+ * 建单成功后由 `utils/directUpload.ts` 走直传链路补传（两个 Tab 现在口径一致）。
+ */
+export type PartBatchCreatePayload = PartCreatePayload;
 
 /**
- * 批量新建零件（JSON）。`POST /parts/batch` 只发 JSON items，**不带文件** ——
- * 图纸 / 3D 走建单之后的 `POST /files/objects` 后置补传（见 `@/api/files/objects`
- * 的 `uploadFileObject`）；本函数的 `created[].sourceIndex` 就是 caller 把
+ * 批量新建零件（JSON）。`POST /parts/batch` 只发 JSON items，**不带任何文件** ——
+ * 图纸 / 3D 一律在建单成功后由 `utils/directUpload.ts` 走直传链路补传（Tab 1 手工录入
+ * 与 Tab 2 PDF 批量现在口径一致）；本函数的 `created[].sourceIndex` 就是 caller 把
  * 「建出来的 part」对回「本地哪一行」的锚。
  *
- * 2026-10-04：item 侧两个文件绑定字段的当前分工 —— `drawing_file` 只有 Tab 1
- * 「手工录入」在填（该 Tab 走 `useCosUploader` 前端直传 COS，建单时把 tmp_key +
- * sha 一并绑进来）；Tab 2「PDF 批量上传」是建单后逐 part 后置上传，建单请求里
- * 不带这两个字段。`model3d_file` 目前全仓没有填它的调用点。两者的差别只在文件
- * 到达建单请求之前还是之后，字段本身是后端契约字段，保留。
+ * 2026-10-15：`drawing_file` / `model3d_file` 两个文件绑定字段随 multipart 链路一起
+ * 删除。改前只有 Tab 1 在填（它把预上传拿到的 tmp_key 塞进建单请求）、Tab 2 不填，
+ * 两个 Tab 的时序不一样；现在两边都是「建单 → 再传」，建单请求恒定是纯 JSON。
  *
  * 2026-10-13：**后端 multipart 端点 `POST /parts/batch-with-pdfs` 已下线、无 alias**
  * （后端把它连同 `GET /parts/by-work-type/{id}` 一并作为「零消费方」端点摘除 —— 全仓
@@ -287,8 +276,6 @@ function toPartBatchCreateItem(it: PartBatchCreatePayload): PartBatchCreateItemF
     applicant_id: it.applicant_id,
     unit_price: it.unit_price,
     total_price: it.total_price,
-    drawing_file: it.drawing_file,
-    model3d_file: it.model3d_file,
   };
 }
 

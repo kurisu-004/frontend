@@ -6,8 +6,8 @@
 //   - item 不带 drawing_file / model3d_file（文件走后置上传）；
 //   - **装配件不再展平成独立 part**：顶层与子件由一次 `POST /assemblies` 建出，
 //     子件的 part id 来自响应的 `created_children[].id`；
-//   - 上传同打 `POST /files/objects`，按目标分流 owner_kind：装配件顶层传
-//     `ASSEMBLY`，子件图纸 / 3D 与独立零件传 `PART`；
+//   - 上传走直传引擎（2026-10-15：upload-intents → XHR PUT → confirm），按目标分流
+//     owner_kind：装配件顶层传 `ASSEMBLY`，子件图纸 / 3D 与独立零件传 `PART`；
 //   - 服务端拒行 → 回 idle，**一个文件都不上传**；
 //   - 建单「部分行成立」→ 建成的行移出本地表格，再提交只发剩下的失败行；装配件组失败
 //     ⇒ 整组（顶层 + 全部子件）留在表里可重提，已成功的组不再重复建；
@@ -41,11 +41,14 @@ const mocks = vi.hoisted(() => ({
   batchCreateParts: vi.fn(),
   createAssembly: vi.fn(),
   /**
-   * 生产代码唯一的上传入口 `uploadFileObject`，**4 个实参逐字断言在这里与各条用例**。
+   * 上传记录器，**4 个实参逐字断言在这里与各条用例**。
    *
-   * 下面三个是**按 (ownerKind, kind) 分片的记录器**：由 uploadFileObject 的实现转发
-   * 而来，使各条用例「哪个 owner 拿到了哪个文件 / 哪条链路抛的错」的断言逐字保留。
-   * 签名各自复原成旧的 `(ownerId, file)`。
+   * 2026-10-15：生产代码的上传入口换成 `utils/directUpload.ts::directUpload`（对象入参），
+   * 本记录器保留旧的位置参数签名，由文件里那条 shim 从对象摊平而来 ⇒ 各条用例的断言
+   * 逐字不变。
+   *
+   * 下面三个是**按 (ownerKind, kind) 分片的记录器**：由本记录器的实现转发而来，使各条
+   * 用例「哪个 owner 拿到了哪个文件 / 哪条链路抛的错」的断言逐字保留。
    *
    * ⚠️ **转发层不得吞掉 kind**：`ownerKind === 'ASSEMBLY'` 分支就地断言 kind 必须是
    * `ASSEMBLY_MASTER`（后端把请求里的 kind 原样写进 `t_part_file.kind`，传 `DRAWING`
@@ -99,8 +102,21 @@ vi.mock('@/api/parts', () => ({
 vi.mock('@/api/assembly', () => ({
   createAssembly: mocks.createAssembly,
 }));
-vi.mock('@/api/files/objects', () => ({
-  uploadFileObject: (...args: unknown[]) => mocks.uploadFileObject(...args),
+// 2026-10-15：上传实现从 multipart 代理（`uploadFileObject(ownerKind, ownerId, kind, file)`）
+// 换成直传引擎（`directUpload({ ownerKind, ownerId, kind, file, onProgress })`）。
+// 下面这层 shim 把对象入参摊回旧的位置参数 ⇒ 本 spec 里 130+ 条「哪个 owner 拿到了
+// 哪个 kind / 哪个文件」的断言逐字保留，不需要跟着改写。
+vi.mock('@/utils/directUpload', () => ({
+  directUpload: (o: {
+    ownerKind: string;
+    ownerId: string;
+    kind: string;
+    file: File;
+    onProgress?: (p: number) => void;
+  }) => {
+    o.onProgress?.(50);
+    return mocks.uploadFileObject(o.ownerKind, o.ownerId, o.kind, o.file);
+  },
 }));
 vi.mock('@/views/parts/new/composables/usePartsNewDraft', () => ({
   usePartsNewDraft: () => ({
@@ -716,7 +732,10 @@ describe('上传重试（job 粒度）', () => {
     expect(mocks.uploadPartDrawing).toHaveBeenCalledTimes(1);
     const cell = api.getRowPdfCell(row);
     expect(cell?.status).toBe('uploading');
-    expect(cell?.progress).toBe(0);
+    // 2026-10-15：传输改成预签 URL 直传后，上传期间 progress 是**真字节进度**
+    // （改前是 multipart 代理上传，没有进度回调，这一格恒为 0）。上面 shim 里
+    // `directUpload` 会回抛一次 50，所以这里钉住「上传中时进度已经动起来」。
+    expect(cell?.progress).toBeGreaterThan(0);
     // 阶段机与 cell 是两个独立信号：这里一并钉住「有在途」这个语义
     expect(api.commitStage.value).toBe('uploading');
 
