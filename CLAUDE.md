@@ -350,10 +350,12 @@ v2 后端约 40 个事件里，**只有 `SCAN_BANNER` 的 payload 带展示字�
 
 ### 产物体积：低频重物必须懒（2026-10-21 新增）
 
-**硬判据**：一个包只要「用户很少做那个动作」，它就不能由**静态 import** 进任何页面级 chunk。当前登记在懒加载名单上的六个包及其懒法见 [`docs/first-load-budget.md`](docs/first-load-budget.md)（echarts / pdf.js / xlsx / pdf-lib / three / cos-js-sdk-v5，另有 occt-wasm 见 [occt-wasm-asset-pipeline.md](occt-wasm-asset-pipeline.md)）。
+**硬判据**：一个包只要「用户很少做那个动作」，它就不能由**静态 import** 进任何页面级 chunk。当前登记在懒加载名单上的五个包及其懒法见 [`docs/first-load-budget.md`](docs/first-load-budget.md)（echarts / pdf.js / xlsx / pdf-lib / three，另有 occt-wasm 见 [occt-wasm-asset-pipeline.md](occt-wasm-asset-pipeline.md)）。
+
+⚠️ **`cos-js-sdk-v5` 已整包删除**（2026-10-15）：上传链路从「STS 临时凭证 + SDK 直传」换成「预签 PUT URL + `XMLHttpRequest` 直传」（`utils/presignedPut.ts`），整条路径连同它的懒加载入口 `utils/cosSdk.ts` 一并消失。它当初之所以在懒加载名单上（见下 memo 纪律那条），现在已经没有对应物。
 
 - **改成懒加载的前提是低频组件已被用户动作门控**（`v-if` / `el-tab-pane` / `destroy-on-close` 弹窗 / 按钮处理函数）⇒ 多出的那一跳 chunk 落在用户已在等的时段里，首屏无感。**页面 `setup` 期就执行的逻辑（路由守卫、pinia 初始化）不能改异步。**
-- **第三方重物包统一走 `utils/` 下的懒加载入口**，不要在各个 composable 里各写一句 `await import(...)`：`utils/pdfjs.ts::loadPdfjs()`、`utils/cosSdk.ts::loadCosSdk()` 同款形态（**memo + 失败清位**）。memo 不是洁癖 —— vitest 的 `vi.mock` 对**运行期反复发生的动态 import** 不稳定（同一测试里第 1 次命中桩、第 2 次绕过桩拿到真包，真包会真的发网络请求），memo 之后整个进程只 import 一次，桩与生产都稳定。完整症状见 `cosSdk.ts` 文件头。
+- **第三方重物包统一走 `utils/` 下的懒加载入口**，不要在各个 composable 里各写一句 `await import(...)`：`utils/pdfjs.ts::loadPdfjs()` 是这一族现存的唯一入口（`utils/cosSdk.ts` 随 `cos-js-sdk-v5` 删除而消失，同款形态的**memo + 失败清位**）。memo 不是洁癖 —— vitest 的 `vi.mock` 对**运行期反复发生的动态 import** 不稳定（同一测试里第 1 次命中桩、第 2 次绕过桩拿到真包，真包会真的发网络请求），memo 之后整个进程只 import 一次，桩与生产都稳定。完整症状见本节下面那段「为什么必须 memo」的展开。
 - **改动前后各跑一次「首屏 + 各路由静态闭包」的对照**（方法见 `docs/first-load-budget.md`「怎么复核」）。判据是**静态 import 闭包**：动态 import 是点按钮才发生的，不该算进首屏。
 - ⚠️ **产物层证明不了运行时正确**。改完仍需真机人工确认三条：dashboard / statistics 的图表渲染（配色与 v5 主题一致）、PDF 图纸预览出图且中文不画成方块、STEP / IGES 的 3D 预览渲染成功。
 

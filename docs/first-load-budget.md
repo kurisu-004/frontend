@@ -52,7 +52,7 @@
 
 ## 为什么：六类重物，全部是「低频功能挂在静态 import 上」
 
-产物里最重的六个包，每一个都对应一个「用户很少做」的动作，但基线里它们都由**静态
+产物里最重的五个包，每一个都对应一个「用户很少做」的动作，但基线里它们都由**静态
 import** 进入某个页面级 chunk。处置一律是「改成懒加载」，不改功能：
 
 | 包                                                  | raw    | 谁原来静态引用它                                                                    | 现在怎么懒                                                   |
@@ -62,12 +62,16 @@ import** 进入某个页面级 chunk。处置一律是「改成懒加载」，�
 | xlsx                                                | 424 KB | `utils/{bid,historicalPrice,purchaseOrder}ExcelParser`                              | 三个 parser 改 type-only import，`utils` 由调用方传入        |
 | pdf-lib                                             | 420 KB | `utils/mergePdfs.ts`                                                                | `mergePdfBlobs` 函数体内 `await import`                      |
 | three.js                                            | 505 KB | `components/FileListCard.vue`、`views/production/components/DrawingPreviewPane.vue` | `defineAsyncComponent`（都挂在 `v-if`/`el-tab-pane` 门控内） |
-| cos-js-sdk-v5                                       | 165 KB | `composables/useCosUpload.ts`、`CosUploader/useCosUploader.ts`                      | `utils/cosSdk.ts::loadCosSdk()`（memo）                      |
+
+**`cos-js-sdk-v5`（165 KB）已从依赖里彻底删除**（2026-10-15）：上传链路从「STS 临时
+凭证 + SDK 直传」换成「预签 PUT URL + `XMLHttpRequest`」，不再需要 SDK，也不存在它的
+懒加载入口（`utils/cosSdk.ts` 随之删除）。这条路当初要多付一次 memo 与失败清位的代价
+（见 `utils/pdfjs.ts` 同款形态），如今整条路径都不复存在。
 
 另有 `occt-wasm` 的 JS 胶水（109 KB）与 22 MB wasm 早已由
 [`occt-wasm-asset-pipeline.md`](occt-wasm-asset-pipeline.md) 处理，不在本文件重复。
 
-**判据**（这六条能成立，靠的是同一个前提）：低频组件要么挂在一个**用户动作门控**的
+**判据**（这五条能成立，靠的是同一个前提）：低频组件要么挂在一个**用户动作门控**的
 `v-if` / `el-tab-pane` / `destroy-on-close` 弹窗里，要么本来就只在某个按钮的处理函数里
 跑 ⇒ 把它改成异步加载，代价都落在「用户已经在等」的那段时间里，首屏与页面首帧无感。
 
@@ -100,7 +104,7 @@ gzip -9c dist/assets/index-*.js | wc -c
 
 判据是**静态 import 闭包**（动态 import 是点按钮才发生的，不该算进首屏）。
 逐 chunk 解析 `from "./x"` 与 `import("./x")` 两种形态后从路由 chunk 做一次 BFS 即可；
-把 `three-*` / `pdf-*` / `xlsx-*` / `es-*` / `cos-js-sdk-v5-*` / `occt-wasm-*` 标出来，
+把 `three-*` / `pdf-*` / `xlsx-*` / `es-*` / `occt-wasm-*` 标出来，
 「进页面就白带哪几个重物」一眼可见。改动前后各跑一次这张表对比。
 
 ### 运行时（真机人工确认一次）

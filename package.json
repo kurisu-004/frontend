@@ -21,7 +21,6 @@
     "@tanstack/vue-query": "^5.103.2",
     "@vueuse/core": "^15.0.0",
     "axios": "^1.18.1",
-    "cos-js-sdk-v5": "^1.10.1",
     "dayjs": "^1.11.20",
     "echarts": "^6.1.0",
     "element-plus": "~2.14.2",
@@ -68,7 +67,6 @@
     "node": ">=20.19.0"
   },
   "allowScripts": {
-    "cos-js-sdk-v5@1.10.1": true,
     "@parcel/watcher@2.6.0": true,
     "vue-demi@0.14.10": true,
     "fsevents@2.3.3": true
