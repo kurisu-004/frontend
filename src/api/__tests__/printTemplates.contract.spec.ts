@@ -386,9 +386,22 @@ describe('printTemplates 的扩展名闸（与后端 21102 判据同源）', () 
   //   只放跨域通用工具……它 import 域内 composable 类型会让 `utils/` 反向依赖 `views/`
   //   （层次倒挂）」。倒挂不会产生任何报错、任何 spec 变红，只是让「通用工具」在打包图上
   //   拖着某个域进首屏闭包，所以只能扫源码守。
+  // ⚠️ **强度有限**（同本文件 E2 / U1b / U6 的免责口径）：这是**正则扫源码**，不是依赖图
+  //   分析。① 只认 `@/views/` 这个 alias 前缀，写成相对路径 `'../../views/…'` 或
+  //   `import … from '@/views'`（无尾斜杠）都绕得过去；② 剥不掉注释，所以**注释里**出现
+  //   `from '@/views/…'` 会误报（这偏保守、只会让用例更早红，不是漏判）；③ `vi.mock` 的
+  //   specifier 与 `require()` 形态不覆盖。当「`utils/` 里有人引了 views」的粗筛用 ——
+  //   「确实有没有跨层依赖」最终的判据是构建产物的模块图，本用例钉的是**别随手引入**。
   it('E4：`src/utils/` 零 `views/` 依赖（层次倒挂守卫）', () => {
     const utilsRoot = new URL('../../utils/', import.meta.url);
     const offenders: string[] = [];
+    // 引号三选一（单 / 双 / 反引号）都认；`@/` alias 与相对路径两种写法都算。
+    const crossLayer = [
+      /\bfrom\s*['"`]@\/views(?:\/|['"`])/,
+      /\bimport\(\s*['"`]@\/views(?:\/|['"`])/,
+      /\bfrom\s*['"`][^'"`]*(\.\.\/)+views(?:\/|['"`])/,
+      /\bimport\(\s*['"`][^'"`]*(\.\.\/)+views(?:\/|['"`])/,
+    ];
     const walk = (dir: URL): void => {
       for (const e of readdirSync(dir, { withFileTypes: true })) {
         const child = new URL(`${e.name}${e.isDirectory() ? '/' : ''}`, dir);
@@ -396,8 +409,7 @@ describe('printTemplates 的扩展名闸（与后端 21102 判据同源）', () 
           walk(child);
         } else if (/\.(ts|vue)$/.test(e.name)) {
           const src = readFileSync(child, 'utf8');
-          // 只认 import / 动态 import 的 specifier，不认注释里提到的路径。
-          if (/\bfrom\s*'@\/views\//.test(src) || /import\(\s*'@\/views\//.test(src)) {
+          if (crossLayer.some((re) => re.test(src))) {
             offenders.push(child.pathname.split('/utils/')[1]!);
           }
         }

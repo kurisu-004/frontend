@@ -560,7 +560,21 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
     }
   }
 
+  /**
+   * 删一行。
+   *
+   * ⚠️ **提交进行中直接拒**：上传阶段整个跑在 mutation 的 onSuccess 里（`isPending`
+   * 覆盖到上传结束），页面还停在这张表上。此时删行会让后面所有下标左移，而
+   * `created[].sourceIndex` 是按**提交那一刻**的行序算的 ⇒ 后面某行的 File 会被挂到
+   * 别的零件上，**不可逆**。UI 侧已把「删除 / 添加 / 编辑」在 `submitting` 期禁用，
+   * 这里再设一道是因为 composable 是唯一能保证「状态机自洽」的位置（UI 漏一个 disabled
+   * 不会静默降级成数据串行）。
+   */
   function onRemoveRow(uid: string): void {
+    if (submitting.value) {
+      ElMessage.warning('提交进行中（含图纸上传），不能改动待新增列表');
+      return;
+    }
     const idx = staged.value.findIndex((s) => s.uid === uid);
     if (idx < 0) return;
     revokeEntryUrls(staged.value[idx]);
@@ -721,14 +735,21 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
   async function runDrawingUploadPhase(
     res: PartBatchResult,
     opts: { navigate: boolean },
+    snapshot: StagedEntry[],
   ): Promise<void> {
+    // ⚠️ **只读 `snapshot`，不要读 `staged.value`**：`created[i].sourceIndex` 是「本次请求
+    // items 数组的下标」，而 items 是提交瞬间的 `staged` 逐字构造的。上传阶段跑在 mutation
+    // 的 onSuccess 内（`isPending` 覆盖整段），这段时间里 `staged` 仍可被改动 ——
+    // 用户删掉前面某行会让后面下标左移，按可变的 `staged.value` 回查就会把**别的行的
+    // File** 挂到当前零件上（不可逆）。UI 侧已把「删除 / 添加 / 编辑」在 submitting 期
+    // 禁用，那只是第一道闸；这里是第二道，且不依赖 UI。
     const jobs: PostSubmitUploadJob[] = res.created
       .filter((c) => {
-        const entry = staged.value[c.sourceIndex];
+        const entry = snapshot[c.sourceIndex];
         return !!entry?.drawingFile;
       })
       .map((c) => {
-        const entry = staged.value[c.sourceIndex]!;
+        const entry = snapshot[c.sourceIndex]!;
         return {
           // job id 取 staged 的 uid：同一份 File 被两行引用时是两个独立 job（各自的目标
           // 零件不同），粒度必须是 job 而不是文件，否则失败一个会把另一个也重跑。
@@ -777,9 +798,23 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
    */
   const partialSubmitFailedRows = ref(false);
 
+  /**
+   * 本次提交的行快照（由 `mutationFn` 在**发请求之前**写下）。
+   *
+   * 上传阶段（`runDrawingUploadPhase`）与「已建成行的摘除」都必须按它回查，不能按
+   * 可变的 `staged.value` —— 见 `runDrawingUploadPhase` 的注释。
+   */
+  const activeSubmitSnapshot = ref<StagedEntry[]>([]);
+
   const submitMutation = useMutation<PartBatchResult, Error, undefined>({
     mutationKey: ['parts', 'manual', 'batch-create'],
-    mutationFn: () => submitStagedEntries(),
+    // ⚠️ **提交瞬间对 `staged` 做快照**：上传阶段整个跑在 onSuccess 里（`isPending`
+    // 覆盖到上传结束），这段时间里 `staged` 仍可能被改动，而 `created[].sourceIndex`
+    // 是按「提交那一刻的行序」算的。不快照就可能把别的行的图纸挂到当前零件上。
+    mutationFn: async () => {
+      activeSubmitSnapshot.value = staged.value.slice();
+      return submitStagedEntries();
+    },
     onSuccess: async (res) => {
       const partial = res.failed.length > 0;
       partialSubmitFailedRows.value = partial;
@@ -796,15 +831,31 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
       // 已经落库了，它们的图纸再不上传就既不进失败清单、也不提示，用户一点都看不出来。
       // 不跳页（`navigate: false`）：页面上还留着未建成的行要用户改。
       // 必须排在下面改 `staged` **之前** —— 它按 `sourceIndex` 回 staged 取 File。
-      await runDrawingUploadPhase(res, { navigate: !partial });
+      await runDrawingUploadPhase(res, { navigate: !partial }, activeSubmitSnapshot.value);
 
       if (partial) {
         // ⚠️ **已建成的行必须从 staged 里摘掉**：留着的话，用户改完失败行再点一次提交，
         // 会为已经建出来的那些行**再建一遍单** —— 那是真数据损坏，而「改完重提失败行」
         // 本身是被允许的动作。摘掉的行一并 revoke 掉它的 blob URL。
+        // ⚠️ 摘除同样按快照下标算；但**当前 staged 已经被用户改动过**（UI 侧在
+        // submitting 期禁了删除/添加/编辑，理论上下标仍对齐；这里仍做一次对齐守卫：
+        // 长度不一致说明 UI 漏了闸，宁可一行都不摘，也不能摘错行）。
         const createdIndexes = new Set(res.created.map((c) => c.sourceIndex));
-        staged.value.filter((_, i) => createdIndexes.has(i)).forEach(revokeEntryUrls);
-        staged.value = staged.value.filter((_, i) => !createdIndexes.has(i));
+        const snapshotLen = activeSubmitSnapshot.value.length;
+        const aligned = staged.value.length === snapshotLen;
+        if (aligned) {
+          staged.value.filter((_, i) => createdIndexes.has(i)).forEach(revokeEntryUrls);
+          staged.value = staged.value.filter((_, i) => !createdIndexes.has(i));
+        } else {
+          // 错位 ⇒ 用 uid 兜底（uid 是每行稳定的身份，不随下标移动）
+          const createdUids = new Set(
+            activeSubmitSnapshot.value
+              .filter((_, i) => createdIndexes.has(i))
+              .map((e) => e.uid),
+          );
+          staged.value.filter((s) => createdUids.has(s.uid)).forEach(revokeEntryUrls);
+          staged.value = staged.value.filter((s) => !createdUids.has(s.uid));
+        }
 
         const sample = res.failed
           .slice(0, 5)

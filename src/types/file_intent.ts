@@ -45,13 +45,20 @@ export interface UploadIntentItemIn {
   /**
    * 字节数，**必须发 JSON 字符串**。
    *
-   * ⚠️ 后端 `UploadIntentItemIn.file_size` 与 `ConfirmFileIn.file_size` 都挂了
+   * 后端 `UploadIntentItemIn.file_size` 与 `ConfirmFileIn.file_size` 都挂了
    * `#[serde(deserialize_with = "deserialize_i64")]`，而那个反序列化器的实现是
    * `String::deserialize(d)?.parse::<i64>()` —— **只接受字符串**，裸 number 会在 axum
    * 的 `Json` 提取器层就 422，返的还是**纯文本**而非 `R<T>` 信封（前端拿不到业务码）。
-   * 取值侧反过来：出参 `PartFileOut.file_size` 是裸 i64 ⇒ 序列化成 number，所以
-   * `existing_file.file_size` / `PartFileItem.file_size` 那边仍是 number/string 混合的
-   * 既有形状，**不要**跟着这里一起改。
+   *
+   * ⚠️ **入参这条例外与出参那条例外是两件不同的事，别互相推导**（2026-10-15 订正）：
+   *   - 入参（这里）：`deserialize_i64` 只认字符串 ⇒ **发** number 会 422。
+   *   - 出参（`types/part_file.ts::PartFileItem.file_size`）：后端 `PartFileOut.file_size`
+   *     是 `i64` + `#[serde(serialize_with = "serialize_i64")]`（序列化器实现就是
+   *     `serialize_str(&v.to_string())`）⇒ 序列化成**字符串**，前端声明的 `string` 是对的，
+   *     **不要**改成 number —— 会把零件详情 / 装配件 / CNC 三页的文件大小显示与
+   *     `formatBytes` 全部打歪。
+   * 换句话说：入参的 string 是「反序列化器的单向要求」，出参的 string 是「序列化器的
+   * 精度保护」，两者碰巧都是 string，但没有任何因果关系。
    */
   file_size: string;
   content_sha256: string;

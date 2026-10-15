@@ -1,8 +1,9 @@
 // 后端 print-templates 域（送货单打印模板）API。走 `@/api/http` 统一 axios 客户端。
 //
-// 2026-10-16 新建。端点表（URL / method / body 冻结，与本文件逐字对齐）：
-//   （2026-10-15 删除：POST /print-templates 上传端点 —— 改走直传链路 upload-intents +
-//    files/objects/confirm，owner_kind='CUSTOMER'、kind='DELIVERY_TEMPLATE'）
+// 端点表（URL / method / body 冻结，与本文件逐字对齐）—— 本文件只含**读侧三端 + 软删**：
+//   上传不在这里：模板字节走直传链路（upload-intents 签预签 URL → XHR PUT →
+//   files/objects/confirm 登记，owner_kind='CUSTOMER'、kind='DELIVERY_TEMPLATE'），
+//   由 `views/printTemplates/composables/usePrintTemplatesStore.ts` 编排。
 //   GET  /print-templates?customer_id=&limit=&offset= → 列表（**出参只有 `{items, total}`**）
 //   GET  /print-templates/resolve?customer_id=      → 打印时按一级客户自动选用（出参**嵌套**）
 //   GET  /print-templates/{id}/content              → 取 xlsx 字节（**裸响应体，不是信封**）
@@ -21,10 +22,7 @@
 //
 // ⚠️ **URL 一律不带尾斜杠**（`/print-templates` 而不是 `/print-templates/`）：后端把各域
 // router nest 到 `/print-templates` 之下、域内首条路由注册在 `/`，nest 会把它折叠成 prefix
-// 本身 —— 带尾斜杠会 404。上面那张端点表里 `POST /print-templates` 的准确读法是「后端源码
-// 里注册的是 `.route("/", get(list).post(upload))`，被 nest 折叠后就是 prefix 本身」。
-// 本仓同款形态的既有实证见 `api/files/objects.ts` 里各端点的 URL 写法
-// （「URL 无尾斜杠：后端 nest 把内层的 `/` 折叠成 prefix 本身，带尾斜杠会 404」）。
+// 本身 —— 带尾斜杠会 404。本仓同款形态的既有实证见 `api/files/objects.ts` 里各端点的 URL 写法。
 //
 // ⚠️ **后端不渲染 xlsx**：送货单 xlsx 的生成自 2026-10-08 起完全在前端本地完成（hucre），
 // 后端只负责「存模板字节 + 绑一级客户 + 取字节」。本文件因此**没有**任何「渲染 / 转 PDF /
@@ -33,7 +31,9 @@
 // ⚠️ **同一 L1 二次上传是「替换」而不是新增多条**（后端按 L1 一对一覆盖），前端无需处理：
 // 列表里那一个 L1 永远只有一行，重复上传不会堆行。
 //
-// 权限：列表 / 上传 / 软删三端 **MANAGER 独占**（后端 handler 层 require_role）；
+// 权限：列表 / 软删两端 **MANAGER 独占**（后端 handler 层 require_role）；模板**上传**
+// 走的是文件对象域的直传链路，它的角色闸同样是 MANAGER（判据见
+// `utils/printTemplatePermissions.ts::canManageTemplates`，RBAC 面板里本域**没有**权限点码）；
 // `resolve` 与 `content` 两端走权限点 `delivery_note.print`（与打印入口同一个码）。
 //
 // 守门点分工（CLAUDE.md「Zod schema-first」）：
@@ -88,26 +88,14 @@ export interface DeletePrintTemplatePayload {
  *
  * ⇒ 两件事分属两处、**不要合并也不要各判一半**：这里只答「能不能上传」，
  * 那边只答「发什么 content_type」。
+ *
+ * 上传的**其余**两道闸（ZIP magic 首 4 字节切片 + 逐格版式校验）在
+ * `views/printTemplates/composables/usePrintTemplatesStore.ts::uploadChecked` 里 ——
+ * 本文件既不含上传端点，也不承担任何上传前的校验。
  */
 export function isPrintTemplateXlsxName(name: string): boolean {
   return name.toLowerCase().endsWith(PRINT_TEMPLATE_ACCEPT_EXT);
 }
-
-// 2026-10-15：删除 `uploadPrintTemplate`（`POST /api/v2/print-templates`，multipart）。
-// 模板字节改走直传链路：`views/printTemplates/composables/usePrintTemplatesStore.ts`
-// 调 `utils/directUpload.ts`（owner_kind='CUSTOMER' + kind='DELIVERY_TEMPLATE'），
-// 校验闸（逐格 + ZIP magic 切片）留在 store 里、位置不变。
-// 下面这段错误码表随之失效 —— 直传链路的错误码由 upload-intents / confirm 两个端点
-// 各自定义，不再由本域汇总：
-// - 40300 非 MANAGER（守卫先于 body 解析）；
-// - 40001 空字节 / 缺 `data` / 缺 `file` / 缺文件名 / `customer_id` 非数字；
-// - 20104 客户不存在 · 已软删 · **不是一级客户** —— ⚠️ 与 21105「owner 不存在」在后端是
-//   两条码，前端文案按「不是一级客户或已不存在」统一表述即可，不必区分；
-// - 21102 扩展名非 xlsx / **前 4 字节不是 `PK\x03\x04`**（不是 ZIP）—— ⚠️ 这一条在
-//   直传链路里**移到了前端**（store 的 ZIP magic 切片校验，见该文件注释）；
-// - 21103 超大小上限；
-// - 21105 owner 不存在（`upload_file_for_owner` 内的**兜底**，正常流程走不到）；
-// - 21108 撞 `uk_t_part_file_single`（并发双传同一 L1 的极端形态）。
 
 /**
  * 模板列表（`GET /api/v2/print-templates?customer_id=&limit=&offset=`）。

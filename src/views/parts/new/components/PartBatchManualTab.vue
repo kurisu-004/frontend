@@ -80,7 +80,12 @@
         <span class="staging-count">共 {{ staged.length }} 条</span>
       </div>
       <div class="staging-header-actions">
-        <el-button type="primary" @click="openAddDialog">
+        <!-- ⚠️ `submitting` 时禁用「添加 / 删除 / 编辑」三处（与下方「清空」同款口径）：
+             上传阶段整个跑在 mutation 的 onSuccess 里（`isPending` 覆盖到上传结束），
+             页面仍停在这张表上。此时改 `staged` 会让 `created[].sourceIndex`（按提交
+             那一刻的行序算的）指向别的行 ⇒ 别人的图纸挂到当前零件上，不可逆。
+             composable 侧另有 uid 兜底，但 UI 不该把这个状态暴露成可点。 -->
+        <el-button type="primary" :disabled="submitting" @click="openAddDialog">
           <el-icon><Plus /></el-icon>
           <span>添加零件</span>
         </el-button>
@@ -88,7 +93,11 @@
     </div>
 
     <!-- 空态：点空白处打开 dialog -->
-    <div v-if="staged.length === 0" class="empty-zone" @click="openAddDialog">
+    <div
+      v-if="staged.length === 0 && !submitting"
+      class="empty-zone"
+      @click="openAddDialog"
+    >
       <el-icon :size="64" color="#c0c4cc"><DocumentAdd /></el-icon>
       <p class="empty-primary">暂无待新增零件</p>
       <p class="empty-sub">点击此处或右上角「+ 添加零件」开始添加</p>
@@ -158,6 +167,7 @@
             link
             type="danger"
             size="small"
+            :disabled="submitting"
             @click.stop="onRemoveRow((row as StagedEntry).uid)"
             >删除</el-button
           >
@@ -312,7 +322,9 @@
     </el-descriptions>
     <template #footer>
       <el-button @click="closePreviewDialog">关闭</el-button>
-      <el-button type="primary" @click="onEditFromPreview">编辑此条</el-button>
+      <el-button type="primary" :disabled="submitting" @click="onEditFromPreview">
+        编辑此条
+      </el-button>
     </template>
   </el-dialog>
 </template>

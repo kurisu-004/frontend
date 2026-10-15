@@ -130,7 +130,12 @@ export interface PartFileUrlResult {
   kind: PartFileKind;
   file_type: string;
   original_filename: string;
-  /** 该出参 file_size 是纯 i64（未走雪花序列化器）→ JSON number，与列表项的 string 不同 */
+  /**
+   * 字节数。后端 `PartFileWithUrlOut.file_size` 是**裸 i64**（没挂
+   * `serialize_i64`）⇒ 序列化成 JSON number，与同域 `PartFileItem.file_size`（对应
+   * `PartFileOut`，那条挂了 `serialize_i64` ⇒ 字符串）的差异是**后端两个 VO 的真实差异**，
+   * 不是前端笔误。
+   */
   file_size: number;
   content_type: string;
   content_sha256: string | null;

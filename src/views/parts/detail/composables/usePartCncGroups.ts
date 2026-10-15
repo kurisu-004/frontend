@@ -181,59 +181,79 @@ export function usePartCncGroups(partId: Ref<string>): UsePartCncGroupsReturn {
   }
 
   /**
-   * 配对上传业务：对每个 G 代码依次传 G_CODE + SETUP_SHEET 两个文件。
-   * 由 PartCncCard 调起，参数为 dialog 内收集的 raw File 列表。
+   * 配对上传业务：传一份 G_CODE + 一份 SETUP_SHEET 并把两行配起来。
+   * 由 PartCncCard 调起，参数为 dialog 内收集的 raw File。
    *
-   * 2026-10-15：改走直传链路（upload-intents → XHR PUT → confirm），配对关系由
-   * confirm 的 `pair_with_file_id` 表达。两个方向不能反：配对是**有向的**，
-   *   1. G_CODE 先单独传完（confirm **不带** `pair_with_file_id`），拿到它的文件行 id；
-   *   2. SETUP_SHEET 再传，confirm 时带 `pair_with_file_id: gFile.id`。
-   * 反过来（先传设定单）拿不到 G_CODE 的 id，配不上。N 个 G 代码共用**同一份**
-   * SETUP_SHEET，即设定单只传一次、与第一个 G 代码配对 —— 后端按 (part, kind) 唯一，
-   * 同一份设定单传第二遍必撞 21108。
+   * ## 为什么**只收一个** G 代码（不是「可以传 N 个」）
    *
-   * ⚠️ **配对只在真的走完 confirm 时才成立**（秒传短路那一支不发 confirm，
-   * `pair_with_file_id` 不上行 ⇒ 库里两行都是未配对）：所以设定单命中秒传时本函数
-   * **抛错**而不是按成功收。详见第 2 步的注释。
+   * 后端 `part_file::service::bind_uploaded_file` 的第 7 步对**单文件 kind** 一律先
+   * `soft_delete_active_by_part_kind(owner, kind)` 再 INSERT，而该 kind 清单明确包含
+   * `G_CODE` / `SETUP_SHEET` ⇒ 每个 (owner, kind) 只有一条**活跃**行。第二个 G 代码不是
+   * 「多存一条」，而是**把第一个软删掉**（旧行 `deleted_at` 置位、桶里的对象也不删）。
+   * DB 层的 `uk_t_part_file_single` 部分唯一索引**不含**这两个 kind（只覆盖 DRAWING /
+   * 3D_MODEL / ASSEMBLY_MASTER / CAD_2D / DELIVERY_TEMPLATE），所以这里不是撞约束报错，
+   * 而是**静默顶掉** —— 更糟，因为它连报错都没有。
+   *
+   * 同一份设定单也传不了第二遍：`grant_upload_intents` 按 (owner, kind, sha) 查活跃行，
+   * 第二遍必然 `already_exists: true` ⇒ 秒传短路**不发 confirm** ⇒ `pair_with_file_id`
+   * 不上行 ⇒ 配对建立不起来。而 `pair_with_file_id` 的后端语义是**双向覆写互写**
+   * （`set_paired_file_id(new → pair)` + `set_paired_file_id(pair → new)`，不清对面旧指向），
+   * 一行 setup 本来就只能配一个 G_CODE。
+   *
+   * ⇒ 多选在这里**没有可表达的业务含义**，与其让它一路走到「传了、报错、且无出路」，
+   * 不如在入口就拒掉。UI 侧（`PartCncCard.vue`）的 `multiple` 与「可多个」文案同此口径。
+   *
+   * ## 配对的两个方向不能反
+   *
+   * 1. G_CODE 先单独传完（confirm **不带** `pair_with_file_id`），拿到它的文件行 id；
+   * 2. SETUP_SHEET 再传，confirm 时带 `pair_with_file_id: gFile.id`。
+   *
+   * 反过来（先传设定单）拿不到 G_CODE 的 id，配不上。
    */
   async function onPairUpload(rawGcodes: File[], setupFile: File): Promise<boolean> {
     if (rawGcodes.length === 0 || !setupFile) return false;
+    if (rawGcodes.length > 1) {
+      ElMessage.error(
+        '同一个零件只能配一对 G 代码 + 设定单（库里每个零件的 G 代码 / 设定单各只保留一份，' +
+          '再传会顶掉上一份）。请只保留一个 G 代码后重试。',
+      );
+      return false;
+    }
     const ownerId = partId.value;
+    const gcode = rawGcodes[0]!;
     try {
-      for (const gcode of rawGcodes) {
-        // 1) G 代码：单独传，拿到文件行 id 作为配对锚。
-        const gRes = await directUpload({
-          ownerKind: 'PART',
-          ownerId,
-          kind: 'G_CODE',
-          file: gcode,
-        });
-        // 2) 设定单：confirm 时带上 G 代码的文件 id 完成配对。
-        //
-        // ⚠️ **秒传命中必须当成失败抛出去，不能按成功收**（2026-10-15）：秒传短路那一支
-        // **不发 confirm**（`utils/directUpload.ts::takeInstant`），`pair_with_file_id`
-        // 根本不会上行；而后端 confirm 走 (owner, kind, sha) 兜底时只是**返回那一行既有
-        // 行**、不做 pair 互写 ⇒ 库里两行 `paired_file_id` 都还是 null。读侧
-        // （`cncSetupGroups`）正是靠它配对的 ⇒ 用户看到的是「新传的 G 代码 + 未配对桶里的
-        // 旧设定单」，而界面上一切正常。
-        //
-        // 「补发一次 confirm」救不回来（那条路不做互写），所以这里唯一的诚实处置是显式失败：
-        // 让用户知道这份设定单没有和 G 代码绑上，而不是弹一句「配对上传成功」。
-        const sRes = await directUpload({
-          ownerKind: 'PART',
-          ownerId,
-          kind: 'SETUP_SHEET',
-          file: setupFile,
-          pairWithFileId: gRes.item.id,
-        });
-        if (sRes.alreadyExists) {
-          throw new Error(
-            '设定单与库里已有的一份内容完全相同（秒传命中），本次没能把它与刚传的 G 代码配对。' +
-              '请先删除那份旧的设定单，或换一份设定单后重试。',
-          );
-        }
+      // 1) G 代码：单独传，拿到文件行 id 作为配对锚。
+      const gRes = await directUpload({
+        ownerKind: 'PART',
+        ownerId,
+        kind: 'G_CODE',
+        file: gcode,
+      });
+      // 2) 设定单：confirm 时带上 G 代码的文件 id 完成配对。
+      //
+      // ⚠️ **秒传命中必须当成失败抛出去，不能按成功收**：秒传短路那一支
+      // **不发 confirm**（`utils/directUpload.ts::takeInstant`），`pair_with_file_id`
+      // 根本不会上行；而后端 confirm 走 (owner, kind, sha) 兜底时只是**返回那一行既有
+      // 行**、不做 pair 互写 ⇒ 库里两行 `paired_file_id` 都还是 null。读侧
+      // （`cncSetupGroups`）正是靠它配对的 ⇒ 用户看到的是「新传的 G 代码 + 未配对桶里的
+      // 旧设定单」，而界面上一切正常。
+      //
+      // 「补发一次 confirm」救不回来（那条路不做互写），所以这里唯一的诚实处置是显式失败：
+      // 让用户知道这份设定单没有和 G 代码绑上，而不是弹一句「配对上传成功」。
+      const sRes = await directUpload({
+        ownerKind: 'PART',
+        ownerId,
+        kind: 'SETUP_SHEET',
+        file: setupFile,
+        pairWithFileId: gRes.item.id,
+      });
+      if (sRes.alreadyExists) {
+        throw new Error(
+          '设定单与库里已有的一份内容完全相同（秒传命中），本次没能把它与刚传的 G 代码配对。' +
+            '请先在「CNC 配对」里删掉那份旧的设定单，再重新上传。',
+        );
       }
-      ElMessage.success(`配对上传成功（${rawGcodes.length} 个 G 代码 + 1 个设定单）`);
+      ElMessage.success('配对上传成功（1 个 G 代码 + 1 个设定单）');
       await invalidatePartFilesListQuery(qc, ownerId);
       return true;
     } catch (e) {

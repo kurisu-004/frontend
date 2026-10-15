@@ -81,6 +81,7 @@ function harness() {
 
 const gcode = new File([new Uint8Array([1, 2, 3])], 'o1234.nc', { type: 'text/plain' });
 const setup = new File([new Uint8Array([4, 5, 6])], 'setup.nc', { type: 'text/plain' });
+const gcode2 = new File([new Uint8Array([7, 8, 9])], 'o5678.nc', { type: 'text/plain' });
 
 beforeEach(() => {
   mocks.directUpload.mockReset();
@@ -120,8 +121,33 @@ describe('usePartCncGroups::onPairUpload', () => {
     expect(ok).toBe(false);
     // 提示必须点名「配对没建起来」+ 给出补救动作，否则用户只会看到一句「配对上传失败」。
     expect(String(mocks.error.mock.calls[0]![0])).toContain('没能把它与刚传的 G 代码配对');
-    expect(String(mocks.error.mock.calls[0]![0])).toContain('删除那份旧的设定单');
+    expect(String(mocks.error.mock.calls[0]![0])).toContain('删掉那份旧的设定单');
     // 绝不能同时弹成功 —— 那正是「界面上一切正常、库里两行都没配对」的成因。
+    expect(mocks.success).not.toHaveBeenCalled();
+    expect(mocks.invalidate).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  // ⚠️ **N≥2 必须被拒**：后端 `bind_uploaded_file` 对单文件 kind 一律先
+  //   `soft_delete_active_by_part_kind` 再 INSERT，kind 清单含 G_CODE ⇒ 第二个 G 代码会
+  //   把第一个**静默顶掉**（DB 的 `uk_t_part_file_single` 部分唯一索引不含 G_CODE，
+  //   所以连约束报错都没有）；同一份设定单第二遍也必然秒传短路 ⇒ 配对建立不起来。
+  //   改前 UI 是 `multiple` + 「可多个」，选 2 个 ⇒ 第 2 轮撞秒传短路 ⇒ 报错「请删除旧的
+  //   设定单」—— 而那份「旧的」正是第 1 轮刚传的，删了重试又撞，**UI 上无出路**。
+  it('⚠️ 选了 2 个 G 代码 ⇒ 入口就拒，零请求零写入（而不是传到一半再失败）', async () => {
+    mocks.directUpload.mockResolvedValue({ item: { id: 'g-1' }, alreadyExists: false });
+    const { api, wrapper } = harness();
+
+    const ok = await api.onPairUpload([gcode, gcode2], setup);
+
+    expect(ok).toBe(false);
+    // 零请求：连第一个 G 代码都不该传（传了也只剩最后一个，前面的静默丢失）
+    expect(mocks.directUpload).not.toHaveBeenCalled();
+    expect(mocks.error).toHaveBeenCalledTimes(1);
+    const msg = String(mocks.error.mock.calls[0]![0]);
+    // 提示要说清**为什么**是单选（顶掉上一份），否则用户会以为是限制写错了
+    expect(msg).toContain('只能配一对');
+    expect(msg).toContain('顶掉上一份');
     expect(mocks.success).not.toHaveBeenCalled();
     expect(mocks.invalidate).not.toHaveBeenCalled();
     wrapper.unmount();

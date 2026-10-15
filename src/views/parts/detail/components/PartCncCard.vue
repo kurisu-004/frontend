@@ -104,17 +104,23 @@
     >
       <el-form label-width="100px">
         <el-form-item label="G 代码文件" for="">
+          <!-- ⚠️ **单选，不要加 `multiple`**：后端 `bind_uploaded_file` 对单文件 kind
+               一律先 soft_delete 旧的活跃行再 INSERT，而 kind 清单含 G_CODE ⇒ 第二个
+               G 代码会把第一个**静默顶掉**（既不报错也不并存）。同一零件的 G 代码 /
+               设定单各只保留一份，配对天然是 1:1。判据与限制见
+               `composables/usePartCncGroups.ts::onPairUpload`。 -->
           <el-upload
             :auto-upload="false"
             :show-file-list="true"
-            multiple
+            :limit="1"
             name="gcode_files"
             accept=".nc,.tap,.cnc,.mpf,.ngc"
             :file-list="pairGcodeFiles"
             :on-change="onPairGcodeChange"
             :on-remove="onPairGcodeRemove"
+            :on-exceed="onPairGcodeExceed"
           >
-            <el-button plain>选择 G 代码（可多个）</el-button>
+            <el-button plain>选择 G 代码（单个）</el-button>
           </el-upload>
         </el-form-item>
         <el-form-item label="CNC 设定单" for="">
@@ -151,6 +157,7 @@
 
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue';
+import { ElMessage } from 'element-plus';
 import type { UploadFile } from 'element-plus';
 import { Cpu, Upload } from '@element-plus/icons-vue';
 import { formatDateTime } from '@/utils/date';
@@ -209,10 +216,35 @@ const pairSetupFile = ref<File | null>(null);
 const pairUploading = ref(false);
 
 function onPairGcodeChange(file: UploadFile, _uploadFiles: UploadFile[]): void {
-  // 2026-08-25 T10p5：走 usePartCncGroups.fileList，失败扩展名时统一 ElMessage.warning 提示。
+  // 走 usePartCncGroups.fileList，失败扩展名时统一 ElMessage.warning 提示。
   pairGcodeFiles.value = props.fileList(
     pairGcodeFiles.value,
     file,
+    '.nc,.tap,.cnc,.mpf,.ngc',
+    true,
+  );
+}
+/**
+ * 已选一个再选一个时走这里（EP 的 `:limit="1"` + 受控 `:file-list` 下 `on-change`
+ * 排在 exceed 判定之后、不会触发）。单选语义下「换选」= 替换，所以直接取新文件。
+ */
+function onPairGcodeExceed(files: File[]): void {
+  const picked = files[0] as (File & { raw?: File }) | undefined;
+  const raw = picked?.raw ?? picked;
+  if (!raw) return;
+  // 走同一条 `fileList` 管道（它负责扩展名白名单 + uid 去重）。uid 取一个稳定负值：
+  // EP 派发的原生 `File[]` 里没有 uid，而 `fileList` 拿 uid 做去重键。
+  // `new File([raw], …)` 不复制字节（Blob 按引用传），只是补出 EP 要求的 `raw.uid`。
+  const uid = -Date.now();
+  const entry: UploadFile = {
+    uid,
+    name: raw.name,
+    status: 'ready',
+    raw: Object.assign(new File([raw], raw.name, { type: raw.type }), { uid }),
+  };
+  pairGcodeFiles.value = props.fileList(
+    pairGcodeFiles.value,
+    entry,
     '.nc,.tap,.cnc,.mpf,.ngc',
     true,
   );
@@ -240,6 +272,13 @@ function onPairUploadConfirm(): void {
     if (f.raw) raws.push(f.raw);
   }
   if (raws.length === 0 || !pairSetupFile.value) return;
+  // ⚠️ 兜底闸：`:limit="1"` 已保证只有 1 个，这里再判一次是因为 composable 侧也会拒
+  // 多选（见 usePartCncGroups.ts::onPairUpload）—— 两处同口径，UI 少一次往返、
+  // 逻辑侧仍然安全。
+  if (raws.length > 1) {
+    ElMessage.error('同一个零件只能配一对 G 代码 + 设定单，请只保留一个 G 代码。');
+    return;
+  }
   pairUploading.value = true;
   // shell 调 resolve(ok)：成功才关 dialog + 清空 files + reset submitting。
   emit('pairUpload', {

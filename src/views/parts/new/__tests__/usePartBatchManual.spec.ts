@@ -513,6 +513,93 @@ describe('usePartBatchManual', () => {
     w.unmount();
   });
 
+  // ⚠️ 提交进行中（上传阶段仍在 mutation 的 onSuccess 里跑）`staged` 被改动时，
+  //   图纸**仍要传到正确的 ownerId**。改前 `runDrawingUploadPhase` 按可变的 `staged.value`
+  //   回查 `created[].sourceIndex`，删掉前面某行会让后面下标左移 ⇒ A 的图纸挂到 B 上。
+  it('提交进行中 staged 被删行：图纸按提交瞬间的快照回查，仍传到正确的 ownerId', async () => {
+    let resolveBatch: (r: PartBatchResult) => void = () => {};
+    mocks.batchCreateParts.mockReturnValueOnce(
+      new Promise<PartBatchResult>((r) => {
+        resolveBatch = r;
+      }),
+    );
+    const w = harnessMount();
+    await flushPromises();
+    if (!captured) throw new Error('not captured');
+
+    const fileA = new File([new Uint8Array([1])], 'a.pdf');
+    const fileB = new File([new Uint8Array([2])], 'b.pdf');
+
+    // 第 0 行（带图纸 a.pdf）
+    captured.form.drawingNo = 'LT1';
+    captured.form.name = 'p1';
+    captured.form.customerId = 'c1';
+    captured.form.applicantName = 'bob';
+    captured.form.requestDate = '2026-09-24';
+    captured.form.plannedDeliveryDate = '2026-09-25';
+    captured.onDrawingFileChange(fileA);
+    await captured.onAddConfirm();
+    await nextTick();
+
+    // 第 1 行（带图纸 b.pdf）
+    captured.form.drawingNo = 'LT2';
+    captured.form.name = 'p2';
+    captured.onDrawingFileChange(fileB);
+    await captured.onAddConfirm();
+    await nextTick();
+    expect(captured.staged.value.length).toBe(2);
+
+    await captured.onSubmit();
+    await flushPromises();
+    expect(captured.submitting.value).toBe(true);
+
+    // 提交在途：模拟 UI 漏了闸，删掉第 0 行（后面下标左移）
+    captured.staged.value.splice(0, 1);
+    expect(captured.staged.value[0]!.drawingNo).toBe('LT2');
+
+    // 用**部分成功**（第 0 行建成、第 1 行未建成）才会走到「摘除已建成行」那一支
+    resolveBatch(mixedResult);
+    await drainSubmit();
+
+    // ① 传的是**快照里第 0 行**那份图纸（a.pdf），不是左移后占着 0 的 LT2（b.pdf）
+    expect(mocks.directUpload).toHaveBeenCalledTimes(1);
+    const sent = mocks.directUpload.mock.calls[0]![0] as { file: File; ownerId: string };
+    // happy-dom 的 File 跨 setup 边界不是同一引用，按 name 判身份（a.pdf / b.pdf 不重名）
+    expect(sent.file.name).toBe('a.pdf');
+    expect(sent.ownerId).toBe('p1');
+    // ② 长度已错位 ⇒ 摘除走 uid 兜底：已建成的 LT1 按 uid 摘（它已被用户删掉、摘不到），
+    //    **绝不能**把 LT2 当成 LT1 摘掉
+    expect(captured.staged.value.map((e) => e.drawingNo)).toEqual(['LT2']);
+
+    w.unmount();
+  });
+
+  // ⚠️ 提交进行中「删行」必须被 composable 拒掉 —— UI 的 `:disabled` 是第一道闸，
+  //   状态机自身是第二道（UI 漏一个 disabled 不该静默降级成数据串行）。
+  it('提交进行中 onRemoveRow 被拒（staged 不变、给出提示）', async () => {
+    let resolveBatch: (r: PartBatchResult) => void = () => {};
+    mocks.batchCreateParts.mockReturnValueOnce(
+      new Promise<PartBatchResult>((r) => {
+        resolveBatch = r;
+      }),
+    );
+    const w = harnessMount();
+    await flushPromises();
+    if (!captured) throw new Error('not captured');
+
+    await stageEntry(captured, 'LT1', 'bob');
+    await captured.onSubmit();
+    await flushPromises();
+    expect(captured.submitting.value).toBe(true);
+
+    captured.onRemoveRow(captured.staged.value[0]!.uid);
+    expect(captured.staged.value.length).toBe(1);
+
+    resolveBatch(okResult);
+    await drainSubmit();
+    w.unmount();
+  });
+
   it('申请人缓存未命中：getOrCreateApplicant 被调、payload 带新 id', async () => {
     mocks.batchCreateParts.mockResolvedValue(okResult);
     mocks.getOrCreateApplicant.mockResolvedValue({ id: 'appl-new' });

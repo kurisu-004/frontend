@@ -50,7 +50,7 @@ import {
   assertTemplateMatches,
   detectTemplateContract,
 } from '@/views/com/delivery/utils/deliveryNoteTemplate';
-import { XLSX_MIME } from '@/views/com/delivery/utils/deliveryNoteTemplateContract';
+import { XLSX_MIME } from '@/constants/mime';
 import { PRINT_TEMPLATE_ACCEPT_EXT, type PrintTemplateData } from '../printTemplateSchema';
 import { usePrintTemplateListQuery } from './usePrintTemplateListQuery';
 
