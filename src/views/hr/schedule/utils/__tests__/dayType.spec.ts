@@ -1,0 +1,121 @@
+// src/views/hr/schedule/utils/__tests__/dayType.spec.ts
+//
+// 2026-10-19 新建：日型展示元数据的单测。核心是**防双份定义漂移**：
+// `utils/dayType.ts` 只做展示层取数，6 档的**枚举真源必须仍是 `@/types/hr` 的
+// `HR_DAY_TYPES` / `HR_DAY_TYPE_META` / `isHrWorkday`。本文件把这条钉死 —— 有人在本文件
+// 旁边另抄一份 6 档字面量数组时，下面 T2 / T3 立刻红。
+
+import { describe, expect, it } from 'vitest';
+import { HR_DAY_TYPE_META, HR_DAY_TYPES, isHrWorkday, type HrDayType } from '@/types/hr';
+import {
+  HR_DAY_TYPE_OPTIONS,
+  crossDayText,
+  dailyMinutesText,
+  dayTypeColorKey,
+  dayTypeLabel,
+  dayTypeNeedsName,
+  isWorkdayDayType,
+} from '../dayType';
+
+describe('HR_DAY_TYPE_OPTIONS — 与 `@/types/hr` 同源', () => {
+  it('T1：6 档齐全且顺序逐字等于 `HR_DAY_TYPES`', () => {
+    expect(HR_DAY_TYPE_OPTIONS).toHaveLength(6);
+    expect(HR_DAY_TYPE_OPTIONS.map((o) => o.value)).toEqual([...HR_DAY_TYPES]);
+    // 逐字钉死（不是「集合相等」）：顺序变了就是展示顺序变了，必须有人决定。
+    expect([...HR_DAY_TYPES]).toEqual([
+      'WORKDAY',
+      'MAKEUP_WORKDAY',
+      'REST_DAY',
+      'STATUTORY_HOLIDAY',
+      'MAKEUP_HOLIDAY',
+      'CUSTOM_LEAVE',
+    ]);
+  });
+
+  it('T2：**每个 option 的 label / colorKey 都取自 `HR_DAY_TYPE_META`**（没抄第二份）', () => {
+    for (const opt of HR_DAY_TYPE_OPTIONS) {
+      expect(opt.label).toBe(HR_DAY_TYPE_META[opt.value].label);
+      expect(opt.colorKey).toBe(HR_DAY_TYPE_META[opt.value].colorKey);
+      expect(opt.label.length).toBeGreaterThan(0);
+      expect(opt.colorKey.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('T3：6 个色板键互不相同（否则两类日型在月历里长得一样）', () => {
+    const keys = HR_DAY_TYPE_OPTIONS.map((o) => o.colorKey);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it('T4：6 档中文标签齐全（无空串 / 无英文枚举漏出）', () => {
+    const labels = HR_DAY_TYPE_OPTIONS.map((o) => o.label);
+    expect(labels).toEqual([
+      '工作日',
+      '调休上班',
+      '休息日',
+      '法定节假日',
+      '调休放假',
+      '自定义休息',
+    ]);
+    for (const l of labels) expect(l).not.toMatch(/[A-Z_]{3,}/);
+  });
+});
+
+describe('isHrWorkday — 只有两档算上班', () => {
+  it('W1：`WORKDAY` / `MAKEUP_WORKDAY` 为真，其余四档为假', () => {
+    const workdayTypes = HR_DAY_TYPES.filter((t) => isHrWorkday(t));
+    expect(workdayTypes).toEqual(['WORKDAY', 'MAKEUP_WORKDAY']);
+    for (const t of HR_DAY_TYPES) {
+      expect(isHrWorkday(t)).toBe(t === 'WORKDAY' || t === 'MAKEUP_WORKDAY');
+    }
+  });
+
+  it('W2：`utils/dayType` 的转发与真源同判（页面只有一个入口）', () => {
+    for (const t of HR_DAY_TYPES) {
+      expect(isWorkdayDayType(t)).toBe(isHrWorkday(t));
+    }
+  });
+});
+
+describe('dayTypeLabel / dayTypeColorKey / dayTypeNeedsName', () => {
+  it('L1：label / colorKey 取自 META', () => {
+    expect(dayTypeLabel('CUSTOM_LEAVE')).toBe('自定义休息');
+    expect(dayTypeColorKey('MAKEUP_WORKDAY')).toBe('makeup-work');
+  });
+
+  it('L2：只有 `CUSTOM_LEAVE` 必填名称（后端 21907 的前端版）', () => {
+    const need = HR_DAY_TYPES.filter((t) => dayTypeNeedsName(t));
+    expect(need).toEqual(['CUSTOM_LEAVE']);
+  });
+
+  it('L3：未知日型不抛（守门在 Zod 那层，这里只保证标签渲染不炸）', () => {
+    const bogus = 'SOMETHING_ELSE' as HrDayType;
+    expect(dayTypeLabel(bogus)).toBe('SOMETHING_ELSE');
+    expect(dayTypeColorKey(bogus)).toBe('rest');
+  });
+});
+
+describe('crossDayText / dailyMinutesText — 班次派生值的展示', () => {
+  it('C1：`overflow_minutes = 0` → 无标注（不跨天）', () => {
+    expect(crossDayText(0)).toBe('');
+    expect(crossDayText(-30)).toBe('');
+  });
+
+  it('C2：不足一天按小时写（夜班收在次日 02:00 ⇒ 120 分钟 ⇒ `跨天 +2h`）', () => {
+    expect(crossDayText(120)).toBe('跨天 +2h');
+    // ⚠️ 写「+0天」等于没标 —— 90 分钟溢出截成整小时就会落进这个坑。
+    expect(crossDayText(90)).toBe('跨天 +2h');
+  });
+
+  it('C3：超过一天按天写', () => {
+    expect(crossDayText(24 * 60)).toBe('跨天 +1天');
+    expect(crossDayText(2 * 24 * 60)).toBe('跨天 +2天');
+    // 1.25 天按天算向下取整成 1（分钟数没被偷偷换算回小时）。
+    expect(crossDayText(30 * 60)).toBe('跨天 +1天');
+  });
+
+  it('C4：`daily_minutes` 人话（整小时不带分位）', () => {
+    expect(dailyMinutesText(480)).toBe('8h');
+    expect(dailyMinutesText(510)).toBe('8h30m');
+    expect(dailyMinutesText(0)).toBe('');
+  });
+});

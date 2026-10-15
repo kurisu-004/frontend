@@ -60,9 +60,11 @@ export interface ShiftOut {
   remark: string | null;
   /** 派生：**任一段** `end > '24:00'` 即为 true（跨天班次）。 */
   cross_day: boolean;
-  /** 派生：`max(end) - 24:00`，0 = 不跨天。与 `cross_day` 同源，前端不必自己算。 */
-  overflow_hours: number;
-  /** 派生：`Σ(end - start)`（分钟）。**跨天段按绝对差算**，与 `overflow_hours` 各自独立。 */
+  /** 派生：`max(end) - 24:00` 的**分钟数**，0 = 不跨天。与 `cross_day` 同源，前端不必自己算。
+   *  ⚠️ 单位是**分钟不是小时**：段值允许带分钟（夜班收在 `26:30` 这种次日 02:30 的偏移），
+   *  截成整小时会把 90 分钟溢出报成 1 小时，班次栏的「跨天 +N」标注随之失真。 */
+  overflow_minutes: number;
+  /** 派生：`Σ(end - start)`（分钟）。**跨天段按绝对差算**，与 `overflow_minutes` 各自独立。 */
   daily_minutes: number;
   /** 创建时间（后端 naive datetime 的字符串形态）。 */
   created_at: string;

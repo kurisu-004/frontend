@@ -73,7 +73,7 @@ export function isHrWorkday(dayType: HrDayType): boolean {
  *    - 24h 连做 = `{ start: '08:00', end: '32:00' }`。
  *  由此**「跨天班次的日期归属 = 工作开始时间所在日」由数据结构本身保证**，前端**不做任何
  *  跨天推断**（不要按 `end` 反推归属日，也不要在这里做「end < start ⇒ +1 天」的处理）。
- *  末段 `end > '24:00'` 即跨天，后端另给 `cross_day` / `overflow_hours` 两个派生字段。 */
+ *  末段 `end > '24:00'` 即跨天，后端另给 `cross_day` / `overflow_minutes` 两个派生字段。 */
 export interface ShiftSegmentOut {
   /** 段序号，从 1 起、连续递增（后端据此判乱序，重叠判据是按 seq 排完再比相邻区间）。 */
   seq: number;
