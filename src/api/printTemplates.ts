@@ -76,26 +76,19 @@ export interface DeletePrintTemplatePayload {
 }
 
 /**
- * 扩展名闸与 content-type 的关系。
+ * 扩展名是不是 `.xlsx`（大小写不敏感）。**发请求之前**用它拦一道：坏模板不该占一次往返，
+ * 更不该先落库再报错。
  *
- * 2026-10-16 review 第 1 轮 NIT-1：本文件原先有一个 `normalizeUploadContentType(file)`
- * —— 签名承诺「按扩展名给」，实现却是 `void file; return XLSX_MIME`（本域只允许一种扩展名，
- * 没有分支可写），与同域的 `PRINT_TEMPLATE_ACCEPT_EXT` / `isPrintTemplateXlsxName` 职责重叠：
- * 「是不是合法的 xlsx」已经由扩展名闸判过一次（还兼着「发请求前就拦掉」的职责），再要一个
- * 「按扩展名算 MIME」的函数只会让后人以为这两处可以各改一半。故**删掉函数**。
+ * ⚠️ **本文件不含上传端点，也没有 content_type 的归一实现。** 上传走直传引擎
+ * `utils/directUpload.ts`（upload-intents 签预签 URL → XHR PUT → confirm 登记），
+ * content_type 由 `utils/fileContentType.ts::normalizeUploadContentType` 按扩展名统一
+ * 归一（六个上传场景共用）：它必须在**调 upload-intents 之前**算好，因为该值会被签进
+ * SigV4 的 SignedHeaders、PUT 时要原样回填；xlsx 档取 `@/constants/mime::XLSX_MIME`，
+ * 不是 `file.type`（浏览器对 xlsx 给的值极不稳定），也不是字面量。
  *
- * 「按扩展名算 MIME」这件事现在**只有一个**实现：`utils/fileContentType.ts::normalizeUploadContentType`
- * —— 直传链路必须在调 upload-intents **之前**算好 content_type（它会被签进 SigV4 的
- * SignedHeaders，PUT 时要原样回填），六个上传场景共用它。该函数的 xlsx 档直接从
- * `@/constants/mime::XLSX_MIME` 取值，不是 `file.type`（浏览器对 xlsx 给的值极不稳定），
- * 也不是字面量。
+ * ⇒ 两件事分属两处、**不要合并也不要各判一半**：这里只答「能不能上传」，
+ * 那边只答「发什么 content_type」。
  */
-
-/** 扩展名是不是 `.xlsx`（大小写不敏感）。调用方在**发请求之前**用它拦一道：
- *  坏模板不该占一次往返，更不该先落库再报错。
- *
- *  ⚠️ 这是**「能不能上传」的唯一闸**；「发什么 content_type」是 `normalizeUploadContentType`
- *  的职责，两者不再各判一遍 —— mime 恒取 `@/constants/mime::XLSX_MIME`。 */
 export function isPrintTemplateXlsxName(name: string): boolean {
   return name.toLowerCase().endsWith(PRINT_TEMPLATE_ACCEPT_EXT);
 }
