@@ -94,7 +94,7 @@ import {
   PRINT_TEMPLATE_ACCEPT,
   PRINT_TEMPLATE_ACCEPT_EXT,
 } from '@/views/printTemplates/printTemplateSchema';
-import { XLSX_MIME } from '@/views/com/delivery/utils/deliveryNoteTemplateContract';
+import { XLSX_MIME } from '@/constants/mime';
 import { normalizeUploadContentType } from '@/utils/fileContentType';
 
 // ============================================================================
@@ -195,7 +195,7 @@ const ROW = {
   file_type: 'XLSX',
   original_filename: 'fala.xlsx',
   file_size: 12345,
-  content_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  content_type: XLSX_MIME,
   content_sha256: 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90',
   version: 2,
   created_at: '2026-10-16 09:00:00',
@@ -351,7 +351,7 @@ describe('printTemplates 的扩展名闸（与后端 21102 判据同源）', () 
   it('E2：MIME 字面量在上传路径的两个文件里**没有第二份副本**（后端改判据时它不会报错、只会静默被 21102 挡回）', () => {
     const src = readFileSync(new URL('../printTemplates.ts', import.meta.url), 'utf8');
     // 允许的是从契约模块 import 后的**使用**；不允许的是把字面量抄进来。
-    expect(src).not.toContain('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    expect(src).not.toContain(XLSX_MIME);
     expect(src).not.toContain("'.xlsx'");
     // 直传链路的 content_type 归一在 `utils/fileContentType.ts`（六个上传场景共用），
     // 它同样不许出现字面量副本 —— 后端 policy 一改，这里就该跟着改常量而不是改字面量。
@@ -359,7 +359,7 @@ describe('printTemplates 的扩展名闸（与后端 21102 判据同源）', () 
       new URL('../../utils/fileContentType.ts', import.meta.url),
       'utf8',
     );
-    expect(normalize).not.toContain('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    expect(normalize).not.toContain(XLSX_MIME);
   });
 
   // ⚠️ **上传路径**（不是下载路径）的 MIME 真源。`usePrintTemplatesStore.ts` 里的 `XLSX_MIME`
@@ -375,10 +375,61 @@ describe('printTemplates 的扩展名闸（与后端 21102 判据同源）', () 
     expect(normalizeUploadContentType(new File([new Uint8Array([1])], 'TEMPLATE.XLSX'))).toBe(
       XLSX_MIME,
     );
-    // 且它确实是从契约常量 import 的（不是碰巧字面量相同）。
+    // 且它确实是从**中性常量模块** import 的（不是碰巧字面量相同，也不在某个域内目录里 ——
+    // 后者会让 `utils/` 反向依赖 `views/`，层次倒挂）。
     expect(
       readFileSync(new URL('../../utils/fileContentType.ts', import.meta.url), 'utf8'),
-    ).toMatch(/import\s*\{\s*XLSX_MIME\s*\}\s*from\s*'@\/views\/com\/delivery\/utils\/deliveryNoteTemplateContract'/);
+    ).toMatch(/import\s*\{\s*XLSX_MIME\s*\}\s*from\s*'@\/constants\/mime'/);
+  });
+
+  // ⚠️ **结构性不变量**：`utils/` 不得依赖 `views/`。判据用 CLAUDE.md 的原话 ——「`src/utils/`
+  //   只放跨域通用工具……它 import 域内 composable 类型会让 `utils/` 反向依赖 `views/`
+  //   （层次倒挂）」。倒挂不会产生任何报错、任何 spec 变红，只是让「通用工具」在打包图上
+  //   拖着某个域进首屏闭包，所以只能扫源码守。
+  it('E4：`src/utils/` 零 `views/` 依赖（层次倒挂守卫）', () => {
+    const utilsRoot = new URL('../../utils/', import.meta.url);
+    const offenders: string[] = [];
+    const walk = (dir: URL): void => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const child = new URL(`${e.name}${e.isDirectory() ? '/' : ''}`, dir);
+        if (e.isDirectory()) {
+          walk(child);
+        } else if (/\.(ts|vue)$/.test(e.name)) {
+          const src = readFileSync(child, 'utf8');
+          // 只认 import / 动态 import 的 specifier，不认注释里提到的路径。
+          if (/\bfrom\s*'@\/views\//.test(src) || /import\(\s*'@\/views\//.test(src)) {
+            offenders.push(child.pathname.split('/utils/')[1]!);
+          }
+        }
+      }
+    };
+    walk(utilsRoot);
+    expect(offenders).toEqual([]);
+  });
+
+  // ⚠️ **MIME 字面量的唯一真源**。全仓只允许 `src/constants/mime.ts` 定义它；抄一份到别处
+  //   不会报错，只会在后端改判据时静默被 40001 挡回。⚠️ `src/` 下**只允许**这一条例外：
+  //   `views/com/delivery/utils/__tests__/deliveryNoteLabelWorkbook.spec.ts` 刻意用字面量
+  //   把常量值钉死（那里若也引常量就变成恒真），其余任何文件出现字面量都要红。
+  it('E5：MIME 字面量在 `src/` 下只出现在真源模块 + 那条刻意的值钉用例里', () => {
+    const offenders: string[] = [];
+    const walk = (dir: URL): void => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const child = new URL(`${e.name}${e.isDirectory() ? '/' : ''}`, dir);
+        if (e.isDirectory()) {
+          walk(child);
+        } else if (/\.(ts|vue)$/.test(e.name)) {
+          const rel = child.pathname.split('/src/')[1]!;
+          if (rel === 'constants/mime.ts') continue;
+          if (rel === 'views/com/delivery/utils/__tests__/deliveryNoteLabelWorkbook.spec.ts') {
+            continue;
+          }
+          if (readFileSync(child, 'utf8').includes(XLSX_MIME)) offenders.push(rel);
+        }
+      }
+    };
+    walk(new URL('../../', import.meta.url));
+    expect(offenders).toEqual([]);
   });
 });
 

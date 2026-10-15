@@ -73,6 +73,8 @@
 // 渲染层两个键都映射到 `PrintSheetRow.l2Customer` 同一个字段（见 deliveryNoteWorkbook.ts 的
 // COLUMN_FIELD），因此不存在第二份客户取值口径。
 
+import { XLSX_MIME } from '@/constants/mime';
+
 export const DELIVERY_NOTE_TEMPLATE_CONTRACT = {
   /** 版式判别位（2026-10-16 新增）。 */
   kind: 'part',
@@ -173,5 +175,11 @@ export const FOOTER_DATE_LEADING_SPACES = ' '.repeat(41);
 /** A17 锚点里「送货日期：」之后的两个空格（模板原文如此）。 */
 export const FOOTER_DATE_LABEL_GAP = '  ';
 
-/** xlsx MIME（Blob / download 用）。 */
-export const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+/**
+ * xlsx MIME（Blob / download / 上传声明用）。
+ *
+ * ⚠️ 定义在 `@/constants/mime` —— 直传链路（`utils/fileContentType.ts`，六个上传场景
+ * 共用）也要读同一个值，把定义留在本域会让 `utils/` 反向依赖 `views/`。此处转出是为了
+ * 让送货单域内的消费方保持既有 import 路径不变。
+ */
+export { XLSX_MIME };

@@ -21,6 +21,7 @@ import { defineComponent, h, ref } from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { XLSX_MIME } from '@/constants/mime';
 
 // ============ 模块 mock ============
 
@@ -207,7 +208,7 @@ function uploadFile(uid: number, name: string): UploadFile {
 function excelUploadFile(): UploadFile {
   const buf = readFileSync(FIXTURE_PATH);
   const raw = new File([new Uint8Array(buf)], '历史价确认单 (1).xlsx', {
-    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    type: XLSX_MIME,
   });
   return {
     uid: 2001,

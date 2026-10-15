@@ -15,8 +15,9 @@
 // `expected_content_types_for_ext` 对 `xlsx` **只**收规范 MIME，**没有** octet-stream
 // 兜底，而 `bind_uploaded_file` 会调 `validate::check_content_type` 拒收。更糟的是
 // `grant_upload_intents` **不**校验 content_type ⇒ 流程会走成「签发成功 → PUT 成功 →
-// confirm 被拒」，在桶里留一个孤儿对象。规范 MIME 的唯一来源是契约常量 `XLSX_MIME`
-// （`views/com/delivery/utils/deliveryNoteTemplateContract.ts`），**不要抄字面量**。
+// confirm 被拒」，在桶里留一个孤儿对象。规范 MIME 的唯一来源是 `@/constants/mime::XLSX_MIME`
+// （中性的常量模块，送货单域也从那里取），**不要抄字面量**、也不要把这个常量留在某个域
+// 内目录 —— 那会让 `utils/` 反向依赖 `views/`。
 //
 // ⚠️ **不能直接用 `file.type`**：.step / .stp / .igs 在多数浏览器上是空串或怪值
 // （部分环境给 .igs 报 text/plain），照抄会被后端 policy 挡回 40001；而且直传链路里
@@ -31,7 +32,7 @@
 // `expected_content_types_for_ext` 里放行该扩展名的 `application/octet-stream`，
 // 上传就会被 40001 挡回。
 
-import { XLSX_MIME } from '@/views/com/delivery/utils/deliveryNoteTemplateContract';
+import { XLSX_MIME } from '@/constants/mime';
 
 /** PDF 的 content_type：后端对 `.pdf` 只接受这一种。 */
 export const PDF_CONTENT_TYPE = 'application/pdf';

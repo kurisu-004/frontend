@@ -86,15 +86,16 @@ export interface DeletePrintTemplatePayload {
  *
  * 「按扩展名算 MIME」这件事现在**只有一个**实现：`utils/fileContentType.ts::normalizeUploadContentType`
  * —— 直传链路必须在调 upload-intents **之前**算好 content_type（它会被签进 SigV4 的
- * SignedHeaders，PUT 时要原样回填），六个上传场景共用它。该函数的 xlsx 档直接从契约常量
- * `XLSX_MIME` 取值，不是 `file.type`（浏览器对 xlsx 给的值极不稳定），也不是字面量。
+ * SignedHeaders，PUT 时要原样回填），六个上传场景共用它。该函数的 xlsx 档直接从
+ * `@/constants/mime::XLSX_MIME` 取值，不是 `file.type`（浏览器对 xlsx 给的值极不稳定），
+ * 也不是字面量。
  */
 
 /** 扩展名是不是 `.xlsx`（大小写不敏感）。调用方在**发请求之前**用它拦一道：
  *  坏模板不该占一次往返，更不该先落库再报错。
  *
  *  ⚠️ 这是**「能不能上传」的唯一闸**；「发什么 content_type」是 `normalizeUploadContentType`
- *  的职责，两者不再各判一遍 —— mime 恒取契约常量 `XLSX_MIME`。 */
+ *  的职责，两者不再各判一遍 —— mime 恒取 `@/constants/mime::XLSX_MIME`。 */
 export function isPrintTemplateXlsxName(name: string): boolean {
   return name.toLowerCase().endsWith(PRINT_TEMPLATE_ACCEPT_EXT);
 }

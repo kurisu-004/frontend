@@ -2,7 +2,8 @@
 // 与登记端口（`POST /api/v2/files/objects/confirm`）的实现契约。
 //
 // 2026-10-15：这份 spec 取代原先守 multipart 代理上传的 `fileUploadEndpoints.spec.ts`
-// （`POST /files/objects` 已随代理上传一起下线）。守的三条：
+// —— 被它守的 `POST /files/objects`（**multipart 代理上传端点**，无尾斜杠；与下面
+// 两条 `/files/objects/*` 端点不是同一个东西，勿混）已随代理上传一起下线。守的三条：
 //   1. upload-intents 的 URL / body 形状（owner 在 body、不在 URL；items 逐字段透传）；
 //   2. confirm 的 URL 与 body 逐字透传（object_key / pair_with_file_id 都在里面）；
 //   3. 响应原样解包（`api` 拦截器已剥信封，本函数只取 `.data`），后端错误不吞不包装。
@@ -20,6 +21,7 @@ vi.mock('@/api/http', () => ({
 import { grantUploadIntents } from '../intents';
 import { confirmFileObject } from '../objects';
 import type { ConfirmFileIn, GrantUploadIntentsIn } from '@/types/file_intent';
+import { XLSX_MIME } from '@/constants/mime';
 
 beforeEach(() => post.mockReset());
 
@@ -86,7 +88,7 @@ describe('grantUploadIntents（POST /files/objects/upload-intents）', () => {
           client_ref: 'r',
           kind: 'DELIVERY_TEMPLATE',
           original_filename: 't.xlsx',
-          content_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          content_type: XLSX_MIME,
           file_size: '10',
           content_sha256: 'b'.repeat(64),
         },

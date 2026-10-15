@@ -30,6 +30,7 @@ import { createApp, nextTick } from 'vue';
 import { createPinia, setActivePinia } from 'pinia';
 import { QueryClient, VueQueryPlugin } from '@tanstack/vue-query';
 import { readFileSync } from 'node:fs';
+import { XLSX_MIME } from '@/constants/mime';
 import type * as HttpModule from '@/api/http';
 
 /**
@@ -111,7 +112,7 @@ const BOUND_TEMPLATE_ROW = {
   file_type: 'XLSX',
   original_filename: 'fala_bound.xlsx',
   file_size: 0,
-  content_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  content_type: XLSX_MIME,
   content_sha256: 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90',
   version: 2,
   created_at: '2026-10-16 09:00:00',

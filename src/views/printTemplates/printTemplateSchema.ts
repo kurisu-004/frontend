@@ -168,9 +168,9 @@ export type PrintTemplateResolveData = z.infer<typeof printTemplateResolveSchema
  * **发请求之前**就用它拦一道 —— 坏模板不该占一次往返，更不该先落库再报错。
  *
  * ⚠️ **本域没有自己的一份 MIME 常量**：模板文件就是送货单打印模板，MIME 的唯一来源是
- * `views/com/delivery/utils/deliveryNoteTemplateContract.ts::XLSX_MIME`（api 层与本页都从
- * 那里取）。在这里再抄一份字面量就是第二真源 —— 后端哪天改判据时它不会报错，只会静默让
- * 上传被 21102 挡回。
+ * `src/constants/mime.ts::XLSX_MIME`（中立常量模块：送货单域与直传链路都从那里取，域内
+ * 消费方也可经 `deliveryNoteTemplateContract.ts` 转到同一个值）。在这里再抄一份字面量
+ * 就是第二真源 —— 后端哪天改判据时它不会报错，只会静默让上传被 21102 挡回。
  */
 export const PRINT_TEMPLATE_ACCEPT_EXT = '.xlsx';
 

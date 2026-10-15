@@ -13,7 +13,7 @@
 // 前者的行为由 presignedPut.spec.ts 守，后者由 api/files/__tests__/intents.spec.ts 守。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { XLSX_MIME } from '@/views/com/delivery/utils/deliveryNoteTemplateContract';
+import { XLSX_MIME } from '@/constants/mime';
 import type * as PresignedPutModule from '../presignedPut';
 import { directUpload, newClientRef } from '../directUpload';
 
