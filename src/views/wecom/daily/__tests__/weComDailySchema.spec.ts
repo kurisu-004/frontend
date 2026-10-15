@@ -5,7 +5,7 @@
 //  1. **键集守门**：`.strict()` 少一个键必抛、多一个键必抛。这两组是 CLAUDE.md 已登记的
 //     「11 处同款事故」的正面守卫 —— 本域的出参是 `.strict()` 的，后端每加 / 少一个字段而前端
 //     没同步时，症状是**页面恒空 + 一句「加载失败」**（或更糟：某个表格整页白屏）。
-//     `ConfigOut` 的 23 个键、`MetaOut` 的 6 个键、`PreviewOut` 的 14 个键、`LogRow` 的 19 个键
+//     `ConfigOut` 的 23 个键、`MetaOut` 的 6 个键、`PreviewOut` 的 13 个键、`LogRow` 的 18 个键
 //     逐条对照，见下面各组的 `expect(Object.keys(...).sort())`。
 //  2. **枚举与可空**：frequency / worker_metric / trigger_source / status 四个封闭集；
 //     `MANUAL_ONLY` 时三个时刻字段必为 null。
@@ -132,8 +132,7 @@ const PREVIEW = {
   overview_quantity: 340,
   completed_count: 4,
   in_process_count: 18,
-  note_count: 0,
-  note_part_count: 56,
+  note_count: 56,
   overdue_count: 2,
   upcoming_count: 7,
   worker_rows: [{ worker_name: '张三', badge_code: 'B001', batch_count: 4, quantity: 120 }],
@@ -141,7 +140,7 @@ const PREVIEW = {
   sections: ['全厂报工总览', '工人报工'],
 };
 
-/** `GET /logs` 的一行（后端 `LogRow`，**19 键**，`.strict()`）。 */
+/** `GET /logs` 的一行（后端 `LogRow`，**18 键**，`.strict()`）。 */
 const LOG_ROW = {
   log_id: '9000000000000900',
   config_version: 3,
@@ -155,8 +154,7 @@ const LOG_ROW = {
   chunk_sent: 2,
   overview_batch_count: 12,
   overview_quantity: 340,
-  note_count: 0,
-  note_part_count: 56,
+  note_count: 56,
   overdue_count: 2,
   upcoming_count: 7,
   worker_row_total: 22,
@@ -277,7 +275,7 @@ describe('weComDailySchema — MetaOut 键集（6 键，.strict()）', () => {
   });
 });
 
-describe('weComDailySchema — PreviewOut 键集（14 键，.strict()）', () => {
+describe('weComDailySchema — PreviewOut 键集（13 键，.strict()）', () => {
   it('P1：好响应过守门；chunks 是数组且逐条 ≤ 4096 字节', () => {
     const parsed = weComDailyPreviewSchema.parse(PREVIEW);
     expect(parsed.chunks).toHaveLength(2);
@@ -302,7 +300,7 @@ describe('weComDailySchema — PreviewOut 键集（14 键，.strict()）', () =>
 
   // 2026-10-23 新增：PreviewOut 的键集守卫（改前本组只守「多一个键必抛」的零星几个键，
   // 少一个键要等别的用例偶然踩到才红）。
-  it('P5：键集与契约**逐字相等**且恰好 14 个 —— 后端增删出参字段时必红（.strict() 的设计意图）', () => {
+  it('P5：键集与契约**逐字相等**且恰好 13 个 —— 后端增删出参字段时必红（.strict() 的设计意图）', () => {
     const parsed = weComDailyPreviewSchema.parse(PREVIEW);
     expect(Object.keys(parsed).sort()).toEqual([
       'chunk_count',
@@ -310,7 +308,6 @@ describe('weComDailySchema — PreviewOut 键集（14 键，.strict()）', () =>
       'completed_count',
       'in_process_count',
       'note_count',
-      'note_part_count',
       'overdue_count',
       'overview_batch_count',
       'overview_quantity',
@@ -320,7 +317,7 @@ describe('weComDailySchema — PreviewOut 键集（14 键，.strict()）', () =>
       'worker_row_total',
       'worker_rows',
     ]);
-    expect(Object.keys(parsed)).toHaveLength(14);
+    expect(Object.keys(parsed)).toHaveLength(13);
   });
 
   it('P6：少一个键必抛（`.strict()` 对「少声明的键」同样抛，症状是预览弹窗恒空白）', () => {
@@ -329,12 +326,12 @@ describe('weComDailySchema — PreviewOut 键集（14 键，.strict()）', () =>
   });
 });
 
-describe('weComDailySchema — LogRow 键集（19 键，.strict()）', () => {
+describe('weComDailySchema — LogRow 键集（18 键，.strict()）', () => {
   it('L1：好响应过守门，键集与契约逐字相等', () => {
     const parsed = weComDailyLogSchema.parse(LOG_ROW);
     expect(parsed.log_id).toBe('9000000000000900');
     expect(Object.keys(parsed).sort()).toEqual(Object.keys(LOG_ROW).sort());
-    expect(Object.keys(parsed)).toHaveLength(19);
+    expect(Object.keys(parsed)).toHaveLength(18);
   });
 
   it('L2：少一个键必抛（少 error_message ⇒ 失败行整表空，管理员看不到「为什么失败」）', () => {

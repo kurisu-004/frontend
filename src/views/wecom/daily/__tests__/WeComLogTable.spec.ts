@@ -147,14 +147,13 @@ describe('WeComLogTable.vue — 整行标红必须走 :deep', () => {
 });
 
 describe('WeComLogTable.vue — 刻意不做的东西', () => {
-  it('N1：日报的 6 个计数字段一律**不做列**', () => {
-    // 理由：企业微信的日报在群里还看得到，重复存储没意义；且内容口径问题与投递故障混在
+  it('N1：日报的 5 个计数字段一律**不做列**', () => {
+    // 理由：企业微信的日报在群里还看得到，重复存储没意思；且内容口径问题与投递故障混在
     // 一张表里会互相干扰排查。
     for (const field of [
       'overview_batch_count',
       'overview_quantity',
       'note_count',
-      'note_part_count',
       'worker_row_total',
       'markdown_bytes',
     ]) {
@@ -201,8 +200,7 @@ const LOG_ROW: WeComDailyLogData = {
   chunk_sent: 2,
   overview_batch_count: 12,
   overview_quantity: 340,
-  note_count: 0,
-  note_part_count: 56,
+  note_count: 56,
   overdue_count: 2,
   upcoming_count: 7,
   worker_row_total: 22,

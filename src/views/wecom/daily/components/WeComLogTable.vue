@@ -22,13 +22,13 @@
   .is-failed > td.el-table__cell)` **整行标红**（`el-table` 的 row-class-name 只能整行上色、
   没法只染一格），再套一枚红 tag 是双重编码且撑宽度。
 
-  ⚠️ **日报的 6 个计数字段（`overview_batch_count` / `overview_quantity` / `note_count` /
-  `note_part_count` / `worker_row_total` / `markdown_bytes`）一律不做列** —— 理由：**邮件**发出去
+  ⚠️ **日报的 5 个计数字段（`overview_batch_count` / `overview_quantity` / `note_count` /
+  `worker_row_total` / `markdown_bytes`）一律不做列** —— 理由：**邮件**发出去
   就没有了，日志行是唯一的副本，内容口径必须快照下来；**企业微信的日报在群里还看得到**，
   重复存储没意思。且内容口径问题与投递故障混在一张表里会互相干扰排查（一条「逾期数算错了」
   的行看起来像「推送失败了」）。
-  2026-10-23：第二节改口径后 `note_count` 退成 `NOT NULL` 列的占位键（**恒为 0**），第二节的
-  真实数字是 `note_part_count`（去重后的工单数）—— 两者都仍不做列，本段只是记下语义归属。
+  2026-10-23：第二节改口径后 `note_count` 承载的是**本期出货单数**（今日送货单里去重后的
+  `part` 数）—— 仍不做列，本段只是记下语义归属。
 
   ⚠️ **同理不建「统计日」列** —— `report_date` 恒等于 `sent_at` 的日期部分（后端同一个
   `now_naive()` 调用取值），是纯冗余列。
