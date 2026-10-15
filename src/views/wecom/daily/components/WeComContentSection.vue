@@ -39,7 +39,7 @@
         aria-label="全厂报工总览"
         @update:model-value="patch({ include_overview: Boolean($event) })"
       />
-      <span class="field-hint">今日报工批次 / 件数、完工 / 在制 / 返修</span>
+      <span class="field-hint">报工批次 / 件数、送检批次、在制单数（在制为当前快照）</span>
     </div>
 
     <div class="field-row">
@@ -49,7 +49,7 @@
         aria-label="今日出货"
         @update:model-value="patch({ include_delivery: Boolean($event) })"
       />
-      <span class="field-hint">今日已取货的送货单数与件数合计</span>
+      <span class="field-hint">本期出货的去重工单数（同一工单只算一次）</span>
     </div>
 
     <div :class="['field-row', rowClass('upcoming_days')]">

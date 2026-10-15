@@ -67,8 +67,14 @@ describe('WeComContentSection.vue — 四个开关与三个数字', () => {
     ]) {
       expect(CODE, `缺开关 ${field}`).toContain(field);
     }
-    expect(CODE).toMatch(/今日报工批次 \/ 件数、完工 \/ 在制 \/ 返修/);
-    expect(CODE).toMatch(/今日已取货的送货单数与件数合计/);
+    // ⚠️ 两条 hint 的口径与后端 `template.rs::build_blocks` 逐字对齐，且**不得**出现已下线的
+    // 项（第一节没有「完工 / 返修」，第二节没有「送货单张数 / 件数合计」）—— 统计窗口跨天，
+    // hint 里也不许写「今日」。
+    expect(CODE).toMatch(/报工批次 \/ 件数、送检批次、在制单数/);
+    expect(CODE).toMatch(/本期出货的去重工单数（同一工单只算一次）/);
+    for (const gone of ['完工', '返修', '送货单', '件数合计']) {
+      expect(CODE, `组件里不该再出现已下线的口径「${gone}」`).not.toContain(gone);
+    }
   });
 
   it('S2：三个数字的 :min/:max **来自 ranges prop**（不写死上界）', () => {
