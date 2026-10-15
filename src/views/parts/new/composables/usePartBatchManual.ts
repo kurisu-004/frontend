@@ -566,9 +566,12 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
    * ⚠️ **提交进行中直接拒**：上传阶段整个跑在 mutation 的 onSuccess 里（`isPending`
    * 覆盖到上传结束），页面还停在这张表上。此时删行会让后面所有下标左移，而
    * `created[].sourceIndex` 是按**提交那一刻**的行序算的 ⇒ 后面某行的 File 会被挂到
-   * 别的零件上，**不可逆**。UI 侧已把「删除 / 添加 / 编辑」在 `submitting` 期禁用，
-   * 这里再设一道是因为 composable 是唯一能保证「状态机自洽」的位置（UI 漏一个 disabled
-   * 不会静默降级成数据串行）。
+   * 别的零件上，**不可逆**。
+   *
+   * **为什么只在这里设闸、别处不设**：删行是本文件里**唯一会让下标左移**的入口 ——
+   * 新增是尾部 push、编辑是原位替换，两者都不改变既有行的下标 ⇒ 不会串行。UI 侧对
+   * 「添加 / 删除 / 编辑」三者统一禁了 `submitting`，那是为了视觉一致；状态机这一层
+   * 只需要守住会造成下标左移的那一个。
    */
   function onRemoveRow(uid: string): void {
     if (submitting.value) {
@@ -881,6 +884,9 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
       // 释放所有 blob URL
       staged.value.forEach(revokeEntryUrls);
       staged.value = [];
+      // 清掉本次的行快照：它持有整批 entry 的 File 引用，长期挂着只会让这批字节的
+      // blob 一直可达。**下次 `mutationFn` 会重新写**（快照的生命周期 = 一次提交）。
+      activeSubmitSnapshot.value = [];
       // 提交成功后清空 draft
       draft.saver.cancel();
       draft.clear();

@@ -34,7 +34,15 @@ import {
   invalidatePartFilesListQuery,
 } from '@/composables/queries/usePartFilesListQuery';
 
-/** CNC 配对组：1 设定单 + 0~N 个 G 代码（setup=null 表示「未配对」桶） */
+/**
+ * CNC 配对组：一组就是**一个设定单 + 至多一个 G 代码**（`setup === null` 表示「未配对」
+ * 桶里那个 G 代码）。
+ *
+ * `gcodes` 是数组而不是单值，是因为它是**读侧从库里现攒**的：历史数据里可能存在
+ * 一份设定单被指向多个 G 代码的行（`paired_file_id` 是覆写互写、后写入者胜）。而**写入
+ * 侧造不出这种形态** —— 每个 (owner, G_CODE / SETUP_SHEET) 只有一条活跃行，配对天然
+ * 1:1，理由与限制见 `onPairUpload`。
+ */
 export interface CncSetupGroup {
   setup: PartFileItem | null;
   gcodes: PartFileItem[];

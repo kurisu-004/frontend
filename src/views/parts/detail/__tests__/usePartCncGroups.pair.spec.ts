@@ -80,7 +80,10 @@ function harness() {
 }
 
 const gcode = new File([new Uint8Array([1, 2, 3])], 'o1234.nc', { type: 'text/plain' });
-const setup = new File([new Uint8Array([4, 5, 6])], 'setup.nc', { type: 'text/plain' });
+// ⚠️ 扩展名必须是 `.pdf`：后端 `policy::allowed_exts("SETUP_SHEET")` 只有 `["pdf"]`
+//   （G_CODE 那侧才是 `.nc` 族）。`directUpload` 在本文件里被 mock，所以写成 `.nc`
+//   断言照样过 —— 但那会让后来人以为 `.nc` 设定单合法。
+const setup = new File([new Uint8Array([4, 5, 6])], 'setup.pdf', { type: 'application/pdf' });
 const gcode2 = new File([new Uint8Array([7, 8, 9])], 'o5678.nc', { type: 'text/plain' });
 
 beforeEach(() => {

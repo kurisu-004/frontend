@@ -226,7 +226,12 @@ function onPairGcodeChange(file: UploadFile, _uploadFiles: UploadFile[]): void {
 }
 /**
  * 已选一个再选一个时走这里（EP 的 `:limit="1"` + 受控 `:file-list` 下 `on-change`
- * 排在 exceed 判定之后、不会触发）。单选语义下「换选」= 替换，所以直接取新文件。
+ * 排在 exceed 判定之后、不会触发）。单选语义下「换选」= **整份替换**。
+ *
+ * ⚠️ **必须以空列表为基底调 `fileList`**：`fileList` 的契约是 **append**
+ * （`return [...current, file]`），拿当前列表当基底会把列表撑到 2 条 ⇒ 点确认时被
+ * 「只允许一个 G 代码」的兜底闸拦下，用户得先手动删掉旧条目才走得通。
+ * 用 `[]` 当基底拿回的就是「只含新文件」的单元素数组，直接整份赋值即可。
  */
 function onPairGcodeExceed(files: File[]): void {
   const picked = files[0] as (File & { raw?: File }) | undefined;
@@ -242,12 +247,10 @@ function onPairGcodeExceed(files: File[]): void {
     status: 'ready',
     raw: Object.assign(new File([raw], raw.name, { type: raw.type }), { uid }),
   };
-  pairGcodeFiles.value = props.fileList(
-    pairGcodeFiles.value,
-    entry,
-    '.nc,.tap,.cnc,.mpf,.ngc',
-    true,
-  );
+  const accepted = props.fileList([], entry, '.nc,.tap,.cnc,.mpf,.ngc', true);
+  // `accepted` 为空 = 扩展名不在白名单（`fileList` 内部已 warning）。**此时保持原列表
+  // 不动** —— 换选失败不该把用户已经选好的文件也弄丢。
+  if (accepted.length > 0) pairGcodeFiles.value = accepted;
 }
 function onPairGcodeRemove(file: UploadFile): void {
   pairGcodeFiles.value = pairGcodeFiles.value.filter((f) => f.uid !== file.uid);
