@@ -9,7 +9,7 @@
 // - fetchPartFileContent GET /api/v2/files/objects/{id}/content，URL 必须是**相对**
 //   路径（拼 URL 的 partFileContentPath 未导出，只由本文件内部消费）。
 //
-// multipart 直传（uploadFileObject）另见同目录 fileUploadEndpoints.spec.ts；
+// 写入链路（upload-intents + confirm 的入参形状）另见同目录 intents.spec.ts；
 // 零件打印 BFF（/parts/*）另见 src/api/parts/__tests__/print.spec.ts。
 //
 // 用 vi.mock 拦截 @/api/http 的 api，断言 method / url / body 形态，
@@ -36,7 +36,7 @@ import {
   getPartFileDownloadUrl,
   listPartFilesByOwner,
 } from '../objects';
-import type { ConfirmFileIn } from '@/types/part_file';
+import type { ConfirmFileIn } from '@/types/file_intent';
 
 beforeEach(() => {
   postCalls.mockReset();
@@ -70,10 +70,10 @@ describe('confirmFileObject', () => {
       owner_kind: 'PART',
       owner_id: '190000000000001',
       kind: 'DRAWING',
-      tmp_key: 'tmp/spike/seq_a.pdf',
+      object_key: 'obj/a1b2c3d4e5f60718_a.pdf',
       content_sha256: 'a'.repeat(64),
       original_filename: 'a.pdf',
-      file_size: '12345',
+      file_size: 12345,
       content_type: 'application/pdf',
       ext: 'pdf',
     };

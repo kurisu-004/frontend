@@ -1,73 +1,69 @@
-// types.ts —— CosUploader 通用契约（2026-09-28 迁移到 src/components/CosUploader/）
+// types.ts —— CosUploader 通用契约（2026-10-15 改为预签 URL 直传）
 //
-// 2026-09-28 迁移：本文件原在 src/types/cos_upload.ts，迁移到组件包内。
-// 迁移原因：通用类型与组件包强绑定（仅 CosUploader 消费），不再跨域共享，
-// 按 CLAUDE.md「composable 归属判别」收紧到组件包内。
+// 本文件是组件包的类型契约：组件零业务字段，`kind` / `owner` 这些维度全部由调用方
+// 在实现 `getUploadIntents` 时闭包持有 —— 组件只认「给一批 File，拿回一批可上传项」。
 //
-// 命名变更（2026-09-28）：
-// - 原 `CosUploadSession` → `CosUploadGrant`：澄清「纯前端数据形状，与后端 Redis
-//   session 无关」的语义。caller 通过 getUploadGrant 拿到的只是一次性上传授权包，
-//   组件本身完全不感知 Redis / session 生命周期。
-// - 原匿名 items 元素类型 → `CosUploadGrantItem`：从 inline 提取命名后方便 caller
-//   在适配层引用。
-// - 原 `requestUpload` 回调 → `getUploadGrant`：更准确的动词（get 一次性的 grant）。
-//
-// 与 src/types/part_file.ts 中同名词差异（保持原注释思路）：
-// - CosCredentials：字段一致
-// - UploadIntentsIn / Out（part_file.ts）vs CosUploadGrant（本文件）：part_file 域
-//   把 kind / filename / file_size / content_sha256 等绑死在 item 上；本文件只固定
-//   client_ref / tmp_key 两个最小必须字段，caller 自定 item 内其余字段名。
+// 2026-10-15 的口径变化：从「STS 临时凭证 + tmp_key」改为「预签 PUT URL + object_key」。
+// 组件**不再**感知任何凭证（`credentials` / `bucket` / `region` 三个字段与
+// `CosUploadGrant` 整型一起消失），也不再感知 `tmp_key`：签发端点直接给的是最终
+// 落点的 `object_key` + 一枚 `upload_url`。传输由 `utils/presignedPut.ts::xhrPut`
+// 完成，不经 cos-js-sdk-v5。
 
-/** STS 临时凭证（与 cos-js-sdk-v5 的 stsOpts 字段对齐，UTC 秒数足够） */
-export interface CosCredentials {
-  tmp_secret_id: string;
-  tmp_secret_key: string;
-  session_token: string;
-  /** UTC 秒（i64，后端 i64 序列化，JSON 解析为 number） */
-  expired_time: number;
-}
-
-/** CosUploadGrant.items 的元素类型（client_ref + tmp_key 一一对应 files）。 */
-export interface CosUploadGrantItem {
-  client_ref: string;
-  /** COS bucket 内的目标 key（含目录前缀）。 */
-  tmp_key: string;
-}
+import type { PartFileItem, UploadIntentItemOut } from '@/types/file_intent';
 
 /**
- * getUploadGrant 回调返回的一次性上传授权包。
+ * 「给一批 File → 拿回一批可上传项」的回调。
  *
- * 纯前端数据形状，与后端 rust 的 Redis upload-session 概念无关 —— 后端的
- * session 池只是「实现 caller 的一种选项」（如 parts/new 的 useUploadSession），
- * 组件本身不感知也不依赖。
+ * 实现方（业务侧）负责：算 SHA-256、拼 kind / owner / content_type、调
+ * `api/files/intents.ts::grantUploadIntents`，然后把响应的 `items[]` 原样返回。
+ * 组件按下标把 `files[i]` 与 `items[i]` 对齐（后端保证响应与请求 items 同序）。
  *
- * bucket / region / items[].tmp_key 由 caller 在返回值中指定，等价于「指定桶和
- * 目录」的能力。caller 想用什么 bucket 就用什么 bucket，想把文件写到什么 key
- * 前缀就写什么前缀（受限于后端 STS policy）。
+ * 组件**保持注入**而不是自己 import grantUploadIntents，理由与本仓其它组件一致：
+ * 组件与业务解耦、可单测（注入一个假函数即可覆盖整条状态机）。
  */
-export interface CosUploadGrant {
-  credentials: CosCredentials;
-  bucket: string;
-  region: string;
-  items: CosUploadGrantItem[];
-}
+export type GetUploadIntents = (files: File[]) => Promise<UploadIntentItemOut[]>;
 
-/** getUploadGrant 回调签名：caller 实现「拿 File 列表 → 申请 STS → 拼 CosUploadGrant」。 */
-export type GetUploadGrant = (files: File[]) => Promise<CosUploadGrant>;
-
-/** 上传完成后的对外输出（confirm 回调的入参 / uploaded 事件的 payload） */
+/** 上传完成后的对外输出（`uploaded` / `allDone` 事件的 payload）。 */
 export interface CosUploadedItem {
+  /** 与 intent 一一对应的稳定标识（签发时由调用方生成）。 */
   client_ref: string;
-  tmp_key: string;
-  etag?: string;
+  /** 直传成功后落到的正式对象 key；秒传命中时为空（那一支没有新的对象）。 */
+  object_key?: string;
+  /** 秒传命中时后端返回的已有文件项；直传路径为空。 */
+  existing_file?: PartFileItem;
+  /** 本地原始 File（调用方偶尔要用它的 size / name）。 */
   file: File;
-  sha256?: string;
+  /** 本次算出的 SHA-256（hex）；调用方写日志 / 去重用。 */
+  sha256: string;
+  /** true = 秒传命中（后端按内容命中已有文件，本次既没发 PUT 也没发 confirm）。 */
+  already_exists: boolean;
+  /**
+   * 登记后的文件项。**只有在调用方注入了 confirm 且它返回 PartFileItem 时才有值** ——
+   * 组件自己不做登记（它不知道 kind / owner），拿不到后端返回的文件行。
+   * 秒传命中时不需要登记，`existing_file` 就是答案。
+   */
+  file_item?: PartFileItem;
 }
 
-/** 组件内部 item（运行时状态机） */
+/** 组件内部 item（运行时状态机）。 */
 export type CosUploaderStatus = 'pending' | 'hashing' | 'uploading' | 'done' | 'error';
-export interface CosUploaderItem extends CosUploadedItem {
+
+export interface CosUploaderItem {
+  client_ref: string;
+  file: File;
+  /** 签发端点给的正式对象 key；秒传命中时为空。 */
+  object_key?: string;
+  /** 预签 PUT URL；秒传命中时为空。 */
+  upload_url?: string;
+  /** PUT 时必须原样回填的 Content-Type；秒传命中时为空。 */
+  content_type?: string;
+  /** true = 秒传命中，直接以 `existing_file` 落 done 态，不发 PUT / confirm。 */
+  already_exists: boolean;
+  /** 秒传命中时后端返回的已有文件项。 */
+  existing_file?: PartFileItem;
   status: CosUploaderStatus;
   progress: number;
+  /** SHA-256 hex；hash 阶段完成后写入。 */
+  sha256?: string;
   error?: string;
 }

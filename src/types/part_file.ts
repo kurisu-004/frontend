@@ -17,8 +17,12 @@
 // - 删除 download_url（v2 列表项不再即时签发下载 URL，改走 GET /files/objects/{id}/url）。
 //
 // 2026-10-13 后端 files 域重组：列表 / 下载 URL / 内容三条端点硬切
-// `/api/v2/part-files/*` → `/api/v2/files/objects/*`，配对上传硬切
-// `/api/v2/cnc-programs/pairs` → `/api/v2/files/cnc/pairs`。**旧路径 404、无 alias**。
+// `/api/v2/part-files/*` → `/api/v2/files/objects/*`。**旧路径 404、无 alias**。
+//
+// 2026-10-15：配对上传端点 `/api/v2/files/cnc/pairs` 下线（multipart 代理上传一并下线），
+// 配对关系改由直传链路的 `objects/confirm` 的 `pair_with_file_id` 表达；随它一起走的
+// `CncPairedFileRef` 类型与本文件里的 `upload-intents` 凭证类型（`CosCredentials` 等）
+// 一并删除 —— 本文件现在只剩文件对象域自身的行 VO / 预览契约 / 错误码分流。
 //
 // 2026-10-13 图纸预览切 CI 转图直链：新增 `FilePreviewResult` / `FilePreviewState` 与
 // 降级码白名单 `PREVIEW_UNSUPPORTED_CODES`（见下方小节）。预览链路是**两条**：
@@ -27,12 +31,25 @@
 // 时的兜底 + 非图纸文件内嵌预览的唯一形态）。两者不是替代关系，不要因为切了预览路径
 // 就把 `/content` 当成遗留清掉。
 //
-// 2026-09-16 M3 新增：STS 直传 COS 契约（upload-intents / confirm / FileBinding）。
-// 所有 id 字段保持 string 雪花；file_size 为 string i64；content_sha256 为 64-char 小写 hex。
+// 2026-10-15：STS 直传链路（upload-intents 凭证 + tmp_key）下线，本文件只剩**文件对象域
+// 自身的行 VO / 预览契约 / 错误码分流**。上传的 wire 契约见 `src/types/file_intent.ts`。
 
-/** 文件类型枚举（与后端 PartFileKind 的字符串值对齐） */
+/** 文件类型枚举（与后端 PartFileKind 的字符串值对齐）
+ *
+ *  2026-10-15 新增 `DELIVERY_TEMPLATE`：送货单打印模板（按一级客户绑定的那份 xlsx）。
+ *  它与其它 kind 最大的差别是**文件对象不挂零件也不挂装配件**，owner 是 CUSTOMER
+ *  （见 `FileOwnerKind`），但落库仍是同一张 `t_part_file`、读侧仍是同一套
+ *  `PartFileItem` 形状 —— 打印对话框的「按客户解析模板」走的是独立的 print-templates
+ *  端点，不从这里读。
+ */
 export type PartFileKind =
-  'DRAWING' | '3D_MODEL' | 'G_CODE' | 'SETUP_SHEET' | 'ASSEMBLY_MASTER' | 'CAD_2D';
+  | 'DRAWING'
+  | '3D_MODEL'
+  | 'CAD_2D'
+  | 'G_CODE'
+  | 'SETUP_SHEET'
+  | 'ASSEMBLY_MASTER'
+  | 'DELIVERY_TEMPLATE';
 
 /**
  * 文件对象的多态 owner 类型（对齐后端 `owner_kind`）。
@@ -40,8 +57,13 @@ export type PartFileKind =
  * `t_part_file` 一张表同时存零件与装配件的文件（装配件总装图 = `owner_kind='ASSEMBLY'`
  * + `kind='ASSEMBLY_MASTER'`），owner 维度从 path 段搬进了请求体，故上传 / 确认两个
  * 端点的入参都必须显式带它。
+ *
+ * 2026-10-15 新增 `CUSTOMER`：送货单打印模板的 owner 是**一级客户**（不是零件也不是
+ * 装配件），故直传链路必须能表达这一维。⚠️ `owner_id` 在这一支是客户 id，与零件 /
+ * 装配件分支下的 part.id / assembly.id 是**不同的表**——三者的雪花取值范围不重叠，
+ * 读代码时不要按「都是 t_ 开头」推定它们可互换。
  */
-export type FileOwnerKind = 'PART' | 'ASSEMBLY';
+export type FileOwnerKind = 'PART' | 'ASSEMBLY' | 'CUSTOMER';
 
 /**
  * 2026-10-04：后端 `BIZ_PART_FILE_DUPLICATE` —— 同一 `(part_id, kind)` 已有未删除文件。
@@ -222,25 +244,6 @@ export function isPreviewSelfHealError(e: unknown): boolean {
   return typeof code === 'number' && (PREVIEW_SELF_HEAL_CODES as readonly number[]).includes(code);
 }
 
-/**
- * 2026-09-29 修复：原 /api/v2/parts/{id}/cnc-pair 已移除兼容 nest，迁移到配对上传端点。
- * 2026-10-13：随 files 域重组硬切为 `POST /api/v2/files/cnc/pairs`（旧路径 404、无 alias）。
- * POST /api/v2/files/cnc/pairs 响应中的单文件引用（v2 CncFileRef）。
- * 2026-09-16 新增：Phase 5 切 v2 后该端点返回 { g_code, setup_sheet } 对象（非数组）。
- */
-export interface CncPairedFileRef {
-  id: string;
-  kind: PartFileKind;
-  file_type: string;
-  original_filename: string;
-  /** v2 i64 雪花序列化器转 string */
-  file_size: string;
-  content_type: string;
-  content_sha256: string | null;
-  download_url: string;
-  paired_file_id: string | null;
-}
-
 // ---------- 向后兼容 alias（旧 import 路径仍可用） ----------
 
 /** @deprecated 用 PartFileItem 替代 */
@@ -248,100 +251,11 @@ export type DrawingFileItem = PartFileItem;
 
 // ============================================================
 // 2026-09-16 M3 新增：STS 直传 COS 契约（与 backend-rust files::part_file::dto 对齐）
+//
+// 2026-10-15：STS 临时凭证链路整段下线（`CosCredentials` / `UploadIntentsIn` /
+// `UploadIntentsOut` / `FileBinding` / 本文件内的 `ConfirmFileIn` 全部移出）。
+// 直传契约的新形状（upload-intents 预签 URL + confirm 登记）见 `src/types/file_intent.ts`。
 // ============================================================
-
-/** STS 临时凭证（`POST /api/v2/part-files/upload-intents` 返回）。
- *
- *  直接喂给 `new COS({ SecretId, SecretKey, SecurityToken, XCosSecurityToken })`。
- *  expired_time 是 UTC 秒数（i64，JSON 解析为 number），前端比较时需 *1000。
- */
-export interface CosCredentials {
-  tmp_secret_id: string;
-  tmp_secret_key: string;
-  session_token: string;
-  /** UTC 秒（i64，后端直接以 i64 序列化） */
-  expired_time: number;
-}
-
-/** upload-intents 单项入参（与 `UploadIntentItemIn` 对齐）。 */
-export interface UploadIntentItemIn {
-  kind: PartFileKind;
-  filename: string;
-  /** 字节数；v2 i64 序列化器统一转 string，消费侧同样按 string 序列化回发。 */
-  file_size: string;
-  /** 64-char 小写 hex；由前端 `computeSha256` 计算。 */
-  content_sha256: string;
-  content_type: string;
-}
-
-/** upload-intents 请求 body（与 `UploadIntentsIn` 对齐）。
- *
- *  owner_part_id 可选：场景 A（创建工单）不填，后端直接签发新 batch tmp_key；
- *  场景 B（详情页补传）填 part_id，后端会按 (part_id, kind, sha) 查重，
- *  命中项标 `dedup_hit: true` 附 `existing_file`，跳过上传直接用旧文件。
- */
-export interface UploadIntentsIn {
-  owner_part_id?: string;
-  files: UploadIntentItemIn[];
-}
-
-/** upload-intents 单项出参（与 `UploadIntentItemOut` 对齐）。 */
-export interface UploadIntentItemOut {
-  /** 前端生成的 client_ref（用于在 items 数组中反查原始 File）。 */
-  client_ref: string;
-  /** COS tmp 区 key；后端生成，前端需原样填回 confirm / batch item。 */
-  tmp_key: string;
-  /** true = 后端按 (owner, kind, sha) 命中已有文件，可跳过上传直接复用 existing_file。 */
-  dedup_hit: boolean;
-  /** dedup_hit 时返回已有文件（前端用其替换本次上传）；非命中时 undefined。 */
-  existing_file?: PartFileItem;
-}
-
-/** upload-intents 完整响应（与 `UploadIntentsOut` 对齐）。 */
-export interface UploadIntentsOut {
-  credentials: CosCredentials;
-  bucket: string;
-  region: string;
-  /** STS policy resource 限定前缀（前端展示用，实际写传时 tmp_key 已自含该前缀）。 */
-  tmp_prefix: string;
-  items: UploadIntentItemOut[];
-}
-
-/** `POST /api/v2/files/objects/confirm` 入参（场景 B）。
- *  2026-09-29 新增：与 rust `ConfirmFileIn` 对齐，新增 `ext: string` 必填字段。
- *  caller 用 utils/fileExt.parseFileExt 从 original_filename 解析；后端据此做
- *  CAS path 派生 + 类型校验（与 grant 端口的 ext 共享同一白名单）。
- *
- *  2026-10-13：owner 从 URL path 段搬进请求体（`POST /parts/{id}/files/confirm`
- *  → `POST /files/objects/confirm`，旧路径 404、无 alias），故新增
- *  `owner_kind` / `owner_id` 两个必填字段。 */
-export interface ConfirmFileIn {
-  kind: PartFileKind;
-  tmp_key: string;
-  content_sha256: string;
-  original_filename: string;
-  file_size: string;
-  content_type: string;
-  /** 2026-09-29 必填：文件扩展名小写字母数字 1-7 字符（utils/fileExt.parseFileExt 解析）。 */
-  ext: string;
-  /** 多态 owner 类型：`PART` = t_part 行，`ASSEMBLY` = t_assembly 行。 */
-  owner_kind: FileOwnerKind;
-  /** 雪花 ID 字符串（t_part.id 或 t_assembly.id），**一律按 string 处理**。 */
-  owner_id: string;
-}
-
-/** 批量建单 item 的文件绑定（场景 A）。
- *
- *  与 rust 后端 `PartBatchCreateItem.drawing_file` / `model3d_file` 字段对齐，
- *  类型为 `FileBindingIn`（tmp_key + sha + filename + size + content_type）。
- */
-export interface FileBinding {
-  tmp_key: string;
-  content_sha256: string;
-  original_filename: string;
-  file_size: string;
-  content_type: string;
-}
 
 /** `POST /api/v2/parts/batch` 出参（场景 A，FE 视图）。
  *
