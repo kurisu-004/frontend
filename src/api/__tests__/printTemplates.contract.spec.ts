@@ -95,6 +95,7 @@ import {
   PRINT_TEMPLATE_ACCEPT_EXT,
 } from '@/views/printTemplates/printTemplateSchema';
 import { XLSX_MIME } from '@/views/com/delivery/utils/deliveryNoteTemplateContract';
+import { normalizeUploadContentType } from '@/utils/fileContentType';
 
 // ============================================================================
 // 跨仓对账基建（2026-10-16 review 第 3 轮 MAJOR-1）—— 只服务于文件末尾的 V7 组
@@ -213,11 +214,6 @@ const RESOLVE_ROW = {
   template: ROW,
   customer_name: ROW.customer_name,
 } as const;
-
-/** `el-upload` 给的那种 File（happy-dom / node 都有 File 全局）。 */
-function _xlsxFileUnused(name = 'fala.xlsx'): File {
-  return new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], name, { type: '' });
-}
 
 beforeEach(() => {
   apiGetMock.mockReset();
@@ -350,22 +346,39 @@ describe('printTemplates 的扩展名闸（与后端 21102 判据同源）', () 
   });
 
   // ⚠️ **强度有限**（2026-10-16 review 第 2 轮 M-4 复核）：`not.toContain("'.xlsx'")` 只认**单引号**
-  //   字面量，换反引号 / 双引号就绕过去了；`XLSX_MIME` 真正在不在，靠的是 E1 那条
-  //   （断言实际拼进 multipart 的 File 段 content-type）。当「没有第二份字面量副本」的粗筛用。
-  it('E2：MIME 字面量在本文件里**没有第二份副本**（后端改判据时它不会报错、只会静默被 21102 挡回）', () => {
+  //   字面量，换反引号 / 双引号就绕过去了。它当「没有第二份字面量副本」的粗筛用；
+  //   「上传路径真的取到 xlsx 规范 MIME」由下面的 E3 承担（那是行为断言，不依赖扫源码）。
+  it('E2：MIME 字面量在上传路径的两个文件里**没有第二份副本**（后端改判据时它不会报错、只会静默被 21102 挡回）', () => {
     const src = readFileSync(new URL('../printTemplates.ts', import.meta.url), 'utf8');
     // 允许的是从契约模块 import 后的**使用**；不允许的是把字面量抄进来。
     expect(src).not.toContain('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     expect(src).not.toContain("'.xlsx'");
-    // ⚠️ 2026-10-15：MIME 的实际消费方搬到了 `usePrintTemplatesStore`（直传链路的
-    // content_type 要签进 SigV4），api 层已经不再拼 File 段 ⇒ 那条 import 一并搬走。
-    // 「唯一的 MIME 真源仍是契约常量」这条不变，只是取它的文件换了。
+    // 直传链路的 content_type 归一在 `utils/fileContentType.ts`（六个上传场景共用），
+    // 它同样不许出现字面量副本 —— 后端 policy 一改，这里就该跟着改常量而不是改字面量。
+    const normalize = readFileSync(
+      new URL('../../utils/fileContentType.ts', import.meta.url),
+      'utf8',
+    );
+    expect(normalize).not.toContain('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  });
+
+  // ⚠️ **上传路径**（不是下载路径）的 MIME 真源。`usePrintTemplatesStore.ts` 里的 `XLSX_MIME`
+  //   只用在下载那段的 Blob 上 ⇒ 「store 里没有字面量」这条断言守不住上传。
+  //   真源是 `utils/fileContentType.ts::normalizeUploadContentType`：它在调 upload-intents
+  //   **之前**算出 content_type（该值会被签进 SigV4 的 SignedHeaders，PUT 时必须原样回填）。
+  it('E3：上传路径的 content_type 取契约常量（行为断言，不扫源码）', () => {
+    // 后端 policy 对 xlsx **只**收规范 MIME、没有 octet-stream 兜底 ⇒ 这条红了就是
+    // 「签发成功 → PUT 成功 → confirm 被拒」，且桶里会留一个孤儿对象。
+    expect(normalizeUploadContentType(new File([new Uint8Array([1])], '送货单模板.xlsx'))).toBe(
+      XLSX_MIME,
+    );
+    expect(normalizeUploadContentType(new File([new Uint8Array([1])], 'TEMPLATE.XLSX'))).toBe(
+      XLSX_MIME,
+    );
+    // 且它确实是从契约常量 import 的（不是碰巧字面量相同）。
     expect(
-      readFileSync(
-        new URL('../../views/printTemplates/composables/usePrintTemplatesStore.ts', import.meta.url),
-        'utf8',
-      ),
-    ).not.toContain('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      readFileSync(new URL('../../utils/fileContentType.ts', import.meta.url), 'utf8'),
+    ).toMatch(/import\s*\{\s*XLSX_MIME\s*\}\s*from\s*'@\/views\/com\/delivery\/utils\/deliveryNoteTemplateContract'/);
   });
 });
 

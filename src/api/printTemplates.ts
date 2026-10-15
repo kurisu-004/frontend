@@ -82,23 +82,19 @@ export interface DeletePrintTemplatePayload {
  * —— 签名承诺「按扩展名给」，实现却是 `void file; return XLSX_MIME`（本域只允许一种扩展名，
  * 没有分支可写），与同域的 `PRINT_TEMPLATE_ACCEPT_EXT` / `isPrintTemplateXlsxName` 职责重叠：
  * 「是不是合法的 xlsx」已经由扩展名闸判过一次（还兼着「发请求前就拦掉」的职责），再要一个
- * 「按扩展名算 MIME」的函数只会让后人以为这两处可以各改一半。故**删掉函数、直接取契约
- * 常量**，扩展名闸仍是唯一判据。
+ * 「按扩展名算 MIME」的函数只会让后人以为这两处可以各改一半。故**删掉函数**。
  *
- * 2026-10-15：上传改走直传链路后，这条注释仍然成立且更重要 —— `content_type` 会被签进
- * SigV4 的 SignedHeaders，PUT 时必须原样回填，所以 MIME 的唯一来源仍是
- * `XLSX_MIME` 契约常量，不是 `file.type`（浏览器对 xlsx 给的值极不稳定）。
+ * 「按扩展名算 MIME」这件事现在**只有一个**实现：`utils/fileContentType.ts::normalizeUploadContentType`
+ * —— 直传链路必须在调 upload-intents **之前**算好 content_type（它会被签进 SigV4 的
+ * SignedHeaders，PUT 时要原样回填），六个上传场景共用它。该函数的 xlsx 档直接从契约常量
+ * `XLSX_MIME` 取值，不是 `file.type`（浏览器对 xlsx 给的值极不稳定），也不是字面量。
  */
 
 /** 扩展名是不是 `.xlsx`（大小写不敏感）。调用方在**发请求之前**用它拦一道：
  *  坏模板不该占一次往返，更不该先落库再报错。
  *
- *  ⚠️ 这也是「合法扩展名」的**唯一**判据：mime 恒取契约常量 `XLSX_MIME`，两者不再
- *  各判一遍。
- *
- *  为什么 MIME 不能用 `file.type`：浏览器给的 `file.type` 对 xlsx 极不稳定（Windows Chrome
- *  常给空串或 `application/octet-stream`，部分环境给 `application/vnd.ms-excel`），签名与
- *  后端 policy 都按 `XLSX_MIME` 比对 ⇒ 照抄 `file.type` 会被拒。 */
+ *  ⚠️ 这是**「能不能上传」的唯一闸**；「发什么 content_type」是 `normalizeUploadContentType`
+ *  的职责，两者不再各判一遍 —— mime 恒取契约常量 `XLSX_MIME`。 */
 export function isPrintTemplateXlsxName(name: string): boolean {
   return name.toLowerCase().endsWith(PRINT_TEMPLATE_ACCEPT_EXT);
 }

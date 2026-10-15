@@ -191,8 +191,9 @@ function onExceed(): void {
 /**
  * 选好文件 → 交给 store 做「扩展名闸 → 逐格校验 → 上传」三步。
  *
- * ⚠️ `:auto-upload="false"` 意味着 el-upload **不会**自己发请求（那会绕过我们的校验与
- * FormData 组装）；真正的请求在 `store.upload.run` 里，走 `api/printTemplates.ts::uploadPrintTemplate`。
+ * ⚠️ `:auto-upload="false"` 意味着 el-upload **不会**自己发请求（那会绕过逐格校验）；
+ * 真正的传输在 `store.upload.run` 里，走直传引擎 `utils/directUpload.ts`
+ * （upload-intents 签预签 URL → XHR PUT → confirm 登记），本 store 不碰 FormData。
  */
 async function onFileChange(file: { raw?: File }): Promise<void> {
   if (!file?.raw) return;

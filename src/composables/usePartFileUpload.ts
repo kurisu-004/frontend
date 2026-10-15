@@ -5,9 +5,9 @@
 //
 // 流程四步（传输实现在 `utils/directUpload.ts`，本文件只做参数归一 + 状态暴露）：
 //   1. computeSha256(file)            64-char 小写 hex（秒传判据 + 登记依据）
-//   2. POST /files/upload-intents     拿 object_key + 预签 PUT URL（可能秒传短路）
+//   2. POST /files/objects/upload-intents  拿 object_key + 预签 PUT URL（秒传短路）
 //   3. XHR PUT 直传对象存储            带真进度、不经后端进程
-//   4. POST /files/objects/confirm    登记，返回 PartFileItem
+//   4. POST /files/objects/confirm      登记，返回 PartFileItem
 //
 // 为什么独立 composable：Tab2 的 PDF 批量是「建单成功后逐 job 补传」（多目标、并发、
 // 状态格），这里的场景是「详情页已有零件，换个文件补一下」（单目标、串行、失败即抛）。

@@ -1,6 +1,7 @@
 // 文件对象域 API（`/api/v2/files/objects/*`）—— 本文件是 files 域的**纯**实现：
 // 每个导出函数都打 `/files/objects/*`，与 `api/files/intents.ts`
-// （`/files/upload-intents`）逐个镜像 `/files` 下的一个子命名空间。
+// （**`/files/objects/upload-intents`，同属 objects 子命名空间**）逐个镜像
+// `/files/objects` 下的一个子命名空间。
 //
 // 打 `/parts/*` 的打印 BFF（`printPartDrawing` / `printPartDrawingBatch`）归
 // `api/parts/print.ts`；`src/api/parts/index.ts` 继续把它们聚合导出，调用方从

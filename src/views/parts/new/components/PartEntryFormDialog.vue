@@ -21,8 +21,8 @@
   - 2026-10-17（客户无限层级改造）：options 改吃 `buildCustomerTree` 的产物（任意
     深度），cascader label 改走 `customer_path`；「必须落叶子」的校验在父组件
     `onAddConfirm`，本组件只负责展示。
-  - 2026-10-15（翻转时序）：图纸区的 `<CosUploader>` 换成 `<el-upload
-    :auto-upload="false">`，**只暂存本地 File**。五个上传回调 prop 与对应的 emit 全部
+  - 2026-10-15（翻转时序）：图纸区改为 `<el-upload :auto-upload="false">`，
+    **只暂存本地 File**。原先那套通用上传组件的五个上传回调 prop 与对应的 emit 全部
     删除，改成一个 `drawingFileChange(file: File | null)`。上传发生在建单成功之后，
     由父 composable 的 `runDrawingUploadPhase` 负责。
 -->
@@ -166,7 +166,7 @@
         <div class="drawing-uploader">
           <!-- 2026-10-15 翻转时序：这里**只暂存本地 File，不发任何请求**。
                - :auto-upload="false" + 不给 action：el-upload 不会把文件发给任何地址；
-               - :limit="1"：单 PDF 限（换选 = 替换）；
+               - :limit="1" + :on-exceed：单 PDF 限，「换选 = 替换」；
                - :on-change：选中新文件 → 暂存并重建 blob URL（预览用）；
                - :on-remove：清暂存。
                真正的上传发生在「提交创建」成功之后（`usePartBatchManual` 的
@@ -179,6 +179,7 @@
             :file-list="drawingFileList"
             :on-change="onDrawingChange"
             :on-remove="onDrawingRemove"
+            :on-exceed="onDrawingExceed"
           >
             <el-button plain>选择 PDF 图纸（可选）</el-button>
           </el-upload>
@@ -187,8 +188,7 @@
             发起任何上传。
           </p>
           <p v-if="localForm.drawingName" class="form-hint">
-            已选择：{{ localForm.drawingName }}
-            <template v-if="editing">（重新选择将替换）</template>
+            已选择 {{ localForm.drawingName }}（重新选择将替换）
           </p>
         </div>
       </el-form-item>
@@ -349,6 +349,25 @@ const drawingFileList = computed<UploadFile[]>(() => {
 /** el-upload on-change：只暂存，不上传。选了新文件即替换（:limit=1 的语义）。 */
 function onDrawingChange(file: UploadFile, _files: UploadFiles): void {
   const raw = file.raw as File | undefined;
+  if (!raw) return;
+  props.drawingFileChange(raw);
+}
+
+/**
+ * el-upload on-exceed：`:limit="1"` + **受控** `:file-list` 下的「换选即替换」入口。
+ *
+ * ⚠️ 没有它就是一句假承诺。EP `upload-content` 的派发顺序是
+ * `if (limit && fileList.length + files.length > limit) { onExceed(files, fileList); return; }`，
+ * 而这里的 `fileList` 就是我们传进去的 `drawingFileList` —— 已暂存 1 个时再选 1 个，
+ * **on-change 根本不会触发**（它排在 exceed 判定之后），而 `upload.mjs` 给 `onExceed`
+ * 的默认值是 NOOP ⇒ 用户点了文件选择器、选完、关掉，屏幕上零反馈、什么也没发生。
+ * on-change 那条只覆盖「暂存位为空时的第一次选择」。
+ */
+function onDrawingExceed(files: File[]): void {
+  // EP 传进来的是原生 `File[]`（不是 UploadUserFile[]），但 happy-dom / 少数环境下
+  // 仍可能裹成带 raw 的形态，两个都取一次。
+  const picked = files[0] as (File & { raw?: File }) | undefined;
+  const raw = picked?.raw ?? picked;
   if (!raw) return;
   props.drawingFileChange(raw);
 }

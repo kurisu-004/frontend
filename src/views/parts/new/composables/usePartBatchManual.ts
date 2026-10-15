@@ -8,10 +8,8 @@
 // 改前「选 PDF → 立刻直传 → 提交时把 tmp_key 塞进 batchCreateParts」；
 // 改后「选 PDF → **只暂存本地 File，不发任何请求** → 点提交 → batchCreateParts 建单
 //      → 拿到 created[].id 之后，对每条有图纸的 staged entry 走直传上传」。
-// 于是 `requestDrawingUpload` / `onDrawingUploaded` / `onDrawingItemsChange` /
-// `onDrawingAllDone` / `onDrawingUploadError` 五个上传回调连同 `drawingBinding` /
-// `drawingClientRef` 两个字段全部删除，PartEntryFormDialog 里的 `<CosUploader>`
-// 换成 `<el-upload :auto-upload="false">`（只暂存）。
+// 于是那五个上传回调连同 `drawingBinding` / `drawingClientRef` 两个字段全部删除，
+// PartEntryFormDialog 的图纸区改成 `<el-upload :auto-upload="false">`（只暂存）。
 //
 // 失败语义随之分家（本文件最需要被记住的一条）：
 //   - 建单失败 ⇒ 「这一行没建出来」，可以原样重提（回 idle）；
@@ -152,12 +150,14 @@ export interface UsePartBatchManualReturn {
   form: FormState;
   hydrateRestoredCount: ComputedRef<number>;
   // orphanFileRefs 的 session 来源早已下线，值恒为空数组；这里保留只是为了不动页面结构。
+  // ⚠️ 上传直连化后**没有 tmp_key 这个东西了**（STS 临时凭证链路已下线，正式 object_key
+  // 由 upload-intents 直接签发），字段里也不该再留着它 —— 留着会让后来者以为存在
+  // 「tmp 区对象」这条路径。
   orphanFileRefs: ComputedRef<
     Array<{
       client_ref: string;
       status?: string;
       kind?: string;
-      tmp_key?: string;
       file_size?: number;
       original_filename?: string;
       uploaded_at?: string | null;
@@ -198,6 +198,12 @@ export interface UsePartBatchManualReturn {
   drawingUploadFailures: ComputedRef<string[]>;
   /** 失败项数（0 = 没有失败，页面不显示失败面板）。 */
   drawingUploadFailedCount: ComputedRef<number>;
+  /**
+   * 本次提交是否**有行没建成**（`res.failed.length > 0`）。true 时失败面板要同时说清
+   * 两件不同的事：① 未建成的行**可以**修正后重新提交（它们已从待新增列表移除）；
+   * ② 已建成的行**不能**重新提交（零件已落库），只能用面板上的「重试上传」补图纸。
+   */
+  partialSubmitFailedRows: Ref<boolean>;
   /** 重跑全部失败项。 */
   retryDrawingUploads: () => Promise<void>;
   /** 清掉上传阶段的现场（失败清单 / 状态），不碰已落库的零件。 */
@@ -702,12 +708,20 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
    * 零件」对回「本地哪一行」。只有那些**既建成了、又带了图纸**的行才产生 job。
    *
    * 三种收场：
-   * 1. 一份图纸都没有 ⇒ 直接提示成功 + 跳页（与改造前一致）；
-   * 2. 全部传完 ⇒ 同样提示成功 + 跳页；
+   * 1. 一份图纸都没有 ⇒ 提示成功；`navigate` 为真时跳页；
+   * 2. 全部传完 ⇒ 同上；
    * 3. 有失败 ⇒ **停在当前页**，弹一条讲清「零件已创建、图纸没传上去」的 warning，
    *    失败清单由页面渲染。用户点清单上的「重试」只重传文件，绝不重建单。
+   *
+   * @param opts.navigate 全成功时是否跳页 + 弹「成功新建 N 条」。**部分行未建成时传
+   *   false** —— 那一支页面上还留着未建成的行要用户改、还留着图纸失败清单要人重试，
+   *   跳过去两样都看不见；提示语也不能说「成功新建」，它会把用户引到「这批全好了」的
+   *   错误结论上（真正未建成行数由调用方的 alert 说）。
    */
-  async function runDrawingUploadPhase(res: PartBatchResult): Promise<void> {
+  async function runDrawingUploadPhase(
+    res: PartBatchResult,
+    opts: { navigate: boolean },
+  ): Promise<void> {
     const jobs: PostSubmitUploadJob[] = res.created
       .filter((c) => {
         const entry = staged.value[c.sourceIndex];
@@ -731,8 +745,10 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
       });
 
     if (jobs.length === 0) {
-      ElMessage.success(`成功新建 ${res.created.length} 条零件`);
-      await router.push({ path: '/parts', query: { status: 'PENDING' } });
+      if (opts.navigate) {
+        ElMessage.success(`成功新建 ${res.created.length} 条零件`);
+        await router.push({ path: '/parts', query: { status: 'PENDING' } });
+      }
       return;
     }
 
@@ -740,8 +756,13 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
     await uploads.runJobs(jobs);
     const failures = uploads.failedJobs.value;
     if (failures.length === 0) {
-      ElMessage.success(`成功新建 ${res.created.length} 条零件`);
-      await router.push({ path: '/parts', query: { status: 'PENDING' } });
+      if (opts.navigate) {
+        ElMessage.success(`成功新建 ${res.created.length} 条零件`);
+        await router.push({ path: '/parts', query: { status: 'PENDING' } });
+      } else {
+        // 部分行未建成：能说的只有「已建成的那几行图纸传好了」，不能说「成功新建 N 条」。
+        ElMessage.success(`已建成 ${res.created.length} 条零件，其图纸全部上传成功`);
+      }
       return;
     }
     ElMessage.warning(
@@ -750,25 +771,18 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
     );
   }
 
+  /**
+   * 本次提交有没有行没建成。**每次提交前复位**：它只描述「上一次性提交」的形态，
+   * 带着上一批的 true 去渲染下一批的面板文案就是错的。
+   */
+  const partialSubmitFailedRows = ref(false);
+
   const submitMutation = useMutation<PartBatchResult, Error, undefined>({
     mutationKey: ['parts', 'manual', 'batch-create'],
     mutationFn: () => submitStagedEntries(),
     onSuccess: async (res) => {
-      if (res.failed.length > 0) {
-        const sample = res.failed
-          .slice(0, 5)
-          .map((f) => `第 ${f.index + 1} 行：${f.message}`)
-          .join('\n');
-        const more = res.failed.length > 5 ? `\n...还有 ${res.failed.length - 5} 行失败` : '';
-        await ElMessageBox.alert(
-          `服务端拒绝了 ${res.failed.length} 行：\n${sample}${more}`,
-          '部分行未通过',
-          { type: 'warning' },
-        ).catch(() => {
-          /* 用户点叉忽略 */
-        });
-        return;
-      }
+      const partial = res.failed.length > 0;
+      partialSubmitFailedRows.value = partial;
 
       // 2026-10-15：建单成功 → 追加「传图纸」阶段。
       //
@@ -777,7 +791,41 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
       //   - 不回 idle、不重置 staged 的建单结果；
       //   - 失败项进独立的 `drawingUploadFailures` 清单，由页面渲染成可重试的面板；
       //   - 有失败时**不跳页**（跳过去用户就没地方看见清单、也没地方点重试）。
-      await runDrawingUploadPhase(res);
+      //
+      // ⚠️ **部分行未建成（`res.failed.length > 0`）时同样要跑这一段**：那些建成的行
+      // 已经落库了，它们的图纸再不上传就既不进失败清单、也不提示，用户一点都看不出来。
+      // 不跳页（`navigate: false`）：页面上还留着未建成的行要用户改。
+      // 必须排在下面改 `staged` **之前** —— 它按 `sourceIndex` 回 staged 取 File。
+      await runDrawingUploadPhase(res, { navigate: !partial });
+
+      if (partial) {
+        // ⚠️ **已建成的行必须从 staged 里摘掉**：留着的话，用户改完失败行再点一次提交，
+        // 会为已经建出来的那些行**再建一遍单** —— 那是真数据损坏，而「改完重提失败行」
+        // 本身是被允许的动作。摘掉的行一并 revoke 掉它的 blob URL。
+        const createdIndexes = new Set(res.created.map((c) => c.sourceIndex));
+        staged.value.filter((_, i) => createdIndexes.has(i)).forEach(revokeEntryUrls);
+        staged.value = staged.value.filter((_, i) => !createdIndexes.has(i));
+
+        const sample = res.failed
+          .slice(0, 5)
+          .map((f) => `第 ${f.index + 1} 行：${f.message}`)
+          .join('\n');
+        const more = res.failed.length > 5 ? `\n...还有 ${res.failed.length - 5} 行失败` : '';
+        const drawingNote =
+          res.created.length > 0
+            ? `\n\n另外 ${res.created.length} 行已建成（已从待新增列表移除），` +
+              `它们的图纸上传结果见页面下方「图纸上传失败」面板；` +
+              `已建成的零件**不要重新提交**。`
+            : '';
+        await ElMessageBox.alert(
+          `服务端拒绝了 ${res.failed.length} 行：\n${sample}${more}${drawingNote}`,
+          '部分行未通过',
+          { type: 'warning' },
+        ).catch(() => {
+          /* 用户点叉忽略 */
+        });
+        return;
+      }
 
       // 释放所有 blob URL
       staged.value.forEach(revokeEntryUrls);
@@ -805,6 +853,7 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
       ))
     )
       return;
+    partialSubmitFailedRows.value = false;
     submitMutation.mutate();
   }
 
@@ -957,9 +1006,8 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
     openAddDialog,
     onCustomerChange,
     onApplicantSelect,
-    // 2026-09-17 M4：图纸上传回调（替代 beforeDrawingUpload + onDrawingChange +
-    // onDrawingRemoveUpload + onDrawingRemove 四件套）。CosUploader 通过这五
-    // 个回调驱动 form 图纸状态机。
+    // 图纸：对话框里只**暂存**本地 File（`<el-upload :auto-upload="false">` 的
+    // on-change），真正上传在建单成功之后由 `usePostSubmitUploads` 驱动。
     onDrawingFileChange,
     onAddConfirm,
     onDialogClosed,
@@ -973,6 +1021,7 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
     drawingUploadingNow: uploads.running,
     drawingUploadFailures,
     drawingUploadFailedCount,
+    partialSubmitFailedRows,
     retryDrawingUploads,
     dismissDrawingUploadResult,
   };

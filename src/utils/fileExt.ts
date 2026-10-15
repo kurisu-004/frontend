@@ -1,10 +1,8 @@
-// 2026-09-29 新增：解析文件扩展名为 STS grant 端口契约所用的 `ext` 字段。
+// 2026-09-29 新增：解析文件扩展名为后端 confirm 契约所用的 `ext` 字段。
 //
-// 背景：后端 STS schema 把 `content_sha256` 升级为 required 64 hex + 新增
-// required `ext` 字段（小写字母数字、1-7 字符）。前端在调 grantStsTmpKey*
-// 之前必须先按文件名解析出 ext，与 SHA-256 同等作为"完整指纹"派生唯一
-// tmp_key —— 2026-09-29 之前仅靠 (purpose, filename, content_sha256) 派生，
-// 现加入 ext 后命名冲突概率进一步降低。
+// 背景：后端把 `content_sha256` 升级为 required 64 hex、并新增 required `ext` 字段
+// （小写字母数字、1-7 字符）。前端在调 upload-intents / confirm 之前必须先按文件名解析
+// 出 ext —— 它与 SHA-256 一起构成「这份文件是什么」的完整指纹。
 //
 // 设计要点：
 // - 仅取文件名的最后一段「.ext」（不识别路径分隔符；caller 传 File.name 即可，
@@ -13,6 +11,11 @@
 // - 不允许空扩展名 / 点开头 / 含分隔符；
 // - 长度 1-7 字符（rust schema `length(min=1, max=7)`）。
 // 解析失败 → 抛 Error('invalid ext')，caller 接住后走 ElMessage 错误通道。
+//
+// ⚠️ 上传是**预签 PUT 直传**（`utils/directUpload.ts`）：后端在 confirm 阶段才按 ext
+// 派生前缀目录并做类型校验，而对象存储的落点由 upload-intents 签发的 object_key 决定
+// ⇒ 这里的 ext 与 content_type 是两条独立判据，缺一个都不会当场报错而是延后到 confirm
+// 才被拒。
 //
 // 注意：本函数只解 ext，**不**做 MIME / 类型白名单校验 —— MIME 归一走
 // `utils/fileContentType.ts::normalizeUploadContentType`（它会被签进 SigV4 的

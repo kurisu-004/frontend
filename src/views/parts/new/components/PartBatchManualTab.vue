@@ -210,7 +210,10 @@
   <!-- 2026-10-15：建单成功但图纸上传失败时的失败面板。
        ⚠️ 这个面板存在的全部理由是「**零件已经落库了**」：绝不能让用户以为整次提交
        失败而再点一次「提交创建」（那就是重复建单）。面板上只有「重试上传」——
-       重试只补文件，不重建单。 -->
+       重试只补文件，不重建单。
+       ⚠️ 「部分行未建成」那一支（`partialSubmitFailedRows`）说的事不同：未建成的行
+       已从待新增列表移除、**可以**改完再提交，只有已建成的那些行不能重提。两种形态
+       共用一个面板，所以标题必须分开说，否则用户会把「能重提」错用到「不能重提」的行上。 -->
   <el-alert
     v-if="drawingUploadFailedCount > 0"
     type="error"
@@ -219,7 +222,14 @@
     class="drawing-upload-failures"
   >
     <template #title>
-      <span>
+      <span v-if="partialSubmitFailedRows">
+        本次有
+        <strong>行未建成</strong>（明细见提交后的提示），已建成的那几行里有
+        {{ drawingUploadFailedCount }} 份图纸未上传成功（下方清单）。
+        未建成的行已留在待新增列表里、改完可以再提交；<strong>已建成的零件不要重新提交</strong>
+        —— 只需点下面的「重试上传」补图纸。
+      </span>
+      <span v-else>
         零件已创建成功，但有 {{ drawingUploadFailedCount }} 份图纸未上传成功（下方清单）。
         零件已经在库里了，<strong>不要重新提交</strong> —— 点「重试上传」只会补传文件。
       </span>
@@ -365,6 +375,11 @@ const props = defineProps<{
   drawingUploadFailures: string[];
   /** 失败项数（> 0 时页面显示失败面板）。 */
   drawingUploadFailedCount: number;
+  /**
+   * 本次提交是否有行**没建成**。true 时面板要把两件不同的事分开说：未建成的行可以
+   * 修正后重提，已建成的行不能重提（零件已落库）。
+   */
+  partialSubmitFailedRows: boolean;
   /** 重跑全部失败项（只补文件，不重建单）。 */
   retryDrawingUploads: () => Promise<void>;
   /** 用户放弃重试：清本地上传现场。 */

@@ -93,9 +93,8 @@ const UPLOAD_CONCURRENCY = 6;
 /**
  * 「提交后逐 job 上传」的通用状态机。
  *
- * 调用方在拿到主体 id **之后**才 registerJobs + runJobs —— 这是它与「选文件即上传」
- * 那套（CosUploader）的根本差别：这里的上传对象是「业务主体 + 文件」的组合，主体在
- * 上传发生时必须已经存在。
+ * 调用方在拿到主体 id **之后**才 registerJobs + runJobs —— 主体在上传发生时必须已经
+ * 存在，这是本编排与「选文件即传」那种形态的根本差别。
  */
 export function usePostSubmitUploads(): UsePostSubmitUploadsReturn {
   const jobs = ref<PostSubmitUploadJob[]>([]);

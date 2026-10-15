@@ -31,7 +31,7 @@
 import { computeSha256 } from '@/utils/fileHash';
 import { parseFileExt } from '@/utils/fileExt';
 import { normalizeUploadContentType } from '@/utils/fileContentType';
-import { isPresignExpiredError, xhrPut, type PresignedPutError } from '@/utils/presignedPut';
+import { isPresignExpiredError, xhrPut } from '@/utils/presignedPut';
 import { grantUploadIntents } from '@/api/files/intents';
 import { confirmFileObject } from '@/api/files/objects';
 import type { FileOwnerKind, PartFileItem, PartFileKind, UploadIntentItemOut } from '@/types/file_intent';
@@ -105,7 +105,8 @@ export async function directUpload(opts: DirectUploadOptions): Promise<DirectUpl
           kind,
           original_filename: file.name,
           content_type: declaredContentType,
-          file_size: file.size,
+          // String()：后端 deserialize_i64 只收 JSON 字符串（见 types/file_intent.ts）。
+          file_size: String(file.size),
           content_sha256: sha,
         },
       ],
@@ -169,7 +170,8 @@ export async function directUpload(opts: DirectUploadOptions): Promise<DirectUpl
     object_key: intent.object_key!,
     content_sha256: sha,
     original_filename: file.name,
-    file_size: file.size,
+    // String()：同上，后端 confirm 的 file_size 也只收字符串。
+    file_size: String(file.size),
     // confirm 登记的 content_type 必须与 PUT 时实际发的一致，取重签后的那份。
     content_type: intent.content_type ?? declaredContentType,
     ext,
@@ -177,14 +179,4 @@ export async function directUpload(opts: DirectUploadOptions): Promise<DirectUpl
   });
   onProgress?.(100);
   return { item: confirmed, alreadyExists: false };
-}
-
-/**
- * 从上传错误里取出 PUT 阶段的诊断字段；非 PUT 错误（签发 / confirm 的 `ApiError`）
- * 返回 null，调用方据此区分「网络 / 存储侧问题」与「业务侧问题」。
- */
-export function uploadErrorDetail(e: unknown): PresignedPutError | null {
-  if (!e || typeof e !== 'object') return null;
-  const err = e as PresignedPutError;
-  return typeof err.status === 'number' && 'presignExpired' in err ? err : null;
 }

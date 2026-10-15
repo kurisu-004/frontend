@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   routerReplace: vi.fn(),
   confirmDangerous: vi.fn(),
   warn: vi.fn(),
+  directUpload: vi.fn(),
 }));
 
 // 2026-09-28 删 useUploadSession：原 usePartBatchManual.spec.ts 的 sessionStub +
@@ -42,6 +43,13 @@ vi.mock('@/api/parts', () => ({
 
 vi.mock('@/api/applicant', () => ({
   getOrCreateApplicant: mocks.getOrCreateApplicant,
+}));
+
+// 2026-10-15：建单成功后的图纸上传阶段走 `utils/directUpload`（内部再调 upload-intents /
+// XHR PUT / confirm 三条网络请求）。这里桩掉传输层，让「建单结果 → 上传阶段」的编排
+// 可以被纯本地地驱动；directUpload 自身的行为由 `utils/__tests__/directUpload.spec.ts` 守。
+vi.mock('@/utils/directUpload', () => ({
+  directUpload: (o: { ownerId: string; file: File }) => mocks.directUpload(o),
 }));
 
 // 2026-10-17：申请人解析失败只 console.warn（不中止整批），钉住「告警确实发生」，
@@ -252,10 +260,21 @@ const partialResult: PartBatchResult = {
   failed: [{ index: 0, message: 'invalid' }],
   cleanup_tmp_keys: [],
 };
+/**
+ * 混合形态：第 0 行建成、第 1 行没建成。⚠️ `sourceIndex: 0` 必须与 `failed[].index: 1`
+ * 对上 —— 它是「建出来的零件对回 staged 哪一行」的唯一依据（见 runDrawingUploadPhase）。
+ */
+const mixedResult: PartBatchResult = {
+  created: [okPartItem],
+  failed: [{ index: 1, message: 'invalid' }],
+  cleanup_tmp_keys: [],
+};
 
 beforeEach(() => {
   mocks.batchCreateParts.mockReset();
   mocks.getOrCreateApplicant.mockReset();
+  mocks.directUpload.mockReset();
+  mocks.directUpload.mockResolvedValue({ item: { id: 'file-1' }, alreadyExists: false });
   mocks.routerReplace.mockReset();
   mocks.warn.mockReset();
   mocks.confirmDangerous.mockResolvedValue(true);
@@ -415,6 +434,81 @@ describe('usePartBatchManual', () => {
     expect(ElMessageBox.alert as ReturnType<typeof vi.fn>).toHaveBeenCalled();
     expect(captured.staged.value.length).toBe(1);
     expect(mocks.routerReplace).not.toHaveBeenCalled();
+
+    w.unmount();
+  });
+
+  // ⚠️ 2026-10-15：部分行未建成时，**已建成的那几行的图纸仍要上传**，且那几行必须
+  //   从 staged 里摘掉。改前这一支直接 return：图纸既没传、也没进失败清单、也没提示，
+  //   而 staged 原样留着 ⇒ 用户改完失败行再点一次提交，会为已经建出来的行再建一遍单。
+  it('onSubmit 混合结果（1 行建成 + 1 行未建成）：建成行的图纸照样上传，且那行从 staged 移除', async () => {
+    mocks.batchCreateParts.mockResolvedValue(mixedResult);
+    const { ElMessageBox } = await import('element-plus');
+    // element-plus 是模块级桩，alert 的调用记录跨用例累积 ⇒ 只看本用例自己那次。
+    (ElMessageBox.alert as ReturnType<typeof vi.fn>).mockClear();
+    const w = harnessMount();
+    await flushPromises();
+    if (!captured) throw new Error('not captured');
+
+    // 第 0 行：建成（带图纸 ⇒ 上传阶段必须为它建 job）
+    captured.form.drawingNo = 'LT1';
+    captured.form.name = 'p1';
+    captured.form.customerId = 'c1';
+    captured.form.applicantName = 'bob';
+    captured.form.requestDate = '2026-09-24';
+    captured.form.plannedDeliveryDate = '2026-09-25';
+    captured.onDrawingFileChange(new File([new Uint8Array([1, 2, 3])], 'lt1.pdf'));
+    await captured.onAddConfirm();
+    await nextTick();
+
+    // 第 1 行：未建成（无图纸）
+    captured.form.drawingNo = 'LT2';
+    captured.form.name = 'p2';
+    captured.onDrawingFileChange(null);
+    await captured.onAddConfirm();
+    await nextTick();
+    expect(captured.staged.value.length).toBe(2);
+
+    await captured.onSubmit();
+    await drainSubmit();
+
+    // ① 建成行的图纸真的传了，owner 是 created[0].id
+    expect(mocks.directUpload).toHaveBeenCalledTimes(1);
+    expect(mocks.directUpload.mock.calls[0]![0]).toMatchObject({
+      ownerKind: 'PART',
+      ownerId: 'p1',
+      kind: 'DRAWING',
+    });
+
+    // ② 已建成的那行从 staged 移除（重提不会再建一遍单），只剩未建成的那行
+    expect(captured.staged.value.length).toBe(1);
+    expect(captured.staged.value[0]!.drawingNo).toBe('LT2');
+
+    // ③ 未建成的行以 alert 告知，且 alert 正文点名「已建成的零件不要重新提交」
+    expect(ElMessageBox.alert as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
+    const alertText = String(
+      (ElMessageBox.alert as ReturnType<typeof vi.fn>).mock.calls[0]![0],
+    );
+    expect(alertText).toContain('第 2 行');
+    expect(alertText).toContain('不要重新提交');
+    expect(captured.partialSubmitFailedRows.value).toBe(true);
+
+    // ④ 不跳页（未建成的行还留在页面上要用户改）
+    expect(mocks.routerReplace).not.toHaveBeenCalled();
+
+    w.unmount();
+  });
+
+  it('onSubmit 全成功时复位 partialSubmitFailedRows（不带着上一批的 true 渲染下一批面板）', async () => {
+    mocks.batchCreateParts.mockResolvedValue(okResult);
+    const w = harnessMount();
+    await flushPromises();
+    if (!captured) throw new Error('not captured');
+
+    await stageEntry(captured, 'LT1', 'bob');
+    await captured.onSubmit();
+    await drainSubmit();
+    expect(captured.partialSubmitFailedRows.value).toBe(false);
 
     w.unmount();
   });

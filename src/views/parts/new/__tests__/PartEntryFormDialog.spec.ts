@@ -148,18 +148,49 @@ const ElIconStub = defineComponent({
   },
 });
 
-/** 2026-10-15：图纸区换成 el-upload（只暂存、不上传）。这里只需要一个渲染 stub，
- *  真正的行为断言（on-change / on-remove 转发）由下面的用例直接调组件方法验。 */
+/**
+ * 2026-10-15：图纸区换成 el-upload（只暂存、不上传）。
+ *
+ * ⚠️ 这个 stub **把 EP 真实的 `:limit` 语义也复刻了**，不是纯渲染替身 ——
+ * 复刻的是 `upload-content.mjs` 的派发顺序：
+ *   `if (limit && fileList.length + files.length > limit) { onExceed(files, fileList); return; }`
+ * 且 `fileList` 就是传进来的受控列表 ⇒ 已暂存 1 个时再选一个，**on-change 不触发**、
+ * 只走 on-exceed。改前这里是个空壳（两个回调都没接），所以「换选被静默吞掉」这条缺陷
+ * 在测试里完全看不见。下面的用例就是靠它守住的。
+ */
 const ElUploadStub = defineComponent({
   name: 'ElUploadStub',
-  props: ['fileList', 'limit', 'accept'],
-  emits: ['change', 'remove'],
+  props: ['fileList', 'limit', 'accept', 'onChange', 'onRemove', 'onExceed'],
   setup(props, { slots }) {
     return () =>
       h('div', { class: 'el-upload-stub' }, [
         slots.default?.(),
         ...(props.fileList as Array<{ name: string }>).map((f) =>
           h('div', { class: 'el-upload-stub__row' }, f.name),
+        ),
+        h(
+          'button',
+          {
+            class: 'el-upload-stub__pick',
+            onClick: () => {
+              const picked = new File([new Uint8Array(4)], 'picked.pdf', {
+                type: 'application/pdf',
+              });
+              const list = (props.fileList ?? []) as Array<{ name: string }>;
+              if (props.limit && list.length + 1 > props.limit) {
+                (props.onExceed as ((f: File[], u: unknown[]) => void) | undefined)?.(
+                  [picked],
+                  list,
+                );
+                return;
+              }
+              (props.onChange as ((f: unknown, fs: unknown) => void) | undefined)?.(
+                { name: picked.name, raw: picked },
+                list,
+              );
+            },
+          },
+          'pick',
         ),
       ]);
   },
@@ -321,18 +352,38 @@ describe('PartEntryFormDialog', () => {
     expect(wrapper.find('.el-upload-stub__row').text()).toBe('foo.pdf');
   });
 
-  it('editing=true 且有图纸时提示「重新选择将替换」', () => {
+  it('有图纸时提示「重新选择将替换」，且这句话对新建态同样成立（不是 editing 专属）', () => {
     const f = new File([new Uint8Array(4)], 'foo.pdf', { type: 'application/pdf' });
     const wrapper = mount(PartEntryFormDialog, {
       props: {
         ...baseProps(),
-        editing: true,
         form: { ...baseForm, drawingFile: f, drawingName: 'foo.pdf' },
       },
       global: globalConfig,
     });
-    expect(wrapper.text()).toContain('已选择：foo.pdf');
+    expect(wrapper.text()).toContain('已选择 foo.pdf');
     expect(wrapper.text()).toContain('重新选择将替换');
+  });
+
+  // ⚠️ 这条守的是 `:limit="1"` + **受控** `:file-list` 下的换选语义。EP 真实的
+  //   upload-content 在 `fileList.length + files.length > limit` 时是 `onExceed(...); return;`
+  //   —— on-change 排在它之后，根本不会触发；而 `upload.mjs` 给 onExceed 的默认值是 NOOP
+  //   ⇒ 改前这里一旦已暂存图纸，用户再选一个就是「屏幕上零反馈、什么也没发生」。
+  it('已暂存 1 个图纸后再选：走 on-exceed 并把新 File 交给父组件（换选即替换）', async () => {
+    const seen: Array<File | null> = [];
+    const staged = new File([new Uint8Array(4)], 'first.pdf', { type: 'application/pdf' });
+    const wrapper = mount(PartEntryFormDialog, {
+      props: {
+        ...baseProps(),
+        form: { ...baseForm, drawingFile: staged, drawingName: 'first.pdf' },
+        drawingFileChange: (f: File | null) => seen.push(f),
+      },
+      global: globalConfig,
+    });
+    await wrapper.find('.el-upload-stub__pick').trigger('click');
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.name).toBe('picked.pdf');
+    expect(seen[0]).not.toBe(staged);
   });
 
   it('本地 form 改动 → emit update:form 回写父组件', async () => {

@@ -73,7 +73,8 @@ describe('confirmFileObject', () => {
       object_key: 'obj/a1b2c3d4e5f60718_a.pdf',
       content_sha256: 'a'.repeat(64),
       original_filename: 'a.pdf',
-      file_size: 12345,
+      // ⚠️ 必须发字符串：后端 ConfirmFileIn.file_size 挂 deserialize_i64，只接受 JSON 字符串。
+      file_size: '12345',
       content_type: 'application/pdf',
       ext: 'pdf',
     };

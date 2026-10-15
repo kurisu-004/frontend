@@ -1,4 +1,4 @@
-// src/api/files/__tests__/intents.spec.ts —— 上传意图端口（`POST /api/v2/files/upload-intents`）
+// src/api/files/__tests__/intents.spec.ts —— 上传意图端口（`POST /api/v2/files/objects/upload-intents`）
 // 与登记端口（`POST /api/v2/files/objects/confirm`）的实现契约。
 //
 // 2026-10-15：这份 spec 取代原先守 multipart 代理上传的 `fileUploadEndpoints.spec.ts`
@@ -23,7 +23,37 @@ import type { ConfirmFileIn, GrantUploadIntentsIn } from '@/types/file_intent';
 
 beforeEach(() => post.mockReset());
 
-describe('grantUploadIntents（POST /files/upload-intents）', () => {
+describe('grantUploadIntents（POST /files/objects/upload-intents）', () => {
+  /**
+   * 守卫：签发 URL **必须**落在 `/files/objects/` 子命名空间下。
+   *
+   * 为什么这条独立于上面那条 `toBe` 逐字断言 —— 后端是三层 nest：
+   * `mod.rs` `.nest("/files")` → `files/handler.rs` `.nest("/objects")` →
+   * `part_file/handler.rs` `.route("/upload-intents")`，少写一段 `/objects` 就是一条
+   * **不存在**的路由 ⇒ 404，且现场只看到一句 axios 错误。这条断言把「少一层」单独钉住：
+   * 将来有人照着某个旧注释把 URL 改回 `/files/upload-intents`，这里当场红。
+   */
+  it('URL 必须落在 /files/objects/ 下（少一层 `/objects` 就是 404）', async () => {
+    post.mockResolvedValueOnce({ data: { items: [] } });
+    await grantUploadIntents({
+      owner_kind: 'PART',
+      owner_id: 'p1',
+      items: [
+        {
+          client_ref: 'r',
+          kind: 'DRAWING',
+          original_filename: 'a.pdf',
+          content_type: 'application/pdf',
+          file_size: '1',
+          content_sha256: 'e'.repeat(64),
+        },
+      ],
+    });
+    const url = String(post.mock.calls[0]![0]);
+    expect(url.startsWith('/files/objects/')).toBe(true);
+    expect(url).not.toBe('/files/upload-intents');
+  });
+
   it('URL 无尾斜杠（后端 nest 把内层的 `/` 折叠成 prefix 本身），body 原样透传', async () => {
     post.mockResolvedValueOnce({ data: { items: [] } });
     const payload: GrantUploadIntentsIn = {
@@ -35,14 +65,14 @@ describe('grantUploadIntents（POST /files/upload-intents）', () => {
           kind: 'DRAWING',
           original_filename: '主轴装配图.pdf',
           content_type: 'application/pdf',
-          file_size: 1048576,
+          file_size: '1048576',
           content_sha256: 'a'.repeat(64),
         },
       ],
     };
     await grantUploadIntents(payload);
     const [url, body] = post.mock.calls[0]!;
-    expect(url).toBe('/files/upload-intents');
+    expect(url).toBe('/files/objects/upload-intents');
     expect(body).toEqual(payload);
   });
 
@@ -57,12 +87,12 @@ describe('grantUploadIntents（POST /files/upload-intents）', () => {
           kind: 'DELIVERY_TEMPLATE',
           original_filename: 't.xlsx',
           content_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          file_size: 10,
+          file_size: '10',
           content_sha256: 'b'.repeat(64),
         },
       ],
     });
-    expect(post.mock.calls[0]![0]).toBe('/files/upload-intents');
+    expect(post.mock.calls[0]![0]).toBe('/files/objects/upload-intents');
   });
 
   it('秒传形态：already_exists=true 且带 existing_file 时原样返回', async () => {
@@ -79,7 +109,7 @@ describe('grantUploadIntents（POST /files/upload-intents）', () => {
           kind: 'DRAWING',
           original_filename: 'a.pdf',
           content_type: 'application/pdf',
-          file_size: 1,
+          file_size: '1',
           content_sha256: 'c'.repeat(64),
         },
       ],
@@ -102,7 +132,7 @@ describe('grantUploadIntents（POST /files/upload-intents）', () => {
             kind: 'DRAWING',
             original_filename: 'a.pdf',
             content_type: 'application/pdf',
-            file_size: 1,
+            file_size: '1',
             content_sha256: 'd'.repeat(64),
           },
         ],
@@ -122,7 +152,7 @@ describe('confirmFileObject（POST /files/objects/confirm）', () => {
       object_key: 'obj/a1b2c3d4e5f60718_setup.pdf',
       content_sha256: 'e'.repeat(64),
       original_filename: 'setup.pdf',
-      file_size: 2048,
+      file_size: '2048',
       content_type: 'application/pdf',
       ext: 'pdf',
       pair_with_file_id: '190000000000555',
@@ -142,7 +172,7 @@ describe('confirmFileObject（POST /files/objects/confirm）', () => {
       object_key: 'obj/x.pdf',
       content_sha256: 'f'.repeat(64),
       original_filename: 'a.pdf',
-      file_size: 1,
+      file_size: '1',
       content_type: 'application/pdf',
     });
     const body = post.mock.calls[0]![1] as Record<string, unknown>;

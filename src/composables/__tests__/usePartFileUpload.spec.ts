@@ -11,7 +11,7 @@
 // 引擎整份 mock 掉：`directUpload` 的行为由 `utils/__tests__/directUpload.spec.ts` 守。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ref } from 'vue';
+import { ref, toValue } from 'vue';
 import { usePartFileUpload, type PartFileUploadKind } from '../usePartFileUpload';
 
 const directUploadSpy = vi.fn();
@@ -46,7 +46,9 @@ describe('usePartFileUpload 参数归一', () => {
       expect(opts.ownerKind).toBe('PART');
       expect(typeof opts.ownerId).toBe('string');
       expect(String(opts.ownerId)).toMatch(/^p-/);
-      expect(opts.kind).toBe(opts.kind);
+      // 与「kind 原样透传」那条同源，但这里守的是**入参形态**被正确解开：Ref / getter /
+      // 字面量三种都要读到同一个值（不是恒真的 `opts.kind).toBe(opts.kind)`）。
+      expect(opts.kind).toBe(toValue(c.kind));
     }
   });
 

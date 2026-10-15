@@ -1,5 +1,5 @@
 // 装配体 REST API（走 @/api/http 统一 axios 客户端）。
-// 本文件只实现 `/assemblies/*` 与 `/prod/assemblies/*`；文件对象域的 5 条
+// 本文件只实现 `/assemblies/*` 与 `/prod/assemblies/*`；文件对象域的 6 条
 // `/files/objects/*` 端点实现在 `@/api/files/objects`，这里只保留 `getDownloadUrl`
 // 这一个 deprecation alias。
 //

@@ -13,8 +13,9 @@
 // 前者的行为由 presignedPut.spec.ts 守，后者由 api/files/__tests__/intents.spec.ts 守。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { XLSX_MIME } from '@/views/com/delivery/utils/deliveryNoteTemplateContract';
 import type * as PresignedPutModule from '../presignedPut';
-import { directUpload, newClientRef, uploadErrorDetail } from '../directUpload';
+import { directUpload, newClientRef } from '../directUpload';
 
 const xhrPutSpy = vi.fn();
 vi.mock('@/utils/presignedPut', async () => {
@@ -98,7 +99,8 @@ describe('directUpload happy path', () => {
     expect(item.original_filename).toBe('主轴装配图.PDF');
     // 大写 .PDF 也归一成 application/pdf（它会被签进签名，不能照抄 file.type）
     expect(item.content_type).toBe('application/pdf');
-    expect(item.file_size).toBe(32);
+    // ⚠️ 字符串：后端 upload-intents / confirm 的 file_size 都挂 deserialize_i64，只收字符串。
+    expect(item.file_size).toBe('32');
     expect(item.content_sha256).toBe('a'.repeat(64));
     expect(typeof item.client_ref).toBe('string');
 
@@ -113,6 +115,8 @@ describe('directUpload happy path', () => {
     expect(confirmPayload.object_key).toBe('obj/k1.pdf');
     expect(confirmPayload.ext).toBe('pdf');
     expect(confirmPayload.content_type).toBe('application/pdf');
+    // confirm 侧同一个 file_size 口径（同样是字符串）
+    expect(confirmPayload.file_size).toBe('32');
     // 普通补传不带 pair_with_file_id 这个键
     expect('pair_with_file_id' in confirmPayload).toBe(false);
 
@@ -124,6 +128,18 @@ describe('directUpload happy path', () => {
     await directUpload({ ownerKind: 'PART', ownerId: 'p1', kind: '3D_MODEL', file: fileOf('a.step') });
     const payload = grantSpy.mock.calls[0]![0] as { items: Array<{ content_type: string }> };
     expect(payload.items[0]!.content_type).toBe('application/octet-stream');
+  });
+
+  it('.xlsx content_type 归一成规范 MIME（不是 octet-stream —— 后端 policy 对 xlsx 无兜底）', async () => {
+    await directUpload({
+      ownerKind: 'CUSTOMER',
+      ownerId: 'c1',
+      kind: 'DELIVERY_TEMPLATE',
+      file: fileOf('送货单模板.xlsx'),
+    });
+    const payload = grantSpy.mock.calls[0]![0] as { items: Array<{ content_type: string }> };
+    expect(payload.items[0]!.content_type).toBe(XLSX_MIME);
+    expect(payload.items[0]!.content_type).not.toBe('application/octet-stream');
   });
 
   it('进度：至少回抛 30（hash 结束）与 100（confirm 完成）', async () => {
@@ -251,12 +267,5 @@ describe('directUpload 失败归因', () => {
       directUpload({ ownerKind: 'PART', ownerId: 'p1', kind: 'DRAWING', file: fileOf('a.pdf') }),
     ).rejects.toThrow(/upload_url/);
     expect(xhrPutSpy).not.toHaveBeenCalled();
-  });
-
-  it('uploadErrorDetail：只有 PUT 阶段的错误带诊断字段，业务码错误为 null', async () => {
-    const putErr = Object.assign(new Error('403'), { status: 403, presignExpired: true, networkOrCors: false, body: 'x' });
-    expect(uploadErrorDetail(putErr)?.status).toBe(403);
-    expect(uploadErrorDetail(Object.assign(new Error('业务码'), { code: 21108 }))).toBeNull();
-    expect(uploadErrorDetail('字符串')).toBeNull();
   });
 });

@@ -2,9 +2,9 @@
 //
 // 本文件承载「预签 PUT 直传」这套链路的全部 wire 类型：
 //
-//   1. POST /api/v2/files/upload-intents      —— 批量申请预签 URL（+ 可能秒传短路）
-//   2. XHR PUT 直传 COS                         —— 不经后端进程，带真进度
-//   3. POST /api/v2/files/objects/confirm       —— 登记（object_key + sha + 文件元数据）
+//   1. POST /api/v2/files/objects/upload-intents —— 批量申请预签 URL（+ 可能秒传短路）
+//   2. XHR PUT 直传 COS                          —— 不经后端进程，带真进度
+//   3. POST /api/v2/files/objects/confirm        —— 登记（object_key + sha + 文件元数据）
 //
 // 为什么 `PartFileKind` / `FileOwnerKind` / `PartFileItem` 不在这里重复声明：
 // 它们是**文件对象域**的既有类型（`src/types/part_file.ts`），upload-intents 只是
@@ -28,7 +28,7 @@ import type { FileOwnerKind, PartFileItem, PartFileKind } from '@/types/part_fil
 export type { FileOwnerKind, PartFileItem, PartFileKind };
 
 /**
- * `POST /api/v2/files/upload-intents` 单项入参。
+ * `POST /api/v2/files/objects/upload-intents` 单项入参。
  *
  * - `client_ref`：调用方生成的稳定标识（`crypto.randomUUID()`），用来把响应项对齐回
  *   本地 File —— **重签 URL 时必须复用同一个 client_ref**，否则上层拿不到对应项；
@@ -42,13 +42,23 @@ export interface UploadIntentItemIn {
   kind: PartFileKind;
   original_filename: string;
   content_type: string;
-  /** 字节数。 */
-  file_size: number;
+  /**
+   * 字节数，**必须发 JSON 字符串**。
+   *
+   * ⚠️ 后端 `UploadIntentItemIn.file_size` 与 `ConfirmFileIn.file_size` 都挂了
+   * `#[serde(deserialize_with = "deserialize_i64")]`，而那个反序列化器的实现是
+   * `String::deserialize(d)?.parse::<i64>()` —— **只接受字符串**，裸 number 会在 axum
+   * 的 `Json` 提取器层就 422，返的还是**纯文本**而非 `R<T>` 信封（前端拿不到业务码）。
+   * 取值侧反过来：出参 `PartFileOut.file_size` 是裸 i64 ⇒ 序列化成 number，所以
+   * `existing_file.file_size` / `PartFileItem.file_size` 那边仍是 number/string 混合的
+   * 既有形状，**不要**跟着这里一起改。
+   */
+  file_size: string;
   content_sha256: string;
 }
 
 /**
- * `POST /api/v2/files/upload-intents` 请求 body。
+ * `POST /api/v2/files/objects/upload-intents` 请求 body。
  *
  * `owner_kind` / `owner_id` 在 body 上而不是 URL 上 —— 端点对零件（PART）、装配件
  * （ASSEMBLY）、客户（CUSTOMER，打印模板）一视同仁，故只收一个 payload 对象。
@@ -61,7 +71,7 @@ export interface GrantUploadIntentsIn {
 }
 
 /**
- * `POST /api/v2/files/upload-intents` 单项出参。
+ * `POST /api/v2/files/objects/upload-intents` 单项出参。
  *
  * 两个互斥形态，判据是 `already_exists`：
  * - `already_exists === true`（秒传命中）：只有 `client_ref` / `already_exists` /
@@ -88,7 +98,7 @@ export interface UploadIntentItemOut {
   existing_file?: PartFileItem;
 }
 
-/** `POST /api/v2/files/upload-intents` 响应 data。 */
+/** `POST /api/v2/files/objects/upload-intents` 响应 data。 */
 export interface GrantUploadIntentsOut {
   items: UploadIntentItemOut[];
 }
@@ -110,8 +120,9 @@ export interface ConfirmFileIn {
   object_key: string;
   content_sha256: string;
   original_filename: string;
-  /** 字节数。 */
-  file_size: number;
+  /** 字节数，**必须发 JSON 字符串**（理由同 `UploadIntentItemIn.file_size`：后端
+   *  `ConfirmFileIn.file_size` 也挂 `deserialize_i64`，裸 number 会在提取器层 422）。 */
+  file_size: string;
   content_type: string;
   /** 文件扩展名（小写字母数字 1-7 字符）；`utils/fileExt.parseFileExt` 解析。 */
   ext?: string;

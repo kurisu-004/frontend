@@ -42,19 +42,21 @@
 //      塞进第 7 处，或引发搬这 6 个文件的巨量 diff。
 //   ② 现有 3 个子目录 `com/` / `files/` / `parts/` 则**全部镜像独占 URL 命名
 //      空间**（`com/unionList.ts` → `/com/union-list`、`files/intents.ts` →
-//      `/files/upload-intents`、`parts/*` → `/parts/*`）。**没有** `prod/` 目录。
+//      `/files/objects/upload-intents`、`parts/*` → `/parts/*`）。**没有** `prod/` 目录。
 //
 //      ⚠️ 2026-10-13 订正（files 域重组后本段的两处细节已过期）：
 //      - `files/` **不再是 1 个文件**。后端把 `part_file` + `cnc_program` 收编进
 //        files 域、URL 硬切到 `/api/v2/files/objects/*`
 //        （旧路径 `/api/v2/part-files/*`、`/api/v2/cnc-programs/*` **404、无 alias**），
-//        于是 `api/files/` 现有 2 个实现文件：`intents.ts` → `/files/upload-intents`、
-//        `objects.ts` → `/files/objects/*`，两者**逐个镜像 `/files` 下的一个子命名空间**。
+//        于是 `api/files/` 现有 2 个实现文件：`intents.ts` →
+//        `/files/objects/upload-intents`（**签发端点也在 objects 子命名空间内**，不是
+//        `/files/upload-intents`）、`objects.ts` → `/files/objects/*`，两者**逐个镜像
+//        `/files/objects` 下的一个子命名空间**。
 //        （2026-10-15：STS 临时凭证端口 `/files/sts-tmp-keys` 与配对上传端口
 //        `/files/cnc/pairs` 一起下线，写入链路统一成「upload-intents 签预签 URL →
 //        XHR PUT 直传 → objects/confirm 登记」。）
 //      - `parts/` 下的 4 个实现文件（crud / batch / bid / print）**逐个只打
-//        `/parts/*`**；文件对象域的 5 条 `/files/objects/*` 全在 `files/objects.ts`
+//        `/parts/*`**；文件对象域的 6 条 `/files/objects/*` 全在 `files/objects.ts`
 //        （含 `listPartFilesByOwner` —— 它虽被装配件报价页等按 owner 查询消费，
 //        但端点是 files 域的，跟实现文件走）。`parts/index.ts` 为兼容 `@/api/parts`
 //        聚合导入，仍 re-export 整个 `files/objects`。

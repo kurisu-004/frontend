@@ -7,8 +7,8 @@
 // 2026-07-14 扩展：新增 CAD_2D kind（DWG/DXF）；所有 row 带可选 `content_sha256` 用于去重提示。
 // ⚠️ **DRAWING 当前只收 PDF**：后端 `part_file::policy::allowed_exts("DRAWING")` 就是
 //   `["pdf"]`，图片格式（PNG / JPG / HEIC …）未开放。要放开时同时改后端白名单与前端
-//   `api/files/objects.ts::normalizeUploadContentType` 的 content_type 映射（见那里的
-//   「新增扩展名必须同时改三处」）。
+//   `utils/fileContentType.ts::normalizeUploadContentType` 的 content_type 映射
+//   （见那里的「新增扩展名必须同时改三处」）。
 //
 // 2026-09-16 Phase 5 切 v2 后 part-file 域契约错位修复：
 // - 列表端点 /parts/{id}/cnc-programs、/setup-sheets、/files 从裸数组改为

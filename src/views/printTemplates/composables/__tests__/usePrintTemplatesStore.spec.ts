@@ -68,6 +68,8 @@ vi.mock('@/utils/download', () => ({
 }));
 
 import { usePrintTemplatesStore } from '../usePrintTemplatesStore';
+import { normalizeUploadContentType } from '@/utils/fileContentType';
+import { XLSX_MIME } from '@/views/com/delivery/utils/deliveryNoteTemplateContract';
 import type { PrintTemplateData } from '../../printTemplateSchema';
 
 const { ElMessage } = await import('element-plus');
@@ -299,12 +301,37 @@ describe('usePrintTemplatesStore 上传失败归因（2026-10-16 review 第 1 �
     // ZIP magic 过、逐格校验解析不过 —— 这才走「模板解析失败」那一支。
     const zipHead = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0, 0, 0, 0]);
     await store.upload.run(new File([zipHead], 'x.xlsx'), 'C1');
-    expect(String(errorCalls()[0]![0])).not.toContain('无权限');
+    expect(errorCalls()).toHaveLength(1);
+    expect(String(errorCalls()[0]![0])).toContain('模板解析失败');
 
     vi.clearAllMocks();
     uploadMock.mockRejectedValue(Object.assign(new Error('无权限'), { code: 40300 }));
     await store.upload.run(builtinFile(), 'C1');
     expect(String(errorCalls()[0]![0])).toContain('无权限');
+    // 反向：请求失败那一支**不得**被误报成「模板解析失败」（否则用户去改 Excel 单元格）。
+    expect(String(errorCalls()[0]![0])).not.toContain('模板解析失败');
+  });
+
+  // ⚠️ 2026-10-15：直传链路的 content_type 必须在**调 upload-intents 之前**算好（它会被签进
+  //   SigV4 的 SignedHeaders），而这条口径住在共享的 `utils/fileContentType.ts` 里 ——
+  //   store 自己不发 content_type，只交 `file`。所以这里断的是「store 交出去的那个 File
+  //   按共享口径归一出来就是 xlsx 的规范 MIME」。后端 policy 对 xlsx 只收规范 MIME、
+  //   **没有 octet-stream 兜底**，而 grant 阶段不校验 ⇒ 这条红了就是「签发成功 → PUT 成功
+  //   → confirm 被拒」+ 桶里留一个孤儿对象。
+  it('E4：交给 directUpload 的 File 归一出来的 content_type 是 xlsx 规范 MIME', async () => {
+    uploadMock.mockResolvedValue({ id: 'f1', version: 1 });
+    const store = usePrintTemplatesStore();
+    await store.upload.run(builtinFile(), 'C1');
+
+    expect(uploadMock).toHaveBeenCalledTimes(1);
+    const file = uploadMock.mock.calls[0]![1] as File;
+    expect(file.name.toLowerCase().endsWith('.xlsx')).toBe(true);
+    expect(normalizeUploadContentType(file)).toBe(XLSX_MIME);
+    expect(normalizeUploadContentType(file)).not.toBe('application/octet-stream');
+    // owner / kind 也一并钉住：kind 错则后端 policy 按另一套白名单判。
+    const opts = uploadMock.mock.calls[0]![2] as { ownerKind: string; kind: string };
+    expect(opts.ownerKind).toBe('CUSTOMER');
+    expect(opts.kind).toBe('DELIVERY_TEMPLATE');
   });
 });
 
