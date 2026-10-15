@@ -8,8 +8,8 @@
 //   POST /hr/shifts/{id}                    ← updateHrShift（回显 ShiftOut）
 //   POST /hr/shifts/{id}/deactivate         ← deactivateHrShift（回显 ShiftOut）
 //   GET  /hr/shifts/{id}/calendar           ← getHrShiftCalendar
-//   POST /hr/shifts/{id}/calendar/days      ← saveHrShiftCalendarDays（**无回显**）
-//   POST /hr/shifts/{id}/calendar/days/delete ← deleteHrShiftCalendarDays（**无回显**）
+//   POST /hr/shifts/{id}/calendar/days      ← saveHrShiftCalendarDays（回显 {affected}）
+//   POST /hr/shifts/{id}/calendar/days/delete ← deleteHrShiftCalendarDays（回显 {affected}）
 //
 // 分层取舍：请求体 / 查询参数在 `src/types/hr.ts`（含日型枚举这种带 runtime 值的部分），
 // 出参只在这里。两边不互相抄，`api/hr.ts` 把两侧类型拼成完整签名。
@@ -86,6 +86,17 @@ export interface ShiftCalendarDayOut {
   is_override: boolean;
 }
 
+/** 批量写日历端点的出参（端点 2 / 3 共用 `CalendarDaysWriteOut`、端点 9 / 10 共用
+ *  `ShiftDaysWriteOut`，两者形状相同：都是 `{ affected }`）。 */
+export interface HrCalendarWriteOut {
+  /** 实际改动行数（upsert = `INSERT … ON CONFLICT DO UPDATE` 命中行数；delete = 被软删的
+   *  显式行数）。
+   *
+   *  ⚠️ **delete 的 `0` 是合法成功**（那几天本来就没有显式行 / 覆盖行，删完本来就该落回推导
+   *  值），不是错误；而 upsert 传空 `items` 落 21904 —— 两件事别混。 */
+  affected: number;
+}
+
 /** `GET /hr/calendar/days` 的信封。 */
 export interface HrCalendarDaysResult {
   items: CalendarDayOut[];
@@ -98,5 +109,9 @@ export interface HrShiftListResult {
 
 /** `GET /hr/shifts/{id}/calendar` 的信封。 */
 export interface HrShiftCalendarResult {
+  /** 所属班次 id（**JSON 字符串**，与 `ShiftOut.id` 同一把 `serialize_i64`）。后端给这一列是
+   *  为了让前端画标题时不必回查一次列表。⚠️ 它在信封上而不在 `items` 里，漏声明会让
+   *  `.strict()` 的守门每屏抛 `unrecognized_keys`（端点 8 100% 不可用）。 */
+  shift_id: string;
   items: ShiftCalendarDayOut[];
 }

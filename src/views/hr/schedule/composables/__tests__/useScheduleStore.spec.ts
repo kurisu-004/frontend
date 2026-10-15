@@ -13,8 +13,9 @@
 //     月历显示上一套推导值（本域最贵的一个坑）。
 //  3. **批量一次请求**：拖选区间的写入是 `{items:[...]}` 一次往返，不是逐日循环；清空走
 //     `{from,to}` 区间口径。
-//  4. **OCC + 「不动 vs 显式清空」**：改档 payload 必带 `version`；`color` / `remark` 只在
-//     **值确实变了**时才进 payload（没变就不发这个键 —— 发 `null` 等于把库里的值抹了）。
+//  4. **OCC + 「不动 vs 清空」**：改档 payload 必带 `version`；`color` / `remark` 只在
+//     **值确实变了**时才进 payload，且**清空发空串 `''`**（不是 `null` —— 后端
+//     `Option<String>` 分不清两者，发 `null` 等于「不改」，清空会静默失败）。
 //  5. **前端校验前置**：时段 V1–V6 不过时**不发请求**，只标红 `segments` 字段。
 //
 // mock 策略：`vi.mock('@/api/hr')` 十端点全桩；`vi.mock('element-plus')` 把 ElMessage 桩成
@@ -98,7 +99,19 @@ const GLOBAL_DAYS = {
     dayRow('2026-10-03', { day_type: 'REST_DAY', derived: true }),
   ],
 };
+/**
+ * 端点 8 的出参信封 —— **逐字照抄后端 `vo.rs::ShiftCalendarOut`**。
+ *
+ * ⚠️⚠️ `shift_id` 在**信封上**、不在 `items` 里（后端给它是为了让前端画标题不必回查列表）。
+ * 此前这份 fixture 手抄时漏了它，而 `hrShiftCalendarResultSchema` 当时也只有 `items` ——
+ * **两侧同错、互相印证，`useScheduleStore.spec.ts` 于是全绿，而生产上端点 8 每次都抛
+ * `unrecognized_keys`**（班次作用域整月显示「无数据」）。这类 fixture 与被测对象同属前端、
+ * 自证不了任何外部事实，所以本文件只把它当**行为侧镜像**；「后端此刻长什么样」由
+ * `src/api/__tests__/hrContractShape.spec.ts::H1` 真读后端 `vo.rs` 对拍。
+ * 本条的 `Object.keys` 断言只把键集钉死成字面量（改 fixture 的键必须同步改它）。
+ */
 const SHIFT_DAYS = {
+  shift_id: '9000000000000902',
   items: [
     {
       cal_date: '2026-10-05',
@@ -297,6 +310,36 @@ describe('useScheduleStore — 单日 / 批量写入与失效编排', () => {
     });
   });
 
+  it('W0：清空过的颜色（库里是**空串**）在 store 侧归一成 `null`（下游 `?? 默认色` 才生效）', async () => {
+    listHrShiftsMock.mockResolvedValue({
+      items: [shiftRow({ id: '9000000000000905', color: '' })],
+    });
+    const store = await readyStore();
+    expect(store.query.listErrorText).toBeNull();
+    // `??` 拦不住空串 ⇒ 不归一的话色带会渲染成「无背景色」而不是主题默认色。
+    expect(store.query.shifts[0]!.color).toBeNull();
+  });
+
+  it('W6b：批量草稿归 store 所有 —— 换选区复位草稿，换到非 `CUSTOM_LEAVE` 档清残留名称', async () => {
+    const store = await readyStore();
+    store.selection.setSelectedRange({ from: '2026-10-01', to: '2026-10-05' });
+    store.selection.setDraftDayType('CUSTOM_LEAVE');
+    store.selection.setDraftName('厂庆');
+    expect(store.selection.draftDayType).toBe('CUSTOM_LEAVE');
+    expect(store.selection.draftName).toBe('厂庆');
+
+    // 「换到别的档 ⇒ 上一档的残留名字要清掉」（否则「法定节假日 → 自定义休息」会沿用旧名）。
+    store.selection.setDraftDayType('WORKDAY');
+    expect(store.selection.draftName).toBe('');
+    store.selection.setDraftDayType('CUSTOM_LEAVE');
+    store.selection.setDraftName('厂庆');
+
+    // 换选区 = 全新一段批量草稿（上一段的档位不能被按到今天）。
+    store.selection.setSelectedRange({ from: '2026-11-01', to: '2026-11-03' });
+    expect(store.selection.draftDayType).toBeNull();
+    expect(store.selection.draftName).toBe('');
+  });
+
   it('W7：切作用域会清掉上一个作用域的选区（选区不属于跨作用域的东西）', async () => {
     const store = await readyStore();
     store.selection.setSelectedRange({ from: '2026-10-01', to: '2026-10-05' });
@@ -359,14 +402,36 @@ describe('useScheduleStore — 班次 CRUD（OCC + 不动 vs 显式清空）', (
     expect('remark' in body).toBe(false);
   });
 
-  it('C4：显式清空才发 `null`（原值非空 → 表单置空 ⇒ 带 `color: null`）', async () => {
+  it('C4：显式清空发**空串**而不是 `null`（后端 `Option<String>` 分不清两者，发 `null` = 不改）', async () => {
     const store = await readyStore();
     store.dialogs.openEditShift(store.query.shifts[0]!);
-    store.dialogs.shiftForm.color = null;
+    store.dialogs.shiftForm.color = null; // 表单内部态 = 留空
     await store.actions.submitShift();
     const [, body] = updateHrShiftMock.mock.calls[0]!;
     expect('color' in body).toBe(true);
-    expect(body.color).toBeNull();
+    // ⚠️ `''` 才是「清空」：`null` 与键缺失在 serde 里都解成 `None`、一律回落旧值
+    // （`docs/api/hr.md` §5.4），发 `null` 会让用户「清空颜色」静默失败而后端仍返 200。
+    expect(body.color).toBe('');
+  });
+
+  it('C4b：清空 `remark` 同样发空串（不是 `null`）', async () => {
+    const store = await readyStore();
+    store.dialogs.openEditShift(shiftRow({ id: '9000000000000903', remark: '含 1 小时午休' }));
+    store.dialogs.shiftForm.remark = null;
+    await store.actions.submitShift();
+    const [, body] = updateHrShiftMock.mock.calls[0]!;
+    expect('remark' in body).toBe(true);
+    expect(body.remark).toBe('');
+  });
+
+  it('C4c：库里已是空串 / null 时，用户没碰那一栏 ⇒ 仍**不发这个键**（归一后才比）', async () => {
+    const store = await readyStore();
+    // 库里 color 是空串（上一轮清空过的痕迹）—— 与表单的 `null` 归一后同义，不能判成「改了」。
+    store.dialogs.openEditShift(shiftRow({ id: '9000000000000904', color: '', remark: null }));
+    await store.actions.submitShift();
+    const [, body] = updateHrShiftMock.mock.calls[0]!;
+    expect('color' in body).toBe(false);
+    expect('remark' in body).toBe(false);
   });
 
   it('C5：时段 V1–V6 不过时**不发请求**，只标红 `segments`', async () => {
@@ -425,6 +490,34 @@ describe('useScheduleStore — 班次 CRUD（OCC + 不动 vs 显式清空）', (
     await store.actions.submitShift();
     await tick();
     expect(ElMessage.error).toHaveBeenCalledWith('班次编码重复，请换一个编码');
+  });
+});
+
+describe('useScheduleStore — 读端点出参形状（端点 8 信封含 shift_id）', () => {
+  it('S1：端点 8 的 fixture 键集逐字等于后端 `ShiftCalendarOut` 的字段集', () => {
+    // ⚠️ 这条断言的是**本文件 fixture** 的键集（`{shift_id, items}`），不是后端 —— 后端那一侧
+    // 由 `hrContractShape.spec.ts::H1` 真读 `vo.rs` 对拍。写在这里是为了让「改 fixture 忘了
+    // 同步守门 schema」当场红，而不是等生产上每次 `GET /hr/shifts/{id}/calendar` 抛。
+    expect(Object.keys(SHIFT_DAYS).sort()).toEqual(['items', 'shift_id']);
+    expect(SHIFT_DAYS.shift_id).toBe('9000000000000902'); // 雪花 ID 走 JSON string
+  });
+
+  it('S2：带 `shift_id` 的真实信封能被守门 schema 接住（漏声明它就抛 `unrecognized_keys`）', async () => {
+    const store = await readyStore();
+    store.actions.selectScope({ kind: 'shift', id: '9000000000000902', name: '夜班', color: null });
+    await tick();
+    // 能取到 10-05 那行 = 整封信封过了 `.strict()`；此前 fixture 缺 shift_id 时这里是 undefined。
+    expect(store.query.listErrorText).toBeNull();
+    expect(store.query.calendarDays.get('2026-10-05')?.dayType).toBe('REST_DAY');
+  });
+
+  it('S3：端点 8 响应**缺 shift_id** 时判坏响应（红条 + 回落空 Map，不静默半屏数据）', async () => {
+    getHrShiftCalendarMock.mockResolvedValue({ items: SHIFT_DAYS.items });
+    const store = await readyStore();
+    store.actions.selectScope({ kind: 'shift', id: '9000000000000902', name: '夜班', color: null });
+    await tick();
+    expect(store.query.calendarDays.size).toBe(0);
+    expect(store.query.listErrorText).toBe('服务端返回的数据格式不符合预期，请联系管理员');
   });
 });
 

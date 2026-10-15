@@ -10,6 +10,9 @@
 //     并**丢弃**，不进 `modelValue`（邻接不算相交，所以 12:00 那一刀是合法的）。
 //  3. **跨度超 24:00 ⇒ 保存禁用**：`ShiftTimeAxis` 顶部红字 + `ShiftEditDialog` 的「保存」
 //     按钮 disabled（21908 的前端版）。
+//  4. **跨天段的文案是「墙钟 + 前缀」**：`22:00 → 26:00` 那一行必须显示 `22:00 → 次日 02:00`，
+//     而不是 `22:00 → 次日 26:00`（前缀已经把跨天说完，数字再加偏移就是自相矛盾）。
+//  5. **只读态把弹窗的五个输入全闸住**（将来放开「只读查看」入口时不必再逐个补）。
 //
 // 测试策略说明：
 //   - happy-dom 里**没有布局**（`getBoundingClientRect()` 恒 0×0），所以本文件显式 stub 两处
@@ -127,6 +130,57 @@ describe('ShiftTimeAxis — 已占用区间禁选', () => {
     expect(pieces[1]!.classes()).toContain('touch-start');
     expect(pieces[1]!.classes()).not.toContain('touch-end');
     expect(pieces[1]!.attributes('style')).toContain('left: 0%');
+  });
+});
+
+describe('ShiftTimeAxis — 跨天段的显示文案（墙钟 + 前缀）', () => {
+  it('T1：`22:00→26:00` 显示 `22:00 → 次日 02:00`（不是「次日 26:00」）', () => {
+    const { wrapper } = mountAxis({ modelValue: [seg(1, '22:00', '26:00')] });
+    expect(wrapper.find('.seg-abs').text()).toBe('22:00 → 次日 02:00');
+  });
+
+  it('T2：24h 连做 `08:00→32:00` 显示 `08:00 → 次日 08:00`', () => {
+    const { wrapper } = mountAxis({ modelValue: [seg(1, '08:00', '32:00')] });
+    expect(wrapper.find('.seg-abs').text()).toBe('08:00 → 次日 08:00');
+  });
+
+  it('T3：不跨天的段不加前缀（`08:00 → 12:00`）', () => {
+    const { wrapper } = mountAxis({ modelValue: [seg(1, '08:00', '12:00')] });
+    expect(wrapper.find('.seg-abs').text()).toBe('08:00 → 12:00');
+  });
+
+  it('T4：拖出来的跨天段也走同一套文案（`absTextOf` 不随来源分叉）', async () => {
+    const { wrapper } = mountAxis({ modelValue: [] });
+    stubGeometry(wrapper, { hoverLane: 1 }); // 悬停落到「次日」那一行 ⇒ 跨行
+    const lane = wrapper.findAll('[data-lane]')[0]!;
+
+    // 当日 22:00 → 次日 02:00（跨行拖拽）
+    await lane.trigger('mousedown', { button: 0, clientX: minuteToPx(1320), clientY: 10 });
+    await window.dispatchEvent(new MouseEvent('mousemove', { clientX: minuteToPx(120), clientY: 60 }));
+    await window.dispatchEvent(new MouseEvent('mouseup', { clientX: minuteToPx(120), clientY: 60 }));
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find('.seg-abs').text()).toBe('22:00 → 次日 02:00');
+  });
+});
+
+describe('ShiftTimeAxis — 禁选光标只给已提交段', () => {
+  it('G1：拖拽预览（ghost）**不带** `cursor: not-allowed`（它还没落库、上面照样能继续拖）', async () => {
+    const { wrapper } = mountAxis({ modelValue: [seg(1, '08:00', '12:00')] });
+    stubGeometry(wrapper, { hoverLane: 0 });
+    const lane = wrapper.findAll('[data-lane]')[0]!;
+
+    await lane.trigger('mousedown', { button: 0, clientX: minuteToPx(60), clientY: 10 });
+    await window.dispatchEvent(new MouseEvent('mousemove', { clientX: minuteToPx(240), clientY: 10 }));
+    await wrapper.vm.$nextTick();
+
+    const ghost = wrapper.find('.seg-piece.is-ghost');
+    expect(ghost.exists()).toBe(true);
+    expect(ghost.attributes('style')).not.toContain('cursor: not-allowed');
+    // 同屏的已提交段仍然带（O1 那条守的就是它，两条合起来把「只给已提交段」钉死）。
+    expect(wrapper.find('.seg-piece[data-occupied]').attributes('style')).toContain(
+      'cursor: not-allowed',
+    );
   });
 });
 
@@ -272,16 +326,20 @@ describe('ShiftTimeAxis + ShiftEditDialog — 跨度超 24:00 时保存禁用', 
   const ElColStub = { name: 'ElCol', template: '<div><slot /></div>' };
   const ElInputStub = {
     name: 'ElInput',
-    props: ['modelValue'],
+    props: ['modelValue', 'disabled'],
     emits: ['update:modelValue'],
-    template: '<input class="mock-input" :value="modelValue" />',
+    template: '<input class="mock-input" :value="modelValue" :disabled="disabled" />',
   };
   const ElInputNumberStub = {
     name: 'ElInputNumber',
-    props: ['modelValue'],
-    template: '<input class="mock-input-number" />',
+    props: ['modelValue', 'disabled'],
+    template: '<input class="mock-input-number" :disabled="disabled" />',
   };
-  const ElColorPickerStub = { name: 'ElColorPicker', template: '<i class="mock-color" />' };
+  const ElColorPickerStub = {
+    name: 'ElColorPicker',
+    props: ['modelValue', 'disabled'],
+    template: '<i class="mock-color" :class="{ disabled }" />',
+  };
   const ElButtonStub = {
     name: 'ElButton',
     props: ['disabled', 'loading'],
@@ -302,7 +360,7 @@ describe('ShiftTimeAxis + ShiftEditDialog — 跨度超 24:00 时保存禁用', 
     },
   };
 
-  function mountDialog(segments: ShiftSegmentOut[]) {
+  function mountDialog(segments: ShiftSegmentOut[], canEdit = true) {
     return mount(ShiftEditDialog, {
       props: {
         modelValue: true,
@@ -310,7 +368,7 @@ describe('ShiftTimeAxis + ShiftEditDialog — 跨度超 24:00 时保存禁用', 
         form: { code: 'N', name: '夜班', color: null, segments, sort_order: 1, remark: null },
         errors: {},
         loading: false,
-        canEdit: true,
+        canEdit,
       },
       global: globalConfig,
     });
@@ -330,5 +388,27 @@ describe('ShiftTimeAxis + ShiftEditDialog — 跨度超 24:00 时保存禁用', 
     const wrapper = mountDialog([seg(1, '08:00', '32:01')]);
     expect(wrapper.text()).toContain('班次跨度超过 24 小时，与相邻工作日会冲突');
     expect(saveButton(wrapper)!.attributes('disabled')).toBeDefined();
+  });
+
+  // ⚠️ 只读态的输入闸：当前弹窗只由 `canEdit` 闸住的按钮打开，所以这条**在现状下不可达** ——
+  //   它是为「将来放开只读查看入口」预埋的。漏补 `:disabled` 不会今天出事，只会在那天变成
+  //   「只读用户改得动表单」，而那时没人记得这五个字段曾经逐个看过一遍。
+  it('E3：`canEdit=false` ⇒ code / name / 颜色 / 排序 / 备注五个输入全部 disabled', () => {
+    const wrapper = mountDialog([seg(1, '08:00', '12:00')], false);
+    expect(wrapper.findAll('.mock-input').every((i) => i.attributes('disabled') !== undefined)).toBe(
+      true,
+    );
+    expect(wrapper.find('.mock-input-number').attributes('disabled')).toBeDefined();
+    expect(wrapper.find('.mock-color').classes()).toContain('disabled');
+    expect(saveButton(wrapper)!.attributes('disabled')).toBeDefined();
+  });
+
+  it('E4：`canEdit=true` ⇒ 同样那五个输入都不 disabled（闸门不许误伤可编辑态）', () => {
+    const wrapper = mountDialog([seg(1, '08:00', '12:00')]);
+    expect(wrapper.findAll('.mock-input').every((i) => i.attributes('disabled') === undefined)).toBe(
+      true,
+    );
+    expect(wrapper.find('.mock-input-number').attributes('disabled')).toBeUndefined();
+    expect(wrapper.find('.mock-color').classes()).not.toContain('disabled');
   });
 });

@@ -55,7 +55,7 @@ function flatten(nodes: MenuNode[]): MenuNode[] {
  *     （path /wecom、icon ChatDotRound、sort_order 20）。**新增 code 也必须改这里**：
  *     漏改的症状同上（fixture 里多一个 code、清单里没有 → 红）。
  *   - 2026-10-16（review 第 1 轮 MAJOR-1）：`template_management` + `print_templates_designer`
- *     **复活**（2026-10-14 首次落地 → 09-24 随 x-data-spreadsheet 弃用从 fixture 删除 →
+ *     **复活**（2026-09-14 首次落地 → 09-24 随 x-data-spreadsheet 弃用从 fixture 删除 →
  *     10-16 送货单打印模板上传页重新占用同一个 URL 与菜单节点）。
  *     ⚠️ 这对 code 的删除与复活**两侧都没漏**（fixture 删了、这里也删了）⇒ 那一轮
  *     `covers all menuCodes exactly` 依然全绿：本用例只能守住「fixture 与本清单一致」，

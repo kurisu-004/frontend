@@ -83,7 +83,11 @@ export interface ShiftSegmentOut {
   end: string;
 }
 
-/** `POST /hr/shifts` 请求体（建班次）。全量给定，无 OCC 字段。 */
+/** `POST /hr/shifts` 请求体（建班次）。全量给定，无 OCC 字段。
+ *
+ *  ⚠️ 这里的 `color` / `remark` **可以是 `null`**（与 `UpdateShiftPayload` 刻意不同）：建档是
+ *  全量覆写、后端直接 `req.color.clone()` 落库，没有「回落旧值」这一步 ⇒ `null` 就是
+ *  「这一列留空」。改档端没有这个三态（见下方 `UpdateShiftPayload`）。 */
 export interface CreateShiftPayload {
   /** 班次编码（唯一，重复后端拒 21902）。 */
   code: string;
@@ -101,20 +105,27 @@ export interface CreateShiftPayload {
 
 /** `POST /hr/shifts/{id}` 请求体（改档，**全量覆写**，不是 PATCH）。
  *
- *  ⚠️ `version` **必填**（OCC 锚，取该行当前的 `version`；缺省是 axum 的 HTTP 422 纯文本，
+ * ⚠️ `version` **必填**（OCC 锚，取该行当前的 `version`；缺省是 axum 的 HTTP 422 纯文本，
  *  连业务码都拿不到）。
  *
- *  ⚠️ `code` / `name` / `color` 可选是**后端显式契约**：缺省键 = 「不改这一列」，而**显式传
- *  `null`** 才是「把可空列清空」（`color` / `remark`）。所以前端表单提交时要区分
- *  「字段没动」与「用户显式清空」，不要统一传 `null`。 */
+ * ⚠️ **可选键只有两种效果：「不改」与「写成这个值」**。`code` / `name` / `color` /
+ *   `segments` / `sort_order` / `remark` 全是后端的 `Option<T>` + `#[serde(default)]` ⇒
+ *   **JSON `null` 与键缺失在 serde 里都解成 `None`，后端分不清**（service 一律
+ *   `req.x.clone().or_else(|| row.x.clone())` 回落旧值）。所以本类型里 `color` / `remark`
+ *   是**非 null 的 `string`**：
+ *   - 不发这个键 = 「这次不改」；
+ *   - 发 `''` = 「把这一列清空」（后端落空串，语义口径见 `docs/api/hr.md` §5.4）。
+ *   发 `color: null` 与不发**完全等价**且都是「不改」—— 想清空必须传空串。 */
 export interface UpdateShiftPayload {
   version: number;
   code?: string;
   name?: string;
-  color?: string | null;
+  /** `#rrggbb` 或**空串**（空串 = 清空）。`null` 不在契约内（发它等于「不改」）。 */
+  color?: string;
   segments?: ShiftSegmentOut[];
   sort_order?: number;
-  remark?: string | null;
+  /** 备注原文或**空串**（空串 = 清空）。 */
+  remark?: string;
 }
 
 /** `POST /hr/shifts/{id}/deactivate` 请求体（停用，非物理删）。`version` 必填（同上）。 */

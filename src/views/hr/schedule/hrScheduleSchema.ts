@@ -32,6 +32,25 @@ import { validateSegments } from './utils/absTime';
 /** 日型枚举的守门形态（真源仍是 `@/types/hr` 的 `HR_DAY_TYPES`，两处不各写一份）。 */
 const hrDayTypeSchema = z.enum(HR_DAY_TYPES);
 
+/**
+ * 三个短文本列的长度上限，**逐字等于后端列宽**（迁移 `t_hr_shift.code varchar(30)` /
+ * `name varchar(50)` / `remark varchar(200)`；与后端 `dto.rs` 的 `COL_SHIFT_CODE` /
+ * `COL_NAME` / `COL_REMARK` 同值）。
+ *
+ * ⚠️ **必须在前端先卡住**：后端 service 侧**有** `check_len` 前置守卫（超列宽落 `21909` /
+ *   HTTP 400，判的是**字符数**，不会漏到 PG 的 `22001`），但走那条路的代价是「先发一趟往返、
+ *   失败原因是一句给日志看的 message」。前端对齐列宽 ⇒ 超长在提交前就红，且红字指到**具体
+ *   字段**（后端只说「字段非法」，不说是哪个字段、多长几个）。
+ *   改这里之前先对一下迁移文件与后端 `dto.rs` 的 `COL_*` 常量，两边都要改。
+ */
+export const HR_SHIFT_CODE_MAX = 30;
+export const HR_SHIFT_NAME_MAX = 50;
+export const HR_SHIFT_REMARK_MAX = 200;
+
+/** 班次色的形态（`#rrggbb`）。入参侧由 `shiftFormSchema.color` 的 preprocess 把 `''` / `null`
+ *  归一成 null（= 走页面默认色），出参侧由 `hrShiftColorSchema` 守（额外放行落库的清空空串）。 */
+export const HR_SHIFT_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
 // ============================================================
 // GET /api/v2/hr/calendar/days
 // ============================================================
@@ -72,6 +91,25 @@ const shiftSegmentSchema = z
   })
   .strict();
 
+/**
+ * 班次色（出参）的形态守门。
+ *
+ * ⚠️ `hrShiftSchema.color` 是**出参**侧：`ShiftSidebar` / `ScheduleDayCell` 把它直接喂给
+ *   `:style="{ backgroundColor }"`。CSSOM 会拒非法值（**没有 XSS 面**），但仓内其余出参字段
+ *   都守了形状，这里破例会让「班次栏整块渲染异常」变成一类查不到原因的问题。写侧由
+ *   `shiftFormSchema.color` 的同一条正则把关（后端 `color` 是无格式约束的 `varchar(20)`，
+ *   格式契约归前端所有），所以本域写出去的颜色恒是 `#rrggbb` 或空。
+ *
+ * ⚠️ **空串是合法出参**：后端 `Option<String>` 收下 `''` 就落 `''`（清空语义见
+ *   `docs/api/hr.md` §5.4），所以库里存的就是空串而不是 NULL —— 把它按 `#rrggbb` 拒掉会让
+ *   「清空过颜色的班次」把整个班次列表打成坏响应。「空 ⇒ 走默认色」的归一收在 store 的
+ *   `shifts`（`color: '' | null` 一律给 `null`），视图层因此只需要处理 `null`。
+ */
+const hrShiftColorSchema = z
+  .string()
+  .refine((v) => v === '' || HR_SHIFT_COLOR_RE.test(v), '颜色格式应为 #rrggbb，或留空用默认色')
+  .nullable();
+
 /** 班次行（`ShiftOut`）。⚠️ `overflow_minutes` 是**分钟**不是小时（段值允许带分钟）。 */
 export const hrShiftSchema = z
   .object({
@@ -80,7 +118,7 @@ export const hrShiftSchema = z
     code: z.string(),
     name: z.string(),
     /** 可空 = 走页面默认色。 */
-    color: z.string().nullable(),
+    color: hrShiftColorSchema,
     segments: z.array(shiftSegmentSchema),
     is_active: z.boolean(),
     sort_order: z.number(),
@@ -122,32 +160,29 @@ export const hrShiftCalendarDaySchema = z
 
 export type HrShiftCalendarDayData = z.infer<typeof hrShiftCalendarDaySchema>;
 
-/** `GET /hr/shifts/{id}/calendar` 的信封。 */
+/** `GET /hr/shifts/{id}/calendar` 的信封 `{shift_id, items:[...]}`。
+ *
+ *  ⚠️ **`shift_id` 在信封上、不在 `items` 里**（后端 `vo.rs::ShiftCalendarOut`）：漏声明它，
+ *    `.strict()` 会因 `unrecognized_keys` 在**每一次** `GET /hr/shifts/{id}/calendar` 上抛，
+ *    而班次作用域是本页核心交互 ⇒ 端点 8 等于没接。跨仓对账见
+ *    `src/api/__tests__/hrContractShape.spec.ts::H1`。 */
 export const hrShiftCalendarResultSchema = z
-  .object({ items: z.array(hrShiftCalendarDaySchema) })
+  .object({
+    shift_id: z.string(),
+    items: z.array(hrShiftCalendarDaySchema),
+  })
   .strict();
 
 // ============================================================
 // 班次表单（新增 / 编辑弹窗共用）
 // ============================================================
+// 长度上限 `HR_SHIFT_CODE_MAX` / `HR_SHIFT_NAME_MAX` / `HR_SHIFT_REMARK_MAX` 与班次色正则
+// `HR_SHIFT_COLOR_RE` 都在本文件顶部（`hrShiftSchema` 的出参守门也要用色正则，声明必须在它
+// 之前，否则模块求值时就撞 TDZ）。
 
-/**
- * 控件侧的长度上限。
- *
- * ⚠️ **这是前端兜底上限、不是后端约束的复刻**：后端对本域三个短文本列只判空 / 唯一、没给
- *   长度上限。这些值取「够用且防止超长串进请求体」的量级；真收到更长的合法数据时是
- *   **编辑框显示截断但原值仍随 `modelValue` 提交**（所以它们只绑 `maxlength` 这个输入期
- *   闸门，不参与 `parse` 的拒绝）。想收紧改这里一处。
- */
-export const HR_SHIFT_CODE_MAX = 32;
-export const HR_SHIFT_NAME_MAX = 50;
-export const HR_SHIFT_REMARK_MAX = 200;
-
-/** 班次色的形态（`#rrggbb`）。空串 / null 一律归一成 null（走页面默认色）。 */
-export const HR_SHIFT_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
-
-/** 表单模型。`color` / `remark` 用 `null` 而不是空串表达「清空」——
- *  与后端「显式 `null` = 清空可空列」一一对应。 */
+/** 表单模型。`color` / `remark` 的 `null` 是**表单内部态**（=「这一栏留空」），不是 wire 语义：
+ *  发往 `POST /hr/shifts/{id}` 之前由 store 的 `submitShift` 归一成 `''`（清空）或不发键
+ *  （没动）—— 因为后端 `Option<String>` **分不清 `null` 与键缺失**，两者都是「这次不改」。 */
 export interface ShiftFormModel {
   code: string;
   name: string;

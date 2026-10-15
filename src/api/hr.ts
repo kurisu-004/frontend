@@ -3,15 +3,15 @@
 //
 // 2026-10-19 新建。十端点冻结表（URL / method / body 与本文件逐字对齐）：
 //   GET  /hr/calendar/days                     → 全局日历日行（区间查询）
-//   POST /hr/calendar/days                     → 批量写全局日历日行（**无回显**）
-//   POST /hr/calendar/days/delete              → 删全局日历日行（点删 or 区间删，**无回显**）
+//   POST /hr/calendar/days                     → 批量写全局日历日行（回显 {affected}）
+//   POST /hr/calendar/days/delete              → 删全局日历日行（点删 or 区间删，回显 {affected}）
 //   GET  /hr/shifts                            → 班次列表（可选连停用一起返）
 //   POST /hr/shifts                            → 建班次（回显 ShiftOut）
 //   POST /hr/shifts/{id}                       → 改班次（**全量覆写**语义 + OCC，回显 ShiftOut）
 //   POST /hr/shifts/{id}/deactivate            → 停用班次（软删，OCC，回显 ShiftOut）
 //   GET  /hr/shifts/{id}/calendar              → 某班次的日历（区间查询）
-//   POST /hr/shifts/{id}/calendar/days         → 批量写该班次的日历覆盖行（**无回显**）
-//   POST /hr/shifts/{id}/calendar/days/delete  → 删该班次的日历覆盖行（**无回显**）
+//   POST /hr/shifts/{id}/calendar/days         → 批量写该班次的日历覆盖行（回显 {affected}）
+//   POST /hr/shifts/{id}/calendar/days/delete  → 删该班次的日历覆盖行（回显 {affected}）
 //
 // ⚠️ **零 PUT / PATCH / DELETE**：本仓后端全站只允许 GET / POST。改档走
 // `POST /{id}`、停用走 `POST /{id}/deactivate`、删除走独立 action 路径（`/delete`）——
@@ -69,8 +69,10 @@ export async function listHrCalendarDays(
  * 请求体 `{ items: HrCalendarDayInput[] }`，**全量 upsert**（同一天重复出现以最后一条为准）。
  * `CUSTOM_LEAVE` 的行**必填 `name`**。
  *
- * ⚠️ **返回 `Promise<void>`**：后端返 `R<()>`，信封 `data` 是 `null` —— 凭空造一个返回值
- * 就是谎称「后端回了我什么」。成功与否由 HTTP 状态码 / 业务码表达，写后失效由调用方做。
+ * ⚠️ **返回 `Promise<void>`**：后端返 `R<CalendarDaysWriteOut>`（信封 `data` 是
+ * `{ affected: number }` = 实际改动行数，`0` 也是合法成功），本层**丢弃响应**、不发回调用方
+ * —— 调用方要的是成败（resolve/reject）与随后的失效，两样都不依赖行数。凭空造一个返回值
+ * 就是谎称「后端回了我什么」，把 `{affected}` 硬造出来又没人读则是白写一遍类型。
  *
  * 失败抛 `ApiError`：40101 未登录 / 403 无 `hr.schedule.manage` / **21905 未知日型** /
  * **21907 `CUSTOM_LEAVE` 缺 name** / 40001 字段缺失或 `cal_date` 格式非法。
@@ -88,8 +90,8 @@ export async function saveHrCalendarDays(payload: { items: HrCalendarDayInput[] 
  * ⚠️ 删的是**显式行**：被删的那天会重新落回「按星期推导」的兜底日型（`derived: true`），
  * 而不是变成「没有这天」。
  *
- * ⚠️ **返回 `Promise<void>`**（后端返 `R<()>`，`data` 是 `null`，理由同
- * `saveHrCalendarDays`）。
+ * ⚠️ **返回 `Promise<void>`**（后端返 `R<CalendarDaysWriteOut>` = `{affected}`，`0` 是合法
+ * 成功，理由同 `saveHrCalendarDays`）。
  *
  * 失败抛 `ApiError`：40101 未登录 / 403 无 `hr.schedule.manage` / **21904 区间非法**。
  */
@@ -130,8 +132,10 @@ export async function createHrShift(payload: CreateShiftPayload): Promise<ShiftO
  * 改班次（`POST /api/v2/hr/shifts/{id}`），返回改完之后的那一行。
  *
  * @param payload `version` **必填**（OCC 锚，取该行当前的 `version`；缺省是 axum 的 HTTP 422
- *   纯文本，拿不到业务码）。可选列缺省 = 不改；**显式传 `null` 才是清空**可空列
- *   （`color` / `remark`）—— 表单提交时别把这两种情况混成一个 `null`。
+ *   纯文本，拿不到业务码）。可选键只有两种效果：缺省 = 「这次不改」，**要清空可空列就传空串
+ *   `''`**（`color` / `remark`）。⚠️ 后端 `Option<String>` + `#[serde(default)]` 把 `null` 与
+ *   键缺失都解成 `None` 并回落旧值，**发 `null` 等于「不改」**，不会清空（口径见
+ *   `docs/api/hr.md` §5.4）。
  *
  * 失败抛 `ApiError`：40101 未登录 / 403 无 `hr.schedule.manage` / **21901 班次不存在或已软删** /
  * **21902 编码重复** / **21903 时段非法** / **21906 班次已停用** / **21908 总跨度 > 24:00** /
@@ -190,7 +194,8 @@ export async function getHrShiftCalendar(
  * 请求体 `{ items: HrShiftCalendarDayInput[] }`（本域行带 `remark`、不带 `name`），
  * 全量 upsert。删掉某天不用发请求，走下面那条 delete。
  *
- * ⚠️ **返回 `Promise<void>`**（后端返 `R<()>`、`data` 是 `null`，理由同 `saveHrCalendarDays`）。
+ * ⚠️ **返回 `Promise<void>`**（后端返 `R<ShiftDaysWriteOut>` = `{affected}`，`0` 是合法成功，
+ * 理由同 `saveHrCalendarDays`）。
  *
  * 失败抛 `ApiError`：40101 未登录 / 403 无 `hr.schedule.manage` / **21901 班次不存在或已软删** /
  * **21905 未知日型** / **21906 班次已停用** / 40001 字段缺失。
@@ -208,7 +213,8 @@ export async function saveHrShiftCalendarDays(
  * 口径与全局那条 delete 同形（`{ dates }` 点删 or `{ from, to }` 区间删）。
  * 删掉覆盖行后，那天重新落回**全局日历**的日型（`is_override` 转 false）——不是变成空白。
  *
- * ⚠️ **返回 `Promise<void>`**（理由同 `saveHrCalendarDays`）。
+ * ⚠️ **返回 `Promise<void>`**（后端返 `R<ShiftDaysWriteOut>` = `{affected}`，`0` 是合法成功，
+ * 理由同 `saveHrCalendarDays`）。
  *
  * 失败抛 `ApiError`：40101 未登录 / 403 无 `hr.schedule.manage` / **21901 班次不存在或已软删** /
  * **21904 区间非法** / **21906 班次已停用**。

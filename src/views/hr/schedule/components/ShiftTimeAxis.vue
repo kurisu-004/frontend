@@ -62,16 +62,16 @@
             v-for="p in piecesOf(idx)"
             :key="p.key"
             :class="['seg-piece', pieceClass(p)]"
-            :style="pieceStyle(p)"
+            :style="[pieceStyle(p), pieceCursor(p)]"
             :data-occupied="p.seg.start"
             :title="`${p.seg.start} → ${p.seg.end}`"
           />
-          <!-- 拖拽预览 / 冲突红闪：与已提交段同一套几何。 -->
+          <!-- 拖拽预览 / 冲突红闪：与已提交段同一套切片与几何，但没有禁选光标（未落库）。 -->
           <div
             v-for="p in ghostPiecesOf(idx)"
             :key="`ghost-${p.key}`"
             :class="['seg-piece', 'is-ghost', pieceClass(p), { 'is-conflict': ghostConflict }]"
-            :style="pieceStyle(p)"
+            :style="[pieceStyle(p), pieceCursor(p)]"
           />
         </div>
       </div>
@@ -262,13 +262,18 @@ function removeAt(index: number): void {
   commit(pickerList.value.filter((_, i) => i !== index));
 }
 
-/** 把一个选择器态显示成绝对偏移串（`22:00 → 次日 02:00`）。 */
+/** 把一个选择器态显示成「墙钟 + 前缀」：`22:00 → 次日 02:00`。
+ *
+ *  ⚠️ **前缀与数字必须同源**：前缀已经把「跨了几天」说完了，所以右端打的是**墙钟**
+ *  （`02:00`），不能再加 `endDay × 1440` 的偏移 —— 那样会打出「次日 26:00」这种
+ *  自相矛盾的串。绝对偏移（`22:00 → 26:00`）是 `types/hr.ts::ShiftSegmentOut` 那一侧的
+ *  wire 形态，两种写法各服务一处，不要互相套用。 */
 function absTextOf(p: SegmentPickerState): string {
   const s = parseAbs(p.start);
   const e = parseAbs(p.end);
   if (s === null || e === null) return '—';
   const suffix = p.endDay === 1 ? '次日 ' : p.endDay === 2 ? '+2 日 ' : '';
-  return `${formatAbs(s)} → ${suffix}${formatAbs(e + p.endDay * MINUTES_PER_DAY)}`;
+  return `${formatAbs(s)} → ${suffix}${formatAbs(e)}`;
 }
 
 function onStartChange(index: number, e: Event): void {
@@ -351,10 +356,17 @@ function pieceStyle(p: Piece): Record<string, string> {
     left: `${(p.start / MINUTES_PER_DAY) * 100}%`,
     width: `${((p.end - p.start) / MINUTES_PER_DAY) * 100}%`,
     background: props.color ?? 'var(--primary-light)',
-    // ⚠️ **内联** cursor（不是 CSS 类）：「已占用区间禁选」这条契约要在 happy-dom 下可断言，
-    // 而组件 scoped 样式在测试环境不生效。禁选的可观测锚点就是这一个属性。
-    cursor: 'not-allowed',
   };
+}
+
+/** ⚠️ **内联** cursor（不是 CSS 类）：「已占用区间禁选」这条契约要在 happy-dom 下可断言，
+ *  而组件 scoped 样式在测试环境不生效。禁选的可观测锚点就是这一个属性。
+ *
+ *  ⚠️ **只给已提交段挂 `not-allowed`**：拖拽预览（ghost）与红闪冲突块是**尚未落库**的临时
+ *  几何，它们上面照样能继续拖（拖到重叠才在松手时被拒），挂上禁选光标会给出「这里点不动」
+ *  的假信号。判据是 `seg.seq === 0`（ghost 段的哨兵值，见 `ghostPiecesOf`）。 */
+function pieceCursor(p: Piece): Record<string, string> {
+  return p.seg.seq === 0 ? {} : { cursor: 'not-allowed' };
 }
 
 /** 贴行首（0 点）/ 行尾（24 点）的那一侧不要圆角 —— 跨行段的接缝才读得成一体。 */

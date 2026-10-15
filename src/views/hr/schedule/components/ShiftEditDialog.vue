@@ -9,10 +9,15 @@
   的是 axum 的 **HTTP 422 纯文本**（不是业务信封）—— 连业务码都拿不到，前端只能给一句
   「保存失败」，排查时毫无线索。
 
-  ⚠️ **「不动」与「显式清空」是两件事**：`UpdateShiftPayload` 的语义是「可选列缺省 = 不改；
-  **显式传 `null` 才是清空**可空列（`color` / `remark`）」。所以 store 的 `submit` 逐列比对
-  原行值决定发不发这个键 —— 表单里把两个空输入框都传成 `null` 等于「用户没碰颜色」的默认
-  状态下也把库里的颜色抹了。
+  ⚠️ **只读态下五个输入全闸**：将来加「只读查看」入口时不必再逐个补 `:disabled` ——
+  当前弹窗只由 `canEdit` 闸住的按钮打开，所以这条在现状下不可达，它是**为入口放开后的
+  那一支**预埋的（漏了也不会今天出事，只会在那天变成「只读用户改得动表单」）。
+
+  ⚠️ **表单里的 `null` 只是内部态，不是 wire 语义**：`color` / `remark` 的 `null` 表示
+  「这一栏留空」，发往改档端点之前由 store 的 `submitShift` 归一 —— **值没动就不发这个键，
+  动了就发 `String(v ?? '')`（清空发空串）**。因为后端 `Option<String>` + `#[serde(default)]`
+  **分不清 `null` 与键缺失**，两者都是「这次不改」（口径见 `docs/api/hr.md` §5.4）；发
+  `null` 只会让「清空颜色」静默失败而后端仍返 200。
 
   ⚠️ **保存按钮在跨度超 24:00 时禁用**（V6 的即时反馈）：这条不该靠提交后吃 21908 才发现。
   判据与时间轴顶部那个红色数字同源（`utils/absTime.ts::spanOf`），不在模板里重算。
@@ -27,6 +32,7 @@
               :model-value="form.code"
               placeholder="如 DAY / NIGHT（同一部署内唯一）"
               :maxlength="HR_SHIFT_CODE_MAX"
+              :disabled="!canEdit"
               show-word-limit
               @update:model-value="patch({ code: String($event ?? '') })"
             />
@@ -38,6 +44,7 @@
               :model-value="form.name"
               placeholder="如 白班"
               :maxlength="HR_SHIFT_NAME_MAX"
+              :disabled="!canEdit"
               show-word-limit
               @update:model-value="patch({ name: String($event ?? '') })"
             />
@@ -50,6 +57,7 @@
           <el-form-item label="颜色" :error="errors.color">
             <el-color-picker
               :model-value="form.color"
+              :disabled="!canEdit"
               @update:model-value="patch({ color: ($event as string | null) ?? null })"
             />
             <span class="field-hint">留空则用页面默认色；月历里这一格的色带取它</span>
@@ -62,6 +70,7 @@
               :min="0"
               :max="9999"
               :step="1"
+              :disabled="!canEdit"
               @update:model-value="patch({ sort_order: Number($event ?? 0) })"
             />
             <span class="field-hint">越小越靠前（班次栏按它排序）</span>
@@ -85,6 +94,7 @@
           :rows="2"
           placeholder="如「含 1 小时午休」"
           :maxlength="HR_SHIFT_REMARK_MAX"
+          :disabled="!canEdit"
           show-word-limit
           @update:model-value="patch({ remark: String($event ?? '') || null })"
         />

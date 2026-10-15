@@ -21,8 +21,10 @@
 //   全变**（`effective_day_type` 是叠加覆盖行之后的结果），所以写全局日历必须连带失效
 //   `qk.hrShiftCalendarPrefix`；只失效 `hrCalendarDaysPrefix` 会让班次日历显示上一套推导值。
 //
-// ⚠️ **updateHrShift 的「可选列缺省 = 不改、显式 null = 清空」**：`submit` 里对 `color` /
-//   `remark` 逐列比对原行值 —— 没动就不发这个键（**不发 `null`**），显式清空才发 `null`。
+// ⚠️ **updateHrShift 的可选键只有两种效果：「不改」与「写成这个值」**：`color` / `remark` 逐列
+//   与原行值比对（归一后比，`null` 与 `''` 都算「空」），**没动就不发这个键**；动了才发，且
+//   **清空发空串而不是 `null`** —— 后端 `Option<String>` + `#[serde(default)]` 把 `null` 与键
+//   缺失都解成 `None` 并回落旧值（口径见 `docs/api/hr.md` §5.4）。
 
 import { computed, reactive, ref } from 'vue';
 import { defineStore } from 'pinia';
@@ -58,7 +60,7 @@ import {
   type ShiftFormModel,
 } from '../hrScheduleSchema';
 import { HR_SCHEDULE_ERROR_CODES, hrErrorText } from '../hrErrorText';
-import { isWorkdayDayType } from '../utils/dayType';
+import { dayTypeNeedsName, isWorkdayDayType } from '../utils/dayType';
 import { addDaysIso, buildMonthGrid, daysBetween, monthBounds } from '../utils/monthGrid';
 import { useHrCalendarQuery, useHrShiftsQuery, type ScheduleScope } from './useScheduleQueries';
 
@@ -142,8 +144,17 @@ export const useScheduleStore = defineStore('hr-schedule', () => {
   const shiftsQuery = useHrShiftsQuery({ enabled: ready });
   const calendarQuery = useHrCalendarQuery({ enabled: ready, scope, range });
 
-  /** 班次栏数据。**恒为数组**（拿不到时给 `[]`，页面据此渲染空态）。 */
-  const shifts = computed<HrShiftData[]>(() => [...(shiftsQuery.data.value ?? [])]);
+  /** 班次栏数据。**恒为数组**（拿不到时给 `[]`，页面据此渲染空态）。
+   *
+   *  ⚠️ 这里顺带把 `color` 归一：清空过的颜色在库里是**空串**（后端 `Option<String>` 收 `''`
+   *  就落 `''`，口径见 `docs/api/hr.md` §5.4），而下游 `ScheduleDayCell` / `ShiftSidebar` /
+   *  `ShiftTimeAxis` 都用 `color ?? 默认色`（`??` 拦不住空串）⇒ 不在这里归一就会渲染成
+   *  「无背景色」而不是「默认色」。出参 schema 相应地放行空串、只把非空串按 `#rrggbb` 守。 */
+  const shifts = computed<HrShiftData[]>(() =>
+    (shiftsQuery.data.value ?? []).map((row) =>
+      row.color === '' ? { ...row, color: null } : row,
+    ),
+  );
   /** 当前作用域的数据，已归一化成 `ScheduleDayView` 并按 `cal_date` 建索引。 */
   const calendarDays = computed<Map<string, ScheduleDayView>>(() => {
     const map = new Map<string, ScheduleDayView>();
@@ -208,7 +219,10 @@ export const useScheduleStore = defineStore('hr-schedule', () => {
   // ============ 切片：selection（拖选区间 + 批量草稿）============
   /** 当前拖选区间（升序 `[from, to]`），`null` = 没选。 */
   const selectedRange = ref<{ from: string; to: string } | null>(null);
-  /** 批量动作的日型草稿（`null` = 浮条上还没选档）。 */
+  /** 批量动作的日型草稿（`null` = 浮条上还没选档）。⚠️ 状态**住在 store 而不是浮条的局部
+   *  `ref`** —— 选区是月历产出的、草稿是浮条产出的，两者绑在同一个浮条上但根在不同组件，
+   *  而「换选区就要复位草稿」这条不变式只有放在选区的 owner 旁边才写得住（漏在浮条里，
+   *  将来换个入口设选区就会带着上一段区间残留的档位）。 */
   const draftDayType = ref<HrDayType | null>(null);
   /** `CUSTOM_LEAVE` 必填的名称草稿（其余档忽略）。 */
   const draftName = ref('');
@@ -217,6 +231,16 @@ export const useScheduleStore = defineStore('hr-schedule', () => {
     selectedRange.value = range;
     draftDayType.value = null;
     draftName.value = '';
+  }
+
+  function setDraftDayType(dayType: HrDayType): void {
+    // 换档时把上一档残留的名称清掉，避免「法定节假日 → 自定义休息」沿用上一条的名字。
+    draftDayType.value = dayType;
+    if (!dayTypeNeedsName(dayType)) draftName.value = '';
+  }
+
+  function setDraftName(name: string): void {
+    draftName.value = name;
   }
 
   function clearSelection(): void {
@@ -402,11 +426,19 @@ export const useScheduleStore = defineStore('hr-schedule', () => {
       deactivateShift.isPending.value,
   );
 
+  /** 可空短文本列的「空」归一：`null` / `undefined` / `''` 三者在业务上同义（这一栏没值）。
+   *  比对与出网都过它 —— 不然「库里是空串、表单是 null」会被判成「用户改了」，于是每次
+   *  保存都白发一个键出去。 */
+  function blankIfEmpty(v: string | null | undefined): string | null {
+    return v === undefined || v === null || v === '' ? null : v;
+  }
+
   /** 提交班次弹窗：按 `shiftDialogMode` 分派新建 / 改档。校验不过不发请求。
    *
-   *  ⚠️ **改档的可选列语义**：`color` / `remark` 逐列与原行比对 —— 值没变就**不发这个键**
-   *  （缺省 = 不改），用户显式清空（`null` ≠ 原值）才发 `null`。把两种情况统一成一个
-   *  `null` 发出去，「没动颜色」就会把库里的颜色抹掉。 */
+   *  ⚠️ **改档的可选键语义**：`color` / `remark` 逐列与原行比对（都经 `blankIfEmpty` 归一）——
+   *  值没变就**不发这个键**（缺省 = 不改）；变了就发 `String(v ?? '')`，**清空发空串**。
+   *  ⚠️ 绝不能发 `null`：后端 `Option<String>` 的 `None` 与键缺失不可区分，一律回落旧值，
+   *  于是「清空颜色」会静默失败而后端仍返 200。口径见 `docs/api/hr.md` §5.4。 */
   async function submitShift(): Promise<boolean> {
     if (!validateShiftForm()) return false;
     const base = {
@@ -423,8 +455,10 @@ export const useScheduleStore = defineStore('hr-schedule', () => {
           version: row.version,
           ...base,
         };
-        if (shiftForm.color !== row.color) body.color = shiftForm.color;
-        if ((shiftForm.remark ?? null) !== row.remark) body.remark = shiftForm.remark;
+        const nextColor = blankIfEmpty(shiftForm.color);
+        if (nextColor !== blankIfEmpty(row.color)) body.color = nextColor ?? '';
+        const nextRemark = blankIfEmpty(shiftForm.remark);
+        if (nextRemark !== blankIfEmpty(row.remark)) body.remark = nextRemark ?? '';
         await updateShift.mutateAsync({ id: row.id, body });
       } else {
         await createShift.mutateAsync({
@@ -629,9 +663,12 @@ export const useScheduleStore = defineStore('hr-schedule', () => {
   const selection = {
     range: selectedRange,
     count: selectedCount,
+    /** 批量草稿（日型 / `CUSTOM_LEAVE` 的名称）—— 浮条读写同一份，不再各持局部态。 */
     draftDayType,
     draftName,
     setSelectedRange,
+    setDraftDayType,
+    setDraftName,
     clearSelection,
   };
 

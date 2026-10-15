@@ -77,7 +77,7 @@
 // 2026-10-19 新建：见文件头。**纯组件**：只管渲染与拖选交互，所有写动作与翻页都 emit 出去
 // 由壳接 store —— 月历不是数据的 owner。
 
-import { onBeforeUnmount, ref } from 'vue';
+import { computed, onBeforeUnmount, ref } from 'vue';
 import type { HrDayType } from '@/types/hr';
 import ScheduleDayCell from './ScheduleDayCell.vue';
 import ScheduleDayEditor from './ScheduleDayEditor.vue';
@@ -137,15 +137,32 @@ const anchorIso = ref('');
 const hoverIso = ref('');
 /** 刚拖完一次（终点 ≠ 起点）⇒ 吞掉紧随其后的那一次 click。 */
 let suppressNextClick = false;
+/** 兜底复位 click 拦截的定时器（mouseup 之后的宏任务），见 `onWindowMouseUp`。 */
+let suppressResetTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 当月格（`inMonth = true`）的日期集。补格在集合外 ⇒ 拖选命中判定把它当「没命中」。 */
+const inMonthIsos = computed(() => {
+  const s = new Set<string>();
+  for (const c of props.cells) if (c.inMonth) s.add(c.iso);
+  return s;
+});
 
 /** `clientX/clientY` 命中哪一格：先取该点最顶层的元素，再上溯到带 `data-date` 的格。
- *  ⚠️ `elementFromPoint` 在某些环境（无布局的测试环境）恒返回 null，这时**保持上一次的
+ *
+ *  ⚠️ **补格（前后月）在这里就被判成「没命中」**：`ScheduleDayCell` 给所有 42 格都渲染
+ *  `data-date`，而 `mousedown` 侧已经用 `inMonth` 挡住了「从补格起拖」。若这里不过滤，从
+ *  10-31 向右拖到补格 11-01 就会产出 `{from:'10-31', to:'11-01'}` ⇒ 批量写把**当月之外的
+ *  11-01 写进库**，而 invalidate 之后重查的区间不含它 ⇒ 用户看不到任何变化（「补格灰显、
+ *  不可点、不可拖选」这条契约的反面）。
+ *  ⚠️ `elementFromPoint` 在某些环境（无布局的测试环境）恒返回 null，此时同样**保持上一次的
  *  悬停格**而不是把选区清掉 —— 选区不会因为一次识别失败而跳回起点。 */
 function cellAt(clientX: number, clientY: number): string | null {
   if (typeof document.elementFromPoint !== 'function') return null;
   const el = document.elementFromPoint(clientX, clientY);
   if (!el || typeof el.closest !== 'function') return null;
-  return el.closest('[data-date]')?.getAttribute('data-date') ?? null;
+  const iso = el.closest('[data-date]')?.getAttribute('data-date') ?? null;
+  if (iso === null || !inMonthIsos.value.has(iso)) return null;
+  return iso;
 }
 
 function onCellMouseDown(iso: string, inMonth: boolean, e: MouseEvent): void {
@@ -179,6 +196,17 @@ function onWindowMouseUp(): void {
     return;
   }
   suppressNextClick = true;
+  // ⚠️ **兜底复位**：`@click.capture` 只挂在 `.month-grid` 根上，而 click 是在 mouseup 之后
+  //   由浏览器派发的 —— 当 mousedown 起在格子里、mouseup 落在根子树之外（如一路拖到右侧
+  //   班次栏才松手）时，click 被派发到公共祖先，捕获处理器根本不跑 ⇒ `suppressNextClick`
+  //   会一直挂着，把用户**下一次**点月历格静默吞掉。`setTimeout(…, 0)` 是宏任务，必定排在
+  //   mouseup 之后同步派发的那个 click 之后 ⇒ 只当兜底，正常路径仍由 `onRootClickCapture`
+  //   消费掉。
+  if (suppressResetTimer) clearTimeout(suppressResetTimer);
+  suppressResetTimer = setTimeout(() => {
+    suppressNextClick = false;
+    suppressResetTimer = null;
+  }, 0);
   const [lo, hi] = isoMinMax(from, to);
   emit('update:selectedRange', { from: lo, to: hi });
 }
@@ -196,11 +224,13 @@ function detachWindowListeners(): void {
   window.removeEventListener('mouseup', onWindowMouseUp);
 }
 
-// 不变量：组件在**拖到一半时被卸载**（切月 / 切页 / `$dispose`）也要摘干净 window 监听，
-// 否则残留监听会对着已销毁的 ref 写值。
+// 不变量：组件在**拖到一半时被卸载**（切月 / 切页 / `$dispose`）也要摘干净 window 监听与
+// click 兜底复位定时器，否则残留监听会对着已销毁的 ref 写值。
 onBeforeUnmount(() => {
   dragging.value = false;
   detachWindowListeners();
+  if (suppressResetTimer) clearTimeout(suppressResetTimer);
+  suppressResetTimer = null;
 });
 
 // ---- 选区判定 ----

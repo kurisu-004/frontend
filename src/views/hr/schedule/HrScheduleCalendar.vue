@@ -108,13 +108,19 @@
             @goto-today="store.actions.gotoThisMonth()"
           />
 
-          <!-- 拖选浮条：只读模式下**不出现**（没得批量可做，给一条死浮条只会让人白点）。 -->
+          <!-- 拖选浮条：只读模式下**不出现**（没得批量可做，给一条死浮条只会让人白点）。
+               草稿（日型 / 名称）也走 store：选区的 owner 在 store 那边，「换选区即复位
+               草稿」这条不变式才写在同一个 owner 里。 -->
           <ScheduleSelectionBar
             v-if="canEdit"
             :range="store.selection.range"
             :count="store.selection.count"
             :scope-is-shift="store.query.scopeIsShift"
+            :draft-day-type="store.selection.draftDayType"
+            :draft-name="store.selection.draftName"
             :busy="store.actions.writing"
+            @draft-day-type="store.selection.setDraftDayType($event)"
+            @draft-name="store.selection.setDraftName($event)"
             @apply="onBatchApply"
             @clear="store.actions.clearSelected()"
             @cancel="store.selection.clearSelection()"
@@ -196,7 +202,7 @@ async function onClearMonthOverrides(): Promise<void> {
   const { year, month } = store.query.cursor;
   try {
     await ElMessageBox.confirm(
-      `将清空班次「${store.query.scopeLabel}」在 ${year} 年 ${month} 月的**全部覆盖行**，之后这些天一律继承全局日历。确认继续？`,
+      `将清空班次「${store.query.scopeLabel}」在 ${year} 年 ${month} 月的全部覆盖行，之后这些天一律继承全局日历。确认继续？`,
       '确认清空本月覆盖',
       { type: 'warning', confirmButtonText: '确认清空', cancelButtonText: '取消' },
     );

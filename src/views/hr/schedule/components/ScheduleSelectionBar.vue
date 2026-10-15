@@ -3,6 +3,11 @@
 
   2026-10-19 新建。**纯组件**：区间与草稿从 props 进、动作从 emit 出。
 
+  ⚠️ **草稿（日型 / 名称）的 owner 是 store 不是本组件**：选区由月历产出、草稿由本浮条产出，
+    而「换一段选区就把草稿复位」这条不变式必须写在选区的 owner 旁边才成立（写在浮条里，
+    将来多一个设选区的入口就会带着上一段区间的档位）。所以本组件是 `v-model` 式的受控态：
+    `draftDayType` / `draftName` 走 props 进、`setDraft*` 走 emit 出，自己不持有。
+
   ⚠️ **「清除」在两个作用域下是两件事、文案也不同**：
     - 全局日历 = 删掉这些天的**显式行**，落回「按星期兜底」的默认日型；
     - 班次日历 = 删掉这些天的**覆盖行**，落回**全局日历**那天的日型。
@@ -20,11 +25,11 @@
     </span>
 
     <el-select
-      v-model="picked"
+      :model-value="draftDayType"
       class="sel-type"
       placeholder="批量设为"
       :disabled="busy"
-      @change="onPick"
+      @update:model-value="onPick"
     >
       <el-option
         v-for="opt in HR_DAY_TYPE_OPTIONS"
@@ -37,12 +42,14 @@
     <!-- `CUSTOM_LEAVE` 缺名后端拒 21907，所以这一档必须先收名称再发请求。 -->
     <el-input
       v-if="nameNeeded"
-      v-model="name"
+      :model-value="draftName"
       class="sel-name"
       placeholder="名称（必填）"
       :disabled="busy"
+      :error="nameMissing"
       maxlength="30"
       show-word-limit
+      @update:model-value="emit('draftName', String($event ?? ''))"
     />
 
     <el-button type="primary" size="small" :loading="busy" @click="onApply">应用</el-button>
@@ -63,6 +70,7 @@
 // 2026-10-19 新建：见文件头。
 
 import { computed, ref, watch } from 'vue';
+import { ElMessage } from 'element-plus';
 import type { HrDayType } from '@/types/hr';
 import { HR_DAY_TYPE_OPTIONS, dayTypeNeedsName } from '../utils/dayType';
 
@@ -72,6 +80,10 @@ const props = defineProps<{
   /** 选区天数（由 store 按同一套日期运算算好，避免两处各算一次）。 */
   count: number;
   scopeIsShift: boolean;
+  /** 批量草稿的日型（`null` = 还没选档）。store 持有，本组件只读。 */
+  draftDayType: HrDayType | null;
+  /** `CUSTOM_LEAVE` 的名称草稿。 */
+  draftName: string;
   /** 写端点忙态。 */
   busy: boolean;
 }>();
@@ -79,22 +91,33 @@ const props = defineProps<{
 const emit = defineEmits<
   ((e: 'apply', dayType: HrDayType, name: string | null) => void) &
     ((e: 'clear') => void) &
-    ((e: 'cancel') => void)
+    ((e: 'cancel') => void) &
+    ((e: 'draftDayType', dayType: HrDayType) => void) &
+    ((e: 'draftName', name: string) => void)
 >();
 
-const picked = ref<HrDayType | null>(null);
-const name = ref('');
+/** 「名称没填」这态要不要红：只在「档位已选成 `CUSTOM_LEAVE` + 名称空 + 用户按过应用」之后
+ *  才亮 —— 一上来就红是一片没有来由的红。 */
+const appliedOnce = ref(false);
 
-/** 换选区就复位草稿（上一次的档位留给下一次 = 把上周期的「调休放假」误按到今天）。 */
+const nameNeeded = computed(() => props.draftDayType !== null && dayTypeNeedsName(props.draftDayType));
+const nameMissing = computed(() => nameNeeded.value && appliedOnce.value && !props.draftName.trim());
+
+/** 换选区就把「按过一次应用」复位（下一段选区不该继承上一段的标红）。 */
 watch(
   () => props.range,
   () => {
-    picked.value = null;
-    name.value = '';
+    appliedOnce.value = false;
   },
 );
 
-const nameNeeded = computed(() => picked.value !== null && dayTypeNeedsName(picked.value));
+/** 补上名称后立刻撤红：这一态的判据是「按过应用且仍为空」，不再空就不该继续红。 */
+watch(
+  () => props.draftName,
+  () => {
+    if (!nameMissing.value) appliedOnce.value = false;
+  },
+);
 
 /** 浮条上的 `MM-DD ~ MM-DD`。跨年时年份在格子里看得到，这里不重复。 */
 function short(iso: string): string {
@@ -109,15 +132,25 @@ const hint = computed(() =>
     : '「恢复默认」删掉这些天的显式行，落回按星期兜底的日型',
 );
 
-function onPick(): void {
-  // 换档时把上一档残留的名称清掉，避免「法定节假日 → 自定义休息」沿用上一条的名字。
-  if (picked.value && !dayTypeNeedsName(picked.value)) name.value = '';
+function onPick(v: unknown): void {
+  const dayType = v as HrDayType | null;
+  if (!dayType) return;
+  emit('draftDayType', dayType);
 }
 
+/** ⚠️ 两个「按了没反应」的口子都必须有反馈（静默 `return` 会被当成按钮坏了）：
+ *  一是没选档位，二是 `CUSTOM_LEAVE` 缺名（后端会拒 21907）。 */
 function onApply(): void {
-  if (!picked.value) return;
-  if (nameNeeded.value && !name.value.trim()) return;
-  emit('apply', picked.value, nameNeeded.value ? name.value.trim() : null);
+  appliedOnce.value = true;
+  if (!props.draftDayType) {
+    ElMessage.warning('请先选择要批量设置的日型');
+    return;
+  }
+  if (nameNeeded.value && !props.draftName.trim()) {
+    ElMessage.warning('「自定义休息」必须填写名称');
+    return;
+  }
+  emit('apply', props.draftDayType, nameNeeded.value ? props.draftName.trim() : null);
 }
 </script>
 
