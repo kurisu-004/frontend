@@ -60,7 +60,7 @@ import {
   type ShiftFormModel,
 } from '../hrScheduleSchema';
 import { HR_SCHEDULE_ERROR_CODES, hrErrorText } from '../hrErrorText';
-import { dayTypeNeedsName, isWorkdayDayType } from '../utils/dayType';
+import { dayTypeAcceptsName, isWorkdayDayType } from '../utils/dayType';
 import { addDaysIso, buildMonthGrid, daysBetween, monthBounds } from '../utils/monthGrid';
 import { useHrCalendarQuery, useHrShiftsQuery, type ScheduleScope } from './useScheduleQueries';
 
@@ -224,7 +224,7 @@ export const useScheduleStore = defineStore('hr-schedule', () => {
    *  而「换选区就要复位草稿」这条不变式只有放在选区的 owner 旁边才写得住（漏在浮条里，
    *  将来换个入口设选区就会带着上一段区间残留的档位）。 */
   const draftDayType = ref<HrDayType | null>(null);
-  /** `CUSTOM_LEAVE` 必填的名称草稿（其余档忽略）。 */
+  /** 能填名称的两档（`CUSTOM_LEAVE` / `STATUTORY_HOLIDAY`）的草稿名，其余档忽略。 */
   const draftName = ref('');
 
   function setSelectedRange(range: { from: string; to: string } | null): void {
@@ -236,7 +236,7 @@ export const useScheduleStore = defineStore('hr-schedule', () => {
   function setDraftDayType(dayType: HrDayType): void {
     // 换档时把上一档残留的名称清掉，避免「法定节假日 → 自定义休息」沿用上一条的名字。
     draftDayType.value = dayType;
-    if (!dayTypeNeedsName(dayType)) draftName.value = '';
+    if (!dayTypeAcceptsName(dayType)) draftName.value = '';
   }
 
   function setDraftName(name: string): void {
@@ -663,7 +663,7 @@ export const useScheduleStore = defineStore('hr-schedule', () => {
   const selection = {
     range: selectedRange,
     count: selectedCount,
-    /** 批量草稿（日型 / `CUSTOM_LEAVE` 的名称）—— 浮条读写同一份，不再各持局部态。 */
+    /** 批量草稿（日型 / 名称：能填名称的两档才用 `draftName`）—— 浮条读写同一份，不再各持局部态。 */
     draftDayType,
     draftName,
     setSelectedRange,

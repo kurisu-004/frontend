@@ -53,8 +53,27 @@ export function isWorkdayDayType(dayType: HrDayType): boolean {
   return isHrWorkday(dayType);
 }
 
-/** 该日型是否**必须**带名称（`CUSTOM_LEAVE` 缺名后端拒 21907）。 */
-export function dayTypeNeedsName(dayType: HrDayType): boolean {
+/**
+ * 该日型**能不能**填名称。
+ *
+ *  两档收名称，理由不同：`CUSTOM_LEAVE` 是「自定义休息日说明」，`STATUTORY_HOLIDAY` 是
+ *  「节假日名」（"国庆节"、"春节"）—— 后者就是这列的原始用途，不给它填等于把这一档的语义
+ *  堵死（口径见 `docs/api/hr.md` §3.3 / §4.1：`name` 的出参语义原文就是「节假日名 / 休息日
+ *  说明」）。其余四档没有可填的东西。
+ */
+export function dayTypeAcceptsName(dayType: HrDayType): boolean {
+  return dayType === 'CUSTOM_LEAVE' || dayType === 'STATUTORY_HOLIDAY';
+}
+
+/**
+ * 该日型**是否必须**带名称。
+ *
+ *  ⚠️ **只有 `CUSTOM_LEAVE` 必填**：后端 `CalendarDayUpsertItem.name` 是 `Option<String>`，
+ *   缺名只在 `CUSTOM_LEAVE` 上落 `21907`，法定节假日不填照样入库（`service.rs`
+ *   `upsert_calendar_days` 的缺名闸门只判 `CustomLeave`）。所以「能填」与「必填」必须分开判：
+ *   把法定节假日混进必填里，就是前端凭空拒一条后端允许的写。
+ */
+export function dayTypeRequiresName(dayType: HrDayType): boolean {
   return dayType === 'CUSTOM_LEAVE';
 }
 

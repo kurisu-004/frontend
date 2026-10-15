@@ -9,6 +9,8 @@
 //  3. **只在全局日历上要名称**：班次覆盖行没有名称列、那个写端点也不校验它 ⇒ 班次作用域按缺名
 //     去拦是拦一条后端本就允许的写（口径见 `docs/api/hr.md` §3.8）。
 //  4. **拦下时不关弹层**：关掉就把「补个名字再试」变成「重新点开那一格」。
+//  5. **法定节假日要能起名**：「国庆节」「春节」就是 `name` 列的原始用途；不填名也允许提交
+//     （后端缺名闸门只判 `CUSTOM_LEAVE`，见 `docs/api/hr.md` §3.3）。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent } from 'vue';
@@ -214,5 +216,45 @@ describe('ScheduleDayEditor — `CUSTOM_LEAVE` 缺名拦在前端', () => {
     await pop.vm.$emit('update:visible', true);
     await pop.vm.$emit('show');
     expect(nameFieldRed(w)).toBe(false);
+  });
+});
+
+describe('ScheduleDayEditor — 法定节假日可起名（`name` 列的原始用途）', () => {
+  it('E8：全局日历 + `STATUTORY_HOLIDAY` + 填「国庆节」⇒ emit 带 name（这一档要能起名）', async () => {
+    const w = mountEditor({ day: dayView({ dayType: 'STATUTORY_HOLIDAY' }) });
+    await open(w);
+    // 名称框在法定节假日这一档是可编辑的（不是 disabled）。
+    expect(w.find('.mock-name').attributes('disabled')).toBeUndefined();
+    await w.find('.mock-name').setValue('国庆节');
+    await applyButton(w).trigger('click');
+    expect(w.emitted('apply')).toEqual([['STATUTORY_HOLIDAY', '国庆节']]);
+    expect(warningMock).not.toHaveBeenCalled();
+    expect(nameFieldRed(w)).toBe(false);
+  });
+
+  it('E9：全局日历 + `STATUTORY_HOLIDAY` + 不填名 ⇒ **允许提交**（名可选，后端不落 21907）', async () => {
+    const w = mountEditor({ day: dayView({ dayType: 'STATUTORY_HOLIDAY', name: null }) });
+    await open(w);
+    await applyButton(w).trigger('click');
+    expect(w.emitted('apply'), '后端 name 是 Option，只有 CUSTOM_LEAVE 缺名才被拒').toEqual([
+      ['STATUTORY_HOLIDAY', ''],
+    ]);
+    expect(warningMock).not.toHaveBeenCalled();
+    expect(nameFieldRed(w), '法定节假日名可选，缺名不该标红').toBe(false);
+  });
+
+  it('E10：法定节假日与自定义休息的必填判据不串档（切档后红态按各自的判据走）', async () => {
+    const w = mountEditor({ day: dayView({ dayType: 'CUSTOM_LEAVE' }) });
+    await open(w);
+    await applyButton(w).trigger('click');
+    expect(nameFieldRed(w), '`CUSTOM_LEAVE` 缺名要红').toBe(true);
+
+    // 切到选填档（日型单选组是真受控态，这里从组上发 `update:modelValue` 驱动草稿换档）：
+    // 上一档的红不能跟过去，缺名也不该再拦。
+    w.findComponent({ name: 'ElRadioGroup' }).vm.$emit('update:modelValue', 'STATUTORY_HOLIDAY');
+    await w.vm.$nextTick();
+    expect(nameFieldRed(w), '法定节假日名可选，上一档的红不能跟过来').toBe(false);
+    await applyButton(w).trigger('click');
+    expect(w.emitted('apply')).toEqual([['STATUTORY_HOLIDAY', '']]);
   });
 });

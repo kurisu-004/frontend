@@ -15,8 +15,14 @@
   的假」的最短路径，所以标题与提示都按作用域切换。
 
   ⚠️ **一次区间批量请求，不逐日循环**：后端的两条写端点本来就是批量 upsert
-  （`{items:[...]}` / `{from,to}`），逐日循环会把 31 天变成 31 趟往返，且中途失败会留下
-  「改了一半」的日历。
+    （`{items:[...]}` / `{from,to}`），逐日循环会把 31 天变成 31 趟往返，且中途失败会留下
+    「改了一半」的日历。
+
+  ⚠️ **名称框的判据必须分作用域，与点单日弹层同一套**（2026-10-19 补）：后端两侧契约不对称 ——
+    全局日历的表有 `name` 列、`CUSTOM_LEAVE` 缺名落 `21907`；班次覆盖行的表**没有** `name` 列，
+    端点 9 也**不**校验它、**不**落 `21907`（口径见 `docs/api/hr.md` §3.8）。所以班次作用域不渲染
+    名称框也不拦缺名：不分作用域一律拦，拦掉的是一条后端本就允许的写，还逼用户填一个必然被丢弃
+    的名字。
 -->
 <template>
   <div v-if="range" class="selection-bar">
@@ -39,18 +45,25 @@
       />
     </el-select>
 
-    <!-- `CUSTOM_LEAVE` 缺名后端拒 21907，所以这一档必须先收名称再发请求。 -->
-    <el-input
-      v-if="nameNeeded"
-      :model-value="draftName"
-      class="sel-name"
-      placeholder="名称（必填）"
-      :disabled="busy"
-      :error="nameMissing"
-      maxlength="30"
-      show-word-limit
-      @update:model-value="emit('draftName', String($event ?? ''))"
-    />
+    <!-- 名称框**只在全局日历 + 「能填名称」的档位**上出现，且红框挂在 `el-form-item` 的 `error`
+         上：`el-input` 没有 `error` prop（2.14.6），传 `:error` 给它只会当成同名 HTML 属性落到
+         根 div 上、什么样式都不触发。红框由 Element Plus 的后代选择器
+         `.el-form-item.is-error .el-form-item__content .el-input__wrapper` 画。 -->
+    <el-form-item
+      v-if="nameShown"
+      class="sel-name-item"
+      :error="nameMissing ? NAME_REQUIRED_HINT : ''"
+    >
+      <el-input
+        :model-value="draftName"
+        class="sel-name"
+        placeholder="名称（自定义休息必填）"
+        :disabled="busy"
+        maxlength="30"
+        show-word-limit
+        @update:model-value="emit('draftName', String($event ?? ''))"
+      />
+    </el-form-item>
 
     <el-button type="primary" size="small" :loading="busy" @click="onApply">应用</el-button>
 
@@ -72,7 +85,7 @@
 import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { HrDayType } from '@/types/hr';
-import { HR_DAY_TYPE_OPTIONS, dayTypeNeedsName } from '../utils/dayType';
+import { HR_DAY_TYPE_OPTIONS, dayTypeAcceptsName, dayTypeRequiresName } from '../utils/dayType';
 
 const props = defineProps<{
   /** 选区升序区间（`null` = 没选，整条浮条不渲染）。 */
@@ -96,12 +109,38 @@ const emit = defineEmits<
     ((e: 'draftName', name: string) => void)
 >();
 
-/** 「名称没填」这态要不要红：只在「档位已选成 `CUSTOM_LEAVE` + 名称空 + 用户按过应用」之后
+/** 「名称没填」这态要不要红：只在「这一档必须带名称 + 名称空 + 用户按过应用」之后
  *  才亮 —— 一上来就红是一片没有来由的红。 */
 const appliedOnce = ref(false);
 
-const nameNeeded = computed(() => props.draftDayType !== null && dayTypeNeedsName(props.draftDayType));
-const nameMissing = computed(() => nameNeeded.value && appliedOnce.value && !props.draftName.trim());
+/** 缺名的两句人话：toast 说「你还得做什么」，红字说「这一栏错在哪」。 */
+const NAME_REQUIRED_HINT = '请填写名称';
+const NAME_REQUIRED_TOAST = '「自定义休息」必须填写名称';
+
+/**
+ * 名称框要不要出现（**分作用域**判，与单日弹层同一判据）。
+ *
+ * ⚠️ **班次作用域一律不出现**：班次覆盖行的表里**没有** `name` 列（那个名字属于全局日历的
+ *   语义），班次作用域的写端点也**不**收它 ⇒ 在这里渲染名称框，等于逼用户填一个必然被丢弃
+ *   的名字；按缺名去拦，则是拦掉一条后端本就允许的写（口径见 `docs/api/hr.md` §3.8）。
+ * ⚠️ 全局日历侧只有「能填名称」的两档出现：`CUSTOM_LEAVE` 收休息日说明、`STATUTORY_HOLIDAY`
+ *   收节假日名（"国庆节" / "春节"）。
+ */
+const nameShown = computed(() => {
+  const t = props.draftDayType;
+  return !props.scopeIsShift && t !== null && dayTypeAcceptsName(t);
+});
+
+/** 名称框已出现时，这一档**是不是必须**带名称（只有 `CUSTOM_LEAVE` 缺名才落 21907）。 */
+const nameRequired = computed(() => {
+  const t = props.draftDayType;
+  return nameShown.value && t !== null && dayTypeRequiresName(t);
+});
+
+/** 红态：判据是「必须带名 + 按过应用 + 仍为空」，三者缺一不红。 */
+const nameMissing = computed(
+  () => nameRequired.value && appliedOnce.value && !props.draftName.trim(),
+);
 
 /** 换选区就把「按过一次应用」复位（下一段选区不该继承上一段的标红）。 */
 watch(
@@ -111,7 +150,7 @@ watch(
   },
 );
 
-/** ⚠️ **换档位同样要复位**：上一档若是不要名称的档，store 的 `setDraftDayType` 会把残留的
+/** ⚠️ **换档位同样要复位**：上一档若是不能填名称的档，store 的 `setDraftDayType` 会把残留的
  *  `draftName` 清空 —— 于是「按过一次应用 → 换成 `CUSTOM_LEAVE`」会在用户**还没按应用**时就
  *  让 `nameMissing` 成立，输入框凭空先红。与换选区复位同源：这条红只在「当前这组草稿已被用户
  *  按过一次应用」时才有来由。 */
@@ -150,18 +189,20 @@ function onPick(v: unknown): void {
 }
 
 /** ⚠️ 两个「按了没反应」的口子都必须有反馈（静默 `return` 会被当成按钮坏了）：
- *  一是没选档位，二是 `CUSTOM_LEAVE` 缺名（后端会拒 21907）。 */
+ *  一是没选档位，二是全局日历上的 `CUSTOM_LEAVE` 缺名（后端会拒 21907）。
+ * ⚠️ **班次作用域不参与缺名拦截**：覆盖行没有 `name` 列，端点 9 也不校验它（`docs/api/hr.md`
+ *  §3.8）—— 在这里拦就是拦一条后端本就允许的写。 */
 function onApply(): void {
   appliedOnce.value = true;
   if (!props.draftDayType) {
     ElMessage.warning('请先选择要批量设置的日型');
     return;
   }
-  if (nameNeeded.value && !props.draftName.trim()) {
-    ElMessage.warning('「自定义休息」必须填写名称');
+  if (nameRequired.value && !props.draftName.trim()) {
+    ElMessage.warning(NAME_REQUIRED_TOAST);
     return;
   }
-  emit('apply', props.draftDayType, nameNeeded.value ? props.draftName.trim() : null);
+  emit('apply', props.draftDayType, nameShown.value ? props.draftName.trim() : null);
 }
 </script>
 
@@ -188,6 +229,12 @@ function onApply(): void {
 
 .sel-name {
   width: 180px;
+}
+
+/* 名称那一栏包在 `el-form-item` 里（红框只能由它的 `error` 触发，见模板注释），
+   `el-form-item` 自带的 `margin-bottom` 会把浮条整条撑高一截 —— 压回 0。 */
+.sel-name-item {
+  margin-bottom: 0;
 }
 
 .sel-hint {

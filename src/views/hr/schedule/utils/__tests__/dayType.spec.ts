@@ -11,9 +11,10 @@ import {
   HR_DAY_TYPE_OPTIONS,
   crossDayText,
   dailyMinutesText,
+  dayTypeAcceptsName,
   dayTypeColorKey,
   dayTypeLabel,
-  dayTypeNeedsName,
+  dayTypeRequiresName,
   isWorkdayDayType,
 } from '../dayType';
 
@@ -76,15 +77,25 @@ describe('isHrWorkday — 只有两档算上班', () => {
   });
 });
 
-describe('dayTypeLabel / dayTypeColorKey / dayTypeNeedsName', () => {
+describe('dayTypeLabel / dayTypeColorKey / 名称判据', () => {
   it('L1：label / colorKey 取自 META', () => {
     expect(dayTypeLabel('CUSTOM_LEAVE')).toBe('自定义休息');
     expect(dayTypeColorKey('MAKEUP_WORKDAY')).toBe('makeup-work');
   });
 
-  it('L2：只有 `CUSTOM_LEAVE` 必填名称（后端 21907 的前端版）', () => {
-    const need = HR_DAY_TYPES.filter((t) => dayTypeNeedsName(t));
-    expect(need).toEqual(['CUSTOM_LEAVE']);
+  it('L2：**能填名称** = `CUSTOM_LEAVE` / `STATUTORY_HOLIDAY`（法定节假日要能起「国庆节」的名）', () => {
+    const accept = HR_DAY_TYPES.filter((t) => dayTypeAcceptsName(t));
+    expect(accept).toEqual(['STATUTORY_HOLIDAY', 'CUSTOM_LEAVE']);
+  });
+
+  it('L2b：**必须填名称**只有 `CUSTOM_LEAVE`（后端 21907 的前端版；法定节假日不填照样入库）', () => {
+    const require_ = HR_DAY_TYPES.filter((t) => dayTypeRequiresName(t));
+    expect(require_).toEqual(['CUSTOM_LEAVE']);
+    // 「能填」≠「必填」：把两档合成一个判据，前端就会凭空拒一条后端允许的写。
+    for (const t of HR_DAY_TYPES) {
+      expect(dayTypeRequiresName(t)).toBe(t === 'CUSTOM_LEAVE');
+      expect(dayTypeAcceptsName(t)).toBe(t === 'CUSTOM_LEAVE' || t === 'STATUTORY_HOLIDAY');
+    }
   });
 
   it('L3：未知日型不抛（守门在 Zod 那层，这里只保证标签渲染不炸）', () => {
