@@ -117,7 +117,7 @@ const weComDailyConfigFields = {
   /** 第三节「N 日内交期」的天数（默认 3）。取值域由 `meta.upcoming_days_range` 下发。 */
   upcoming_days: z.number().int(),
   /** 2026-10-23 新增：第三节按交期日期分组列工单清单时，每个分组最多列多少条（默认 30）。
-   *  **0 = 不限**；超出部分不逐条列出，只在组末出一行「另有 N 条未列出」脚注，不静默截断。
+   *  **0 = 不限**；超出部分不逐条列出，只在组末出一行「另有 N 行未列出」脚注，不静默截断。
    *  装配件的子件与工单吃同一个额度。取值域见本文件的
    *  `WECOM_DAILY_ORDER_LIST_LIMIT_RANGE`（**不由 meta 下发**，见该常量的说明）。 */
   order_list_limit: z.number().int(),
@@ -132,7 +132,7 @@ const weComDailyConfigFields = {
   max_chunks: z.number().int(),
   /** 节开关一：全厂报工总览。 */
   include_overview: z.boolean(),
-  /** 节开关二：今日出货单数。 */
+  /** 节开关二：本期出货单数。 */
   include_delivery: z.boolean(),
   /** 节开关三：逾期未交工单 + N 日内交期工单。 */
   include_orders: z.boolean(),

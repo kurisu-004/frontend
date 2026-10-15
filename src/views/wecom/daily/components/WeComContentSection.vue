@@ -43,10 +43,10 @@
     </div>
 
     <div class="field-row">
-      <span class="field-label">② 今日出货</span>
+      <span class="field-label">② 本期出货</span>
       <el-switch
         :model-value="modelValue.include_delivery"
-        aria-label="今日出货"
+        aria-label="本期出货"
         @update:model-value="patch({ include_delivery: Boolean($event) })"
       />
       <span class="field-hint">本期出货的去重工单数（同一工单只算一次）</span>
@@ -97,7 +97,7 @@
         aria-label="交期清单每组最多列出"
         @update:model-value="onOrderListLimitChange"
       />
-      <span class="field-hint">0 = 不限；超出部分只出「另有 N 条未列出」脚注，不会静默截断</span>
+      <span class="field-hint">0 = 不限；超出部分只出「另有 N 行未列出」脚注，不会静默截断</span>
       <span v-if="errors?.order_list_limit" class="field-error">{{ errors.order_list_limit }}</span>
     </div>
 

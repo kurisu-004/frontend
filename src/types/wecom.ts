@@ -114,7 +114,7 @@ export interface SaveWeComDailyConfigPayload {
   upcoming_days: number;
   /** 2026-10-23 新增：第三节按交期日期分组列工单清单时，**每个分组最多列多少条**。
    *  取值域 `0..=200`，**`0` 表示不限**（与 `worker_top_n === 0` 同语义）。超出部分不逐条
-   *  列出，只在组末出一行「另有 N 条未列出」脚注 —— **不静默截断**。装配件的子件与工单吃
+   *  列出，只在组末出一行「另有 N 行未列出」脚注 —— **不静默截断**。装配件的子件与工单吃
    *  同一个额度。
    *  ⚠️ 这一段范围**不由 `GET /meta` 下发**（meta 只在 `defaults` 段多给了 `order_list_limit`
    *  与 `include_drawings` 两个键，没有对应的 `*_range`），所以取值域的真源是前端域内常量
@@ -129,7 +129,7 @@ export interface SaveWeComDailyConfigPayload {
   max_chunks: number;
   /** 节开关一：全厂报工总览。 */
   include_overview: boolean;
-  /** 节开关二：今日出货单数。 */
+  /** 节开关二：本期出货单数。 */
   include_delivery: boolean;
   /** 节开关三：逾期未交工单 + N 日内交期工单。 */
   include_orders: boolean;

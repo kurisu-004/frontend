@@ -73,7 +73,7 @@ function initialFormModel(): WeComDailyFormModel {
     // 选错通道，所以由告警 + 按钮禁用承担（见 `sendDisabled`）。
     webhook_id: null,
     upcoming_days: 3,
-    // 2026-10-23 新增：第三节每个交期分组最多列多少条（0 = 不限，不逐条列出、只出「另有 N 条
+    // 2026-10-23 新增：第三节每个交期分组最多列多少条（0 = 不限，不逐条列出、只出「另有 N 行
     // 未列出」脚注）。
     order_list_limit: 30,
     worker_metric: 'QUANTITY',

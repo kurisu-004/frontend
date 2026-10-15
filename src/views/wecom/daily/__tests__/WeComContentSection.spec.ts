@@ -46,7 +46,7 @@ describe('WeComContentSection.vue — 条形图零图表依赖（第一性质）
   it('G3：三个开关 + 三个数字的 label 一字不差（① ② ③ ④ 是与产品约定的节序）', () => {
     for (const label of [
       '① 全厂报工总览',
-      '② 今日出货',
+      '② 本期出货',
       '③ 交期工单',
       '④ 工人报工',
       '单次最多条数',
@@ -68,11 +68,11 @@ describe('WeComContentSection.vue — 四个开关与三个数字', () => {
       expect(CODE, `缺开关 ${field}`).toContain(field);
     }
     // ⚠️ 两条 hint 的口径与后端 `template.rs::build_blocks` 逐字对齐，且**不得**出现已下线的
-    // 项（第一节没有「完工 / 返修」，第二节没有「送货单张数 / 件数合计」）—— 统计窗口跨天，
-    // hint 里也不许写「今日」。
+    // 项（第一节没有「完工 / 返修」，第二节没有「送货单张数 / 件数合计」）—— 统计窗口跨天
+    // （后端 `dto::report_window`：前一天锚点 ~ 当天锚点），hint 里也不许写「今日」。
     expect(CODE).toMatch(/报工批次 \/ 件数、送检批次、在制单数/);
     expect(CODE).toMatch(/本期出货的去重工单数（同一工单只算一次）/);
-    for (const gone of ['完工', '返修', '送货单', '件数合计']) {
+    for (const gone of ['今日', '完工', '返修', '送货单', '件数合计']) {
       expect(CODE, `组件里不该再出现已下线的口径「${gone}」`).not.toContain(gone);
     }
   });
@@ -128,7 +128,7 @@ describe('WeComContentSection.vue — 第三节清单的两个细粒度控件（
   });
 
   it('C2：提示写明 0 = 不限、且不静默截断（管理员据此判断调不调）', () => {
-    expect(CODE).toMatch(/0 = 不限；超出部分只出「另有 N 条未列出」脚注，不会静默截断/);
+    expect(CODE).toMatch(/0 = 不限；超出部分只出「另有 N 行未列出」脚注，不会静默截断/);
   });
 
   it('C3：图纸预览链接是 el-switch，提示写明关掉就不转码', () => {
