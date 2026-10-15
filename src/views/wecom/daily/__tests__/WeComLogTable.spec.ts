@@ -148,7 +148,7 @@ describe('WeComLogTable.vue — 整行标红必须走 :deep', () => {
 
 describe('WeComLogTable.vue — 刻意不做的东西', () => {
   it('N1：日报的 5 个计数字段一律**不做列**', () => {
-    // 理由：企业微信的日报在群里还看得到，重复存储没意思；且内容口径问题与投递故障混在
+    // 理由：企业微信的日报在群里还看得到，重复存储没意义；且内容口径问题与投递故障混在
     // 一张表里会互相干扰排查。
     for (const field of [
       'overview_batch_count',

@@ -95,8 +95,13 @@ describe('WeComContentSection.vue — 四个开关与三个数字', () => {
     );
   });
 
-  it('S4：三个 el-input-number 清空交原值给 schema（不兜成 0）', () => {
-    for (const handler of ['onUpcomingDaysChange', 'onWorkerTopNChange', 'onMaxChunksChange']) {
+  it('S4：四个 el-input-number 清空交原值给 schema（不兜成 0）', () => {
+    for (const handler of [
+      'onUpcomingDaysChange',
+      'onOrderListLimitChange',
+      'onWorkerTopNChange',
+      'onMaxChunksChange',
+    ]) {
       const fn = CODE.match(new RegExp(`function ${handler}[\\s\\S]*?\\n\\}`))?.[0] ?? '';
       expect(fn, `${handler} 没找到`).toContain(`v === '' ? undefined`);
     }
@@ -133,9 +138,18 @@ describe('WeComContentSection.vue — 第三节清单的两个细粒度控件（
   });
 
   it('C4：两个控件都随第三节开关禁用（与天数那条同款，不清值）', () => {
-    expect(CODE).toMatch(/modelValue\.order_list_limit/);
-    expect(CODE).toMatch(/modelValue\.include_drawings/);
-    // 两处 :disabled 都绑第三节开关（不写死布尔字面量）。
+    // 逐行拆开断言：把两个新控件里的 `:disabled` 整行删掉，下面两条当场红（只断言字段名
+    // 出现过的话删掉绑定仍然全绿 —— 那是空转断言，挡不住任何回归）。
+    const rows = CODE.split(/<div\b/);
+    const limitRow = rows.find((chunk) => chunk.includes('modelValue.order_list_limit'));
+    const drawingsRow = rows.find((chunk) => chunk.includes('modelValue.include_drawings'));
+    expect(limitRow, '找不到 order_list_limit 那一行').toBeDefined();
+    expect(limitRow).toMatch(/:disabled="!modelValue\.include_orders"/);
+    expect(drawingsRow, '找不到 include_drawings 那一行').toBeDefined();
+    expect(drawingsRow).toMatch(/:disabled="!modelValue\.include_orders"/);
+    // 全文件恰好三处随第三节禁用（天数 / 每组条数 / 图纸预览链接），多一处即多一个
+    // 与第三节无关的禁用绑定。
+    expect(CODE.match(/:disabled="!modelValue\.include_orders"/g) ?? []).toHaveLength(3);
     expect(CODE).not.toMatch(/:disabled="false"/);
   });
 

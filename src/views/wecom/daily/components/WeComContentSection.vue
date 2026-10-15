@@ -97,7 +97,7 @@
         aria-label="交期清单每组最多列出"
         @update:model-value="onOrderListLimitChange"
       />
-      <span class="field-hint"> 0 = 不限；超出部分只出「另有 N 条未列出」脚注，不会静默截断 </span>
+      <span class="field-hint">0 = 不限；超出部分只出「另有 N 条未列出」脚注，不会静默截断</span>
       <span v-if="errors?.order_list_limit" class="field-error">{{ errors.order_list_limit }}</span>
     </div>
 
