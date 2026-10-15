@@ -201,7 +201,7 @@ const LOG_ROW: WeComDailyLogData = {
   chunk_sent: 2,
   overview_batch_count: 12,
   overview_quantity: 340,
-  note_count: 3,
+  note_count: 0,
   note_part_count: 56,
   overdue_count: 2,
   upcoming_count: 7,

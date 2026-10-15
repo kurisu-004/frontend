@@ -233,7 +233,7 @@ export const weComDailyWorkerRowSchema = z
   })
   .strict();
 
-/** 预览结果（后端 `PreviewOut`，**15 个字段逐字对齐**）。**渲染、不发送、不落流水**。
+/** 预览结果（后端 `PreviewOut`，**14 个字段逐字对齐**）。**渲染、不发送、不落流水**。
  *
  *  ⚠️ **`chunks` 是必填数组，契约里没有 `markdown` 单字段** —— 只维护一个真相源。同时维护
  *  `markdown` 与 `chunks` 会让「要发几条」有两个答案，而这个答案恰恰是管理员唯一需要预判的
@@ -257,11 +257,13 @@ export const weComDailyPreviewSchema = z
     completed_count: z.number(),
     /** 第一节：当前在制工单数。 */
     in_process_count: z.number(),
-    /** 第一节：今日返修单数。 */
-    repair_part_count: z.number(),
-    /** 第二节：今日已取货送货单数。 */
+    /** 第二节：**恒为 0** —— 第二节 2026-10-23 改口径后不再统计「送货单张数」，本期出货的
+     *  唯一数字改由 [`Self::note_part_count`] 承载；本键**保留**是因为流水表 `note_count`
+     *  是 `NOT NULL` 列、后端出参按它排版。
+     *  ⚠️ **它不是「今天没出货」**：要看第二节的数字读 `note_part_count`。 */
     note_count: z.number(),
-    /** 第二节：今日已取货件数合计。 */
+    /** 第二节（唯一）：本期出货的工单数（口径 = `COUNT(DISTINCT part_id)`，去重后数工单而非
+     *  送货单张数）。2026-10-23 改口径后承接原 `note_count` 的展示职责。 */
     note_part_count: z.number(),
     /** 第三节：逾期未交工单数。 */
     overdue_count: z.number(),
@@ -317,7 +319,9 @@ export const weComDailyLogSchema = z
     chunk_sent: z.number(),
     overview_batch_count: z.number(),
     overview_quantity: z.number(),
+    /** 同 `weComDailyPreviewSchema`：`NOT NULL` 列的占位键，**恒为 0**，出货数字看下一行。 */
     note_count: z.number(),
+    /** 第二节（唯一）：本期出货的工单数（去重后的 part 数）。 */
     note_part_count: z.number(),
     overdue_count: z.number(),
     upcoming_count: z.number(),
