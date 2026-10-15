@@ -46,7 +46,8 @@
 // - 重签场景：tmp_key 由 caller 重排 seq 时会变 → 上文 `applyFreshIntents`
 //   兜底 reset pending 强制重传，不会让鬼状态穿透到 commit / confirm。
 
-import COS from 'cos-js-sdk-v5';
+import type COS from 'cos-js-sdk-v5';
+import { loadCosSdk } from '@/utils/cosSdk';
 import { computed, type ComputedRef, type Ref } from 'vue';
 import type { CosCredentials, UploadIntentsOut } from '@/types/part_file';
 
@@ -153,9 +154,16 @@ export interface UseCosUploadReturn {
  *
  * STS 临时凭证场景下 `Protocol: 'https:'` 是必须的（COS 默认走 https）；
  * `SdkAppid` / `Region` 字段省略——region 在每次 uploadFile 时传。
+ *
+ * 2026-10-21：SDK 改走 `@/utils/cosSdk` 的懒加载入口。它约 175KB，而本 composable
+ * 是被零件详情页 / 零件批量上传页**静态**引用的 ⇒ 那两个页面的进页面闭包里各白坐着
+ * 这 175KB，尽管 SDK 只在用户真的上传文件时才需要。`buildCos` 的唯一调用点在
+ * `uploadOne`（本就是 async），改成 await 不影响调用形态；memo 与单测桩的坑见
+ * `cosSdk.ts` 的文件头。
  */
-function buildCos(credentials: CosCredentials): COS {
-  return new COS({
+async function buildCos(credentials: CosCredentials): Promise<COS> {
+  const CosSdk = await loadCosSdk();
+  return new CosSdk({
     SecretId: credentials.tmp_secret_id,
     SecretKey: credentials.tmp_secret_key,
     SecurityToken: credentials.session_token,
@@ -258,7 +266,7 @@ export function useCosUpload(opts: UseCosUploadOptions): UseCosUploadReturn {
     if (!it) return; // 并发期间被 caller 删了
     it.status = 'uploading';
     it.error = undefined;
-    const cos = buildCos(it.credentials);
+    const cos = await buildCos(it.credentials);
     try {
       const data = await cos.uploadFile({
         Bucket: it.bucket,

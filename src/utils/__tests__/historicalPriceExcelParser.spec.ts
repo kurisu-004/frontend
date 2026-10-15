@@ -97,7 +97,7 @@ describe('parseHistoricalPriceExcel', () => {
       },
     ]);
 
-    const result = parseHistoricalPriceExcel(wb, TODAY);
+    const result = parseHistoricalPriceExcel(wb, TODAY, XLSX.utils);
 
     expect(result.errors).toEqual([]);
     expect(result.rows).toHaveLength(5);
@@ -142,7 +142,7 @@ describe('parseHistoricalPriceExcel', () => {
       {},
       {},
     ]);
-    const result = parseHistoricalPriceExcel(wb, TODAY);
+    const result = parseHistoricalPriceExcel(wb, TODAY, XLSX.utils);
     expect(result.rows).toHaveLength(1);
     expect(result.errors).toEqual([]);
   });
@@ -180,7 +180,7 @@ describe('parseHistoricalPriceExcel', () => {
         含税价格: 100,
       },
     ]);
-    const result = parseHistoricalPriceExcel(wb, TODAY);
+    const result = parseHistoricalPriceExcel(wb, TODAY, XLSX.utils);
     expect(result.rows).toHaveLength(3);
     expect(result.errors).toHaveLength(3);
     expect(result.errors[0]?.message).toMatch(/申请人不能为空/);
@@ -232,7 +232,7 @@ describe('parseHistoricalPriceExcel', () => {
         含税价格: 100,
       },
     ]);
-    const result = parseHistoricalPriceExcel(wb, TODAY);
+    const result = parseHistoricalPriceExcel(wb, TODAY, XLSX.utils);
     expect(result.errors).toHaveLength(4);
     expect(result.errors[0]?.message).toMatch(/采购数量必须为正整数/);
     expect(result.errors[1]?.message).toMatch(/采购数量必须为正整数/);
@@ -263,7 +263,7 @@ describe('parseHistoricalPriceExcel', () => {
         含税价格: 100,
       },
     ]);
-    const result = parseHistoricalPriceExcel(wb, TODAY);
+    const result = parseHistoricalPriceExcel(wb, TODAY, XLSX.utils);
     expect(result.errors).toEqual([]);
     expect(result.rows).toHaveLength(2);
     expect((result.rows[1] as BidRow).warnings).toContain('本批次有重复图号');
@@ -282,7 +282,7 @@ describe('parseHistoricalPriceExcel', () => {
         含税价格: 500,
       },
     ]);
-    const result = parseHistoricalPriceExcel(wb, TODAY);
+    const result = parseHistoricalPriceExcel(wb, TODAY, XLSX.utils);
     expect(result.errors).toEqual([]);
     const r = result.rows[0] as BidRow;
     expect(r.unitPrice).toBe(0);
@@ -303,7 +303,7 @@ describe('parseHistoricalPriceExcel', () => {
         含税价格: 480,
       },
     ]);
-    const result = parseHistoricalPriceExcel(wb, TODAY);
+    const result = parseHistoricalPriceExcel(wb, TODAY, XLSX.utils);
     const r = result.rows[0] as BidRow;
     expect(r.applicantName).toBe('程胜志');
     expect(r.deptName).toBe('镀膜厂');
@@ -334,7 +334,7 @@ describe('parseHistoricalPriceExcel', () => {
         含税价格: 100,
       },
     ]);
-    const result = parseHistoricalPriceExcel(wb, TODAY);
+    const result = parseHistoricalPriceExcel(wb, TODAY, XLSX.utils);
     expect((result.rows[0] as BidRow).plannedDeliveryDate).toBe('2026-07-18');
     expect((result.rows[1] as BidRow).plannedDeliveryDate).toBe('2026-08-12');
   });
@@ -352,7 +352,7 @@ describe('parseHistoricalPriceExcel', () => {
         含税价格: 100,
       },
     ]);
-    const result = parseHistoricalPriceExcel(wb, TODAY);
+    const result = parseHistoricalPriceExcel(wb, TODAY, XLSX.utils);
     const r = result.rows[0] as BidRow;
     expect(r.isUrgent).toBe(false);
     expect(r.warnings).not.toContain(expect.stringMatching(/紧急/));
@@ -371,7 +371,7 @@ describe('parseHistoricalPriceExcel', () => {
         含税价格: '', // 缺失
       },
     ]);
-    const result = parseHistoricalPriceExcel(wb, TODAY);
+    const result = parseHistoricalPriceExcel(wb, TODAY, XLSX.utils);
     const r = result.rows[0] as BidRow;
     expect(r.totalPrice).toBe(480); // 160 * 3
   });
@@ -391,7 +391,7 @@ describe('parseHistoricalPriceExcel', () => {
         含税价格: 100,
       },
     ]);
-    const result = parseHistoricalPriceExcel(wb, TODAY);
+    const result = parseHistoricalPriceExcel(wb, TODAY, XLSX.utils);
     expect(result.errors).toEqual([]);
     expect(result.warnings).toEqual([]);
     const r = result.rows[0] as BidRow;
@@ -414,7 +414,7 @@ describe('parseHistoricalPriceExcel', () => {
       ],
       '错误的sheet名',
     );
-    expect(() => parseHistoricalPriceExcel(wb, TODAY)).toThrow(/历史价确认单/);
+    expect(() => parseHistoricalPriceExcel(wb, TODAY, XLSX.utils)).toThrow(/历史价确认单/);
   });
 
   it('throws when required columns are missing', () => {
@@ -430,6 +430,6 @@ describe('parseHistoricalPriceExcel', () => {
     );
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '历史价确认单明细');
-    expect(() => parseHistoricalPriceExcel(wb, TODAY)).toThrow(/缺少必需列/);
+    expect(() => parseHistoricalPriceExcel(wb, TODAY, XLSX.utils)).toThrow(/缺少必需列/);
   });
 });

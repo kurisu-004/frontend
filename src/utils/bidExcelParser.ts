@@ -1,12 +1,21 @@
 // bidExcelParser.ts
 //
 // 解析「法拉电子应标」Excel（docs/example/供应商招标项目应标 (9).xlsx）主表
-// `招标项目-标的` 为 BidRow[]。纯函数：仅依赖 xlsx，不触发网络 / DOM。
+// `招标项目-标的` 为 BidRow[]。纯函数：不触发网络 / DOM。
 //
 // 字段映射详见 plan docs/.../excel-snug-zephyr.md 第三节。
+//
+// 2026-10-21：xlsx 改成 type-only import，运行期面（`utils`）由调用方传入 ——
+// 理由与签名口径见 `xlsxParseUtils.ts` 的 `XlsxUtils`。
 
-import * as XLSX from 'xlsx';
-import { addDays, cleanText, parseDecimalOrNull, parseIntSafe } from './xlsxParseUtils';
+import type * as XLSX from 'xlsx';
+import {
+  addDays,
+  cleanText,
+  parseDecimalOrNull,
+  parseIntSafe,
+  type XlsxUtils,
+} from './xlsxParseUtils';
 
 /** 解析后的一行（不含 customer_id / applicant_id，page 层去解析）。 */
 export interface BidRow {
@@ -88,8 +97,13 @@ function extractFirstFileName(raw: string): string | null {
  *
  * @param workbook 由 `XLSX.read(arrayBuffer)` 解析得到
  * @param today   YYYY-MM-DD 形式的「今天」（建议 Asia/Shanghai 当天）
+ * @param xlsxUtils xlsx 的运行期面（即 `XLSX.utils`），由调用方传入 —— 见 `XlsxUtils` 的口径
  */
-export function parseBidExcel(workbook: XLSX.WorkBook, today: string): ParseResult {
+export function parseBidExcel(
+  workbook: XLSX.WorkBook,
+  today: string,
+  xlsxUtils: XlsxUtils,
+): ParseResult {
   const sheet = workbook.Sheets[SHEET_NAME];
   if (!sheet) {
     const available = workbook.SheetNames.join(', ');
@@ -100,7 +114,7 @@ export function parseBidExcel(workbook: XLSX.WorkBook, today: string): ParseResu
 
   // 读出 sheet 第一行（表头），用它做列名校验 —— sheet_to_json 的
   // defval:null 模式会保留空 cell 的 key，反而掩盖「整列缺失」的情况。
-  const rawHeader: unknown[][] = XLSX.utils.sheet_to_json(sheet, {
+  const rawHeader: unknown[][] = xlsxUtils.sheet_to_json(sheet, {
     header: 1,
     raw: false,
     blankrows: false,
@@ -115,7 +129,7 @@ export function parseBidExcel(workbook: XLSX.WorkBook, today: string): ParseResu
     throw new Error(`Excel 缺少必需列：${missing.join('、')}`);
   }
 
-  const rawRows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(sheet, {
+  const rawRows: Record<string, unknown>[] = xlsxUtils.sheet_to_json(sheet, {
     defval: null,
     raw: false,
     blankrows: false,

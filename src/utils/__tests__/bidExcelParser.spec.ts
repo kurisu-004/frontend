@@ -108,7 +108,7 @@ describe('parseBidExcel', () => {
       },
     ]);
 
-    const result = parseBidExcel(wb, TODAY);
+    const result = parseBidExcel(wb, TODAY, XLSX.utils);
 
     expect(result.errors).toEqual([]);
     expect(result.rows).toHaveLength(5);
@@ -169,7 +169,7 @@ describe('parseBidExcel', () => {
       {}, // 全空
       {}, // 全空
     ]);
-    const result = parseBidExcel(wb, TODAY);
+    const result = parseBidExcel(wb, TODAY, XLSX.utils);
     expect(result.rows).toHaveLength(1);
     expect(result.errors).toEqual([]);
   });
@@ -210,7 +210,7 @@ describe('parseBidExcel', () => {
         预估交期天数: 14,
       },
     ]);
-    const result = parseBidExcel(wb, TODAY);
+    const result = parseBidExcel(wb, TODAY, XLSX.utils);
     expect(result.rows).toHaveLength(3); // 仍 parse 出 3 行
     expect(result.errors).toHaveLength(3);
     expect(result.errors[0]?.message).toMatch(/申请人不能为空/);
@@ -266,7 +266,7 @@ describe('parseBidExcel', () => {
         预估交期天数: 0, // 非正
       },
     ]);
-    const result = parseBidExcel(wb, TODAY);
+    const result = parseBidExcel(wb, TODAY, XLSX.utils);
     expect(result.errors).toHaveLength(4);
     expect(result.errors[0]?.message).toMatch(/计划数量必须为正整数/);
     expect(result.errors[1]?.message).toMatch(/计划数量必须为正整数/);
@@ -299,7 +299,7 @@ describe('parseBidExcel', () => {
         预估交期天数: 14,
       },
     ]);
-    const result = parseBidExcel(wb, TODAY);
+    const result = parseBidExcel(wb, TODAY, XLSX.utils);
     expect(result.errors).toEqual([]);
     expect(result.rows).toHaveLength(2);
     expect((result.rows[1] as BidRow).warnings).toContain('本批次有重复图号');
@@ -319,7 +319,7 @@ describe('parseBidExcel', () => {
         预估交期天数: 14,
       },
     ]);
-    const result = parseBidExcel(wb, TODAY);
+    const result = parseBidExcel(wb, TODAY, XLSX.utils);
     expect(result.errors).toEqual([]);
     const r = result.rows[0] as BidRow;
     expect(r.unitPrice).toBe(0);
@@ -342,7 +342,7 @@ describe('parseBidExcel', () => {
         预估交期天数: 14,
       },
     ]);
-    const result = parseBidExcel(wb, TODAY);
+    const result = parseBidExcel(wb, TODAY, XLSX.utils);
     expect((result.rows[0] as BidRow).designDrawingLabel).toBe('abc.PDF');
   });
 
@@ -361,7 +361,7 @@ describe('parseBidExcel', () => {
         预估交期天数: 14,
       },
     ]);
-    const result = parseBidExcel(wb, TODAY);
+    const result = parseBidExcel(wb, TODAY, XLSX.utils);
     expect((result.rows[0] as BidRow).designDrawingLabel).toBeNull();
   });
 
@@ -390,7 +390,7 @@ describe('parseBidExcel', () => {
         预估交期天数: 7,
       },
     ]);
-    const result = parseBidExcel(wb, '2026-12-30'); // 跨年
+    const result = parseBidExcel(wb, '2026-12-30', XLSX.utils); // 跨年
     expect((result.rows[0] as BidRow).plannedDeliveryDate).toBe('2026-12-31');
     expect((result.rows[1] as BidRow).plannedDeliveryDate).toBe('2027-01-06');
   });
@@ -412,7 +412,7 @@ describe('parseBidExcel', () => {
       ],
       'wrong-sheet',
     );
-    expect(() => parseBidExcel(wb, TODAY)).toThrow(/招标项目-标的/);
+    expect(() => parseBidExcel(wb, TODAY, XLSX.utils)).toThrow(/招标项目-标的/);
   });
 
   it('throws when required headers are missing', () => {
@@ -426,12 +426,12 @@ describe('parseBidExcel', () => {
     ]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '招标项目-标的');
-    expect(() => parseBidExcel(wb, TODAY)).toThrow(/Excel 缺少必需列/);
+    expect(() => parseBidExcel(wb, TODAY, XLSX.utils)).toThrow(/Excel 缺少必需列/);
   });
 
   it('handles empty workbook gracefully', () => {
     const wb = buildWorkbook([]);
-    const result = parseBidExcel(wb, TODAY);
+    const result = parseBidExcel(wb, TODAY, XLSX.utils);
     expect(result.rows).toEqual([]);
     expect(result.warnings).toContain('Excel 没有数据行');
   });
@@ -450,7 +450,7 @@ describe('parseBidExcel', () => {
         预估交期天数: 14,
       },
     ]);
-    const result = parseBidExcel(wb, TODAY);
+    const result = parseBidExcel(wb, TODAY, XLSX.utils);
     const r = result.rows[0] as BidRow;
     expect(r.applicantName).toBe('张三');
     expect(r.deptCode).toBe('F05');
@@ -479,7 +479,7 @@ describe('parseBidExcel', () => {
         物料编号: 'E42JRM5502072101  MX55D压膜轮φ30（HSD45）（附报告）',
       },
     ]);
-    const result = parseBidExcel(wb, TODAY);
+    const result = parseBidExcel(wb, TODAY, XLSX.utils);
     expect(result.rows).toHaveLength(1);
     expect(result.errors).toEqual([]);
     expect(result.warnings.some((w) => /已忽略 \d+ 行/.test(w))).toBe(true);
@@ -500,7 +500,7 @@ describe('parseBidExcel', () => {
         预估交期天数: 14,
       },
     ]);
-    const result = parseBidExcel(wb, TODAY);
+    const result = parseBidExcel(wb, TODAY, XLSX.utils);
     expect(result.rows).toHaveLength(1);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0].message).toContain('物料编号不能为空');

@@ -38,9 +38,9 @@ export function usePartBatchPdfFill(state: PdfBatchState): UsePartBatchPdfFill {
     const sheetNames = wb.SheetNames;
     let parsed: ParseResult;
     if (sheetNames.includes('历史价确认单明细')) {
-      parsed = parseHistoricalPriceExcel(wb, todayIso());
+      parsed = parseHistoricalPriceExcel(wb, todayIso(), XLSX.utils);
     } else if (sheetNames.includes('招标项目-标的')) {
-      parsed = parseBidExcel(wb, todayIso());
+      parsed = parseBidExcel(wb, todayIso(), XLSX.utils);
     } else {
       throw new Error(
         `Excel 格式无法识别（需要「历史价确认单明细」或「招标项目-标的」sheet），当前文件 sheet: ${sheetNames.join(', ')}`,

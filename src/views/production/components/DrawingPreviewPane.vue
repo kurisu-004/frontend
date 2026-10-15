@@ -135,12 +135,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, onBeforeUnmount, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Document, Loading, Tools } from '@element-plus/icons-vue';
 import PdfViewer from '@/components/PdfViewer.vue';
 import ImagePager from '@/components/ImagePager.vue';
-import StepViewer from '@/components/cad-viewer/StepViewer.vue';
 import type { ProcessDesignPartSchema } from '@/composables/queries/schemas';
 import type { PartFileItem } from '@/types/part_file';
 // 2026-09-29 单调用：usePartFilesListQuery 替代 usePartFiles 三并发
@@ -158,6 +157,14 @@ const props = defineProps<{
   // 本组件只读 id / drawing_no / name 三个字段。
   part: ProcessDesignPartSchema | null;
 }>();
+
+// 2026-10-21 改异步组件，理由与 FileListCard 的同一处逐字同款：静态 import 会把
+// three.js（约 495KB）+ occt-wasm 胶水（约 108KB）带进工序设计页的静态闭包，而 3D
+// 预览要用户切到「3D 模型」tab 才挂载（见模板 `activeTab === 'models3d'` 门控）⇒ 零感知。
+//
+// 位置在 defineProps 之后是 eslint 的 `vue/define-macros-order` 要求（宏调用必须是
+// <script setup> 的第一条语句），不是随意摆的。
+const StepViewer = defineAsyncComponent(() => import('@/components/cad-viewer/StepViewer.vue'));
 
 const activeTab = ref<'drawings' | 'models3d' | 'cad'>('drawings');
 

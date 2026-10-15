@@ -17,7 +17,7 @@ describe('parseBidExcel (real fixture)', () => {
   it('parses 供应商招标项目应标 (9).xlsx', () => {
     const buf = readFileSync(FIXTURE_PATH);
     const wb = XLSX.read(buf, { type: 'buffer' });
-    const result = parseBidExcel(wb, '2026-07-13');
+    const result = parseBidExcel(wb, '2026-07-13', XLSX.utils);
     // 26 real data rows, 0 errors
     expect(result.rows).toHaveLength(26);
     expect(result.errors).toEqual([]);

@@ -8,6 +8,8 @@
 //   2. echarts.use() 的唯一落点是 src/plugins/echarts.ts：模块化注册与
 //      `import 'echarts/theme/v5'` 副作用导入都绑在那一个文件里，业务组件只消费
 //      全局 <v-chart>、不各自 use、不值导入 echarts/core、不自行 echarts.init。
+//   3.（2026-10-21 补）main.ts 的 VChart 注册必须是 defineAsyncComponent 动态形态 ——
+//      它守的是「首屏不背 echarts/zrender 那 660KB」这一条，见该用例里的反向守卫说明。
 //
 // 为什么放这里而不放域内 spec：这两条断言的对象是全仓，挂在某个业务域的
 // __tests__ 下会让「别的域合理新增图表壳」时红一个不相干的域（域内 spec 只守本域，
@@ -33,6 +35,9 @@ const LEGACY_SHELL = 'src/components/EChart.vue';
 
 /** 允许出现 echarts.use() / echarts.init() 的唯一文件。 */
 const REGISTRATION_POINT = 'src/plugins/echarts.ts';
+
+/** main.ts 动态加载注册点时用的 specifier（断言按它拼，两处不许各写一份字面量）。 */
+const REGISTRATION_IMPORT = '@/plugins/echarts';
 
 /** 递归列出 src/ 下全部 .vue / .ts（跳过 __tests__：断言自身带字面量，扫自己没意义）。 */
 function sourceFiles(dir: string, acc: string[] = []): string[] {
@@ -124,5 +129,26 @@ describe('全仓图表承载不变量', () => {
     const code = sanitize(REGISTRATION_POINT);
     expect(code, `${REGISTRATION_POINT} 缺 v5 主题导入`).toContain("import 'echarts/theme/v5'");
     expect(code, `${REGISTRATION_POINT} 缺 CanvasRenderer 注册`).toContain('CanvasRenderer');
+  });
+
+  it('main.ts 的 VChart 注册必须是动态形态（echarts 整块不进首屏）', () => {
+    const rel = 'src/main.ts';
+    const code = sanitize(rel);
+
+    // ① 注册处必须是 defineAsyncComponent 包裹 + import() 动态加载。
+    expect(code, 'main.ts 应以 defineAsyncComponent 注册 VChart').toContain(
+      'defineAsyncComponent(',
+    );
+    expect(code, `main.ts 应通过 import('${REGISTRATION_IMPORT}') 动态取 VChart`).toMatch(
+      /defineAsyncComponent\(\s*\(\)\s*=>\s*import\(/,
+    );
+
+    // ② 反向守卫：**不能**有静态 import 语句把注册点重新拉回首屏。
+    //    回归到静态 import 不会有任何报错 / 任何 spec 变红，只是首屏悄悄多背
+    //    660KB（实测占入口 chunk 70~85%），所以必须有一条纯源码断言钉住它。
+    expect(
+      code,
+      'main.ts 不得静态 import 注册点（那会把 echarts/zrender 660KB 拉回首屏）',
+    ).not.toMatch(new RegExp(`import\\s+(?!type\\b)[^;]*?from\\s+['"]${REGISTRATION_IMPORT}['"]`));
   });
 });

@@ -570,7 +570,7 @@ async function onFileChange(uploadFile: UploadFile): Promise<void> {
   parsing.value = true;
   try {
     const buf = await raw.arrayBuffer();
-    const parsed = parsePurchaseOrderExcel(buf);
+    const parsed = await parsePurchaseOrderExcel(buf);
     docNo.value = parsed.docNo;
     parseErrors.value = parsed.errors;
     parseWarnings.value = parsed.warnings;

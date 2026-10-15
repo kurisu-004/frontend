@@ -159,18 +159,18 @@ function itemOf(items: PurchaseOrderExcelItem[], lineNo: string): PurchaseOrderE
 }
 
 describe('parsePurchaseOrderExcel', () => {
-  it('读取「基本资料」sheet 的单据编号', () => {
-    const result = parsePurchaseOrderExcel(buildPoWorkbookBytes());
+  it('读取「基本资料」sheet 的单据编号', async () => {
+    const result = await parsePurchaseOrderExcel(buildPoWorkbookBytes());
 
     expect(result.docNo).toBe(DOC_NO);
     expect(result.errors).toEqual([]);
   });
 
-  it('!ref 低报范围时，靠外侧列的数据仍被解析出来', () => {
+  it('!ref 低报范围时，靠外侧列的数据仍被解析出来', async () => {
     // 复现坑 A：!ref 只声明到 H 列，可出货数量在 K 列。
     // 若 readSheetRows 退回按 !ref 切，K 列表头 / 数据都会被裁掉，
     // 结果是「缺少可选列」warning + shippableQty 恒 null。
-    const result = parsePurchaseOrderExcel(buildPoWorkbookBytes(NARROW_REF));
+    const result = await parsePurchaseOrderExcel(buildPoWorkbookBytes(NARROW_REF));
 
     expect(result.errors).toEqual([]);
     expect(result.warnings).not.toContain(expect.stringContaining('缺少可选列「可出货数量」'));
@@ -184,20 +184,20 @@ describe('parsePurchaseOrderExcel', () => {
     expect(itemOf(result.items, '20').shippableQty).toBe(7);
   });
 
-  it('!ref 未低报时解析结果与低报时一致', () => {
+  it('!ref 未低报时解析结果与低报时一致', async () => {
     // 对照组：同一份数据在 !ref 正常时不会出现「缺少可选列」警告，
     // 说明上一条断言拿到的是 K 列数据本身而不是兜底空值。
-    const result = parsePurchaseOrderExcel(buildPoWorkbookBytes());
+    const result = await parsePurchaseOrderExcel(buildPoWorkbookBytes());
 
     expect(result.warnings).not.toContain(expect.stringContaining('缺少可选列'));
     expect(itemOf(result.items, '10').shippableQty).toBe(30);
   });
 
-  it('跳过「计划行」子表头与序号 1 子数据，主明细保留且 rowNo 为 Excel 真实行号', () => {
+  it('跳过「计划行」子表头与序号 1 子数据，主明细保留且 rowNo 为 Excel 真实行号', async () => {
     // 复现坑 B：Excel 第 6 行是计划行子表头、第 7 行是序号 1 的子数据，
     // 两行都不能进 items；留下的主明细行号必须是 Excel 真实行号（5 / 8 / 10）
     // 而不是数据序号，否则后端 match 的 row_no 对不上、候选挂不回行。
-    const result = parsePurchaseOrderExcel(buildPoWorkbookBytes(NARROW_REF));
+    const result = await parsePurchaseOrderExcel(buildPoWorkbookBytes(NARROW_REF));
 
     expect(result.items.map((it) => it.lineNo)).toEqual(['10', '20', '40']);
     expect(result.items.map((it) => it.rowNo)).toEqual([5, 8, 10]);
@@ -207,31 +207,31 @@ describe('parsePurchaseOrderExcel', () => {
     expect(result.items.every((it) => it.deleted === false)).toBe(true);
   });
 
-  it('跳过已删除的主明细行并给出警告', () => {
-    const result = parsePurchaseOrderExcel(buildPoWorkbookBytes(NARROW_REF));
+  it('跳过已删除的主明细行并给出警告', async () => {
+    const result = await parsePurchaseOrderExcel(buildPoWorkbookBytes(NARROW_REF));
 
     // 第 9 行（采购订单行号 30，物料代码 PO-003）已删除
     expect(result.items.map((it) => it.drawingNo)).not.toContain('PO-003');
     expect(result.warnings).toContain('第 9 行（采购订单行号 30）已删除，已跳过');
   });
 
-  it('缺少必需 sheet 时报错且不产出明细', () => {
+  it('缺少必需 sheet 时报错且不产出明细', async () => {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['无采购订单']]), '其他');
     const bytes = toArrayBuffer(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }));
 
-    const result = parsePurchaseOrderExcel(bytes);
+    const result = await parsePurchaseOrderExcel(bytes);
 
     expect(result.items).toEqual([]);
     expect(result.errors).toContain(`Excel 缺少 "${BASE_SHEET}" sheet`);
     expect(result.errors).toContain(`Excel 缺少 "${DETAIL_SHEET}" sheet`);
   });
 
-  it('真实 Excel 日期单元格归一成 YYYY-MM-DD，千分位数字被剥离', () => {
+  it('真实 Excel 日期单元格归一成 YYYY-MM-DD，千分位数字被剥离', async () => {
     // 第 5 行：交货日期写成 Date（落盘后带 m/d/yy 数字格式），千分位含税价 / 可出货数量
     // 第 6 行：交货日期是无法识别的「待定」—— MAJOR-1 的根因输入
     // 第 7 行：交货日期留空
-    const result = parsePurchaseOrderExcel(
+    const result = await parsePurchaseOrderExcel(
       buildPoWorkbookBytes(undefined, [
         ['10', 'M8', '', 'PO-001', '法兰盘', 5, new Date(2026, 7, 1), '1,234.56', '', '', '1,500'],
         ['20', 'M10', '', 'PO-002', '轴承座', 3, '待定', 88, '', '', 7],
@@ -329,9 +329,9 @@ describe('resolveExcelDeliveryDate', () => {
     expect(decision.prefill('2026-07-01')).toBe('2026-13-45');
   });
 
-  it('端到端：待定行的候选默认值 = 零件现有交期，且 group 追加了说明', () => {
+  it('端到端：待定行的候选默认值 = 零件现有交期，且 group 追加了说明', async () => {
     // 走真实链路 Excel → 解析器 → 预填决策，对齐 buildPreviewGroups 里的取值口径。
-    const result = parsePurchaseOrderExcel(
+    const result = await parsePurchaseOrderExcel(
       buildPoWorkbookBytes(undefined, [
         ['10', 'M8', '', 'PO-001', '法兰盘', 5, '待定', 1, '', '', 1],
       ]),

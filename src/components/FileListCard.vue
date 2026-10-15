@@ -262,7 +262,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, onBeforeUnmount, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox, ElUpload, type UploadInstance } from 'element-plus';
 import {
   Delete,
@@ -279,7 +279,7 @@ import type { UploadFile } from 'element-plus';
 import PdfViewer from './PdfViewer.vue';
 import ImagePager from './ImagePager.vue';
 // 2026-09-20 PR step-viewer-integration：3D 模型内嵌预览组件 + 文件类型判定
-import StepViewer from './cad-viewer/StepViewer.vue';
+//
 import { fileTypeToOcctFormat, isOcctSupported } from '@/utils/stepViewerFile';
 import { deletePartFile, fetchPartFileContent, getPartFileDownloadUrl } from '@/api/files/objects';
 import { usePreviewPolling } from '@/composables/usePreviewPolling';
@@ -309,6 +309,19 @@ const emit = defineEmits<{
   deleted: [string];
   refresh: [];
 }>();
+
+// 2026-10-21 改异步组件：StepViewer 静态 import 会把 three.js（约 495KB）+ occt-wasm 的
+// emscripten 胶水（约 108KB）拉进**每一个渲染了本卡片的页面**的静态闭包 —— 实测
+// 零件详情 / 装配件详情 / 工序设计 / 大屏四个页面各白带约 600KB，而 3D 预览是低频动作。
+// 改成 defineAsyncComponent 后这三块只在用户真的点开一个 STEP/IGES 文件时才下载。
+//
+// 为什么零感知：模板里 StepViewer 挂在一个 `el-dialog destroy-on-close` 里、且被
+// `v-else-if` 门控（见上方 preview 块），即它本来就要等用户点开预览弹窗 + 选到 3D 文件
+// 才挂载；异步组件多出来的那一跳就是这段既有等待里的一次额外 chunk 请求，首屏不受影响。
+// ⚠️ 本组件没有 defineExpose，父组件不持有它的 template ref ⇒ 异步化不影响任何命令式调用。
+// 位置在 defineProps / defineEmits 之后是 eslint 的 `vue/define-macros-order` 要求
+// （宏调用必须是 <script setup> 的前几条语句），不是随意摆的。
+const StepViewer = defineAsyncComponent(() => import('./cad-viewer/StepViewer.vue'));
 
 // ----- ACCEPT 与 title 按 kind 自动派生 -----
 // 2026-07-14：DRAWING 加 9 种图片（PNG/JPG/.../HEIC，与 PDF 同槽）；

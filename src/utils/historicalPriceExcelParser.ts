@@ -1,7 +1,7 @@
 // historicalPriceExcelParser.ts
 //
 // 解析「历史价确认单」Excel（docs/example/历史价确认单 (1).xlsx）主表
-// `历史价确认单明细` 为 BidRow[]。纯函数：仅依赖 xlsx，不触发网络 / DOM。
+// `历史价确认单明细` 为 BidRow[]。纯函数：不触发网络 / DOM。
 //
 // 2026-07-24 新增：复用 bidExcelParser 的 BidRow / ParseResult 契约，
 // 输出与「应标」解析结果对齐 → applyExcelToAll 不需要改。
@@ -20,9 +20,18 @@
 //   含税价格   ↔ 含税价格
 // - 有「税率」列（13% 之类的百分比），但 BidRow / Part / remarkText 都没有
 //   税率字段，故解析时**直接丢弃**（不进 REQUIRED_HEADERS，不进 BidRow）。
+//
+// 2026-10-21：xlsx 改成 type-only import，运行期面（`utils`）由调用方传入 ——
+// 理由与签名口径见 `xlsxParseUtils.ts` 的 `XlsxUtils`。
 
-import * as XLSX from 'xlsx';
-import { addDays, cleanText, parseDecimalOrNull, parseIntSafe } from './xlsxParseUtils';
+import type * as XLSX from 'xlsx';
+import {
+  addDays,
+  cleanText,
+  parseDecimalOrNull,
+  parseIntSafe,
+  type XlsxUtils,
+} from './xlsxParseUtils';
 import type { BidRow, ParseError, ParseResult } from './bidExcelParser';
 
 const SHEET_NAME = '历史价确认单明细';
@@ -43,6 +52,7 @@ const REQUIRED_HEADERS = [
  *
  * @param workbook 由 `XLSX.read(arrayBuffer)` 解析得到
  * @param today   YYYY-MM-DD 形式的「今天」（建议 Asia/Shanghai 当天）
+ * @param xlsxUtils xlsx 的运行期面（即 `XLSX.utils`），由调用方传入 —— 见 `XlsxUtils` 的口径
  *
  * 错误条件（与 parseBidExcel 一致）：
  * - sheet 名不是 `历史价确认单明细` → 抛 Error
@@ -55,7 +65,11 @@ const REQUIRED_HEADERS = [
  * - 物料编号重复 → rowWarnings 推入
  * - 整行空 → 静默跳过
  */
-export function parseHistoricalPriceExcel(workbook: XLSX.WorkBook, today: string): ParseResult {
+export function parseHistoricalPriceExcel(
+  workbook: XLSX.WorkBook,
+  today: string,
+  xlsxUtils: XlsxUtils,
+): ParseResult {
   const sheet = workbook.Sheets[SHEET_NAME];
   if (!sheet) {
     const available = workbook.SheetNames.join(', ');
@@ -65,7 +79,7 @@ export function parseHistoricalPriceExcel(workbook: XLSX.WorkBook, today: string
   }
 
   // 用 header:1 模式读第一行做列名校验；缺整列才能识别。
-  const rawHeader: unknown[][] = XLSX.utils.sheet_to_json(sheet, {
+  const rawHeader: unknown[][] = xlsxUtils.sheet_to_json(sheet, {
     header: 1,
     raw: false,
     blankrows: false,
@@ -80,7 +94,7 @@ export function parseHistoricalPriceExcel(workbook: XLSX.WorkBook, today: string
     throw new Error(`Excel 缺少必需列：${missing.join('、')}`);
   }
 
-  const rawRows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(sheet, {
+  const rawRows: Record<string, unknown>[] = xlsxUtils.sheet_to_json(sheet, {
     defval: null,
     raw: false,
     blankrows: false,

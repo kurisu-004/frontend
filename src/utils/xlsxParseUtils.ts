@@ -9,6 +9,24 @@
 // 既有调用方（bidExcelParser.ts）已改为 import 此文件；保留原函数名以
 // 保持可读性。
 
+import type * as XLSXNS from 'xlsx';
+
+/**
+ * 2026-10-21：parser 侧真正需要的 xlsx 运行期面 —— 只有 `utils` 的两个函数。
+ *
+ * 背景：xlsx（0.18.5，约 415KB）体积可观，而 Excel 导入只在用户真的选文件时发生。
+ * `usePartBatchPdfFill.readExcel` 早已用 `await import('xlsx')` 把它挡在页面静态
+ * 闭包之外（该处注释与 eslint 豁免都写了这条意图），但三个 parser 模块顶部各有一句
+ * `import * as XLSX from 'xlsx'` —— 那三句把同一个包又**静态**拉了回来，整条意图
+ * 归零（实测：零件一览 / 零件新建的进页面静态闭包里都坐着 415KB 的 xlsx chunk）。
+ *
+ * 处置：parser 只保留 type-only import，`utils` 由调用方（已持有命名空间的那个）
+ * 作参数传进来。本类型用 `Pick<typeof XLSXNS.utils, …>` 而不是 `{…}` 手写签名，
+ * 是为了让 `sheet_to_json` 的泛型与重载**原样透传**（手写签名会把
+ * `sheet_to_json<T>(...)` 退化成返回 `any[]`，等于把类型防线撤了）。
+ */
+export type XlsxUtils = Pick<typeof XLSXNS.utils, 'sheet_to_json' | 'decode_cell'>;
+
 /** `null` / `undefined` / 各种 falsy 都安全 trim；非字符串先转字符串。 */
 export function cleanText(value: unknown): string {
   if (value == null) return '';

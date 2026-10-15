@@ -10,7 +10,8 @@
 //   返回类型 CosUploadSession → CosUploadGrant、items 元素类型 →
 //   CosUploadGrantItem。语义澄清：composable 完全不感知 Redis session。
 
-import COS from 'cos-js-sdk-v5';
+import type COS from 'cos-js-sdk-v5';
+import { loadCosSdk } from '@/utils/cosSdk';
 import { computed, type ComputedRef, type Ref } from 'vue';
 import { computeSha256 } from '@/utils/fileHash';
 import type {
@@ -199,9 +200,13 @@ export interface UseCosUploaderReturn {
  *
  * 与 useCosUpload 一致：`Protocol: 'https:'` 必填；`SdkAppid` / `Region` 字段
  * 省略——region 在每次 uploadFile 时传。
+ *
+ * 2026-10-21：SDK 改成函数体内动态 import，与 `useCosUpload` 的同一处逐字同款
+ * （SDK 约 175KB，不该在用户还没上传任何文件时就进页面静态闭包）。
  */
-function buildCos(credentials: CosCredentials): COS {
-  return new COS({
+async function buildCos(credentials: CosCredentials): Promise<COS> {
+  const CosSdk = await loadCosSdk();
+  return new CosSdk({
     SecretId: credentials.tmp_secret_id,
     SecretKey: credentials.tmp_secret_key,
     SecurityToken: credentials.session_token,
@@ -368,7 +373,7 @@ export function useCosUploader(opts: UseCosUploaderOptions): UseCosUploaderRetur
 
     it.status = 'uploading';
     if (!computeHash) it.error = undefined;
-    const cos = buildCos(creds);
+    const cos = await buildCos(creds);
     try {
       const data = await cos.uploadFile({
         Bucket: bucket,

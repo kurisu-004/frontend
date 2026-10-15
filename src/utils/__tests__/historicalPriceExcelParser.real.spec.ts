@@ -21,7 +21,7 @@ describe('parseHistoricalPriceExcel (real fixture)', () => {
   it('parses 历史价确认单 (1).xlsx', () => {
     const buf = readFileSync(FIXTURE_PATH);
     const wb = XLSX.read(buf, { type: 'buffer' });
-    const result = parseHistoricalPriceExcel(wb, '2026-07-13');
+    const result = parseHistoricalPriceExcel(wb, '2026-07-13', XLSX.utils);
 
     // 真实 fixture：5 条数据行；其他 sheet（Sheet2/Sheet3/dropdownDataSheet...）不算数据
     expect(result.rows).toHaveLength(5);

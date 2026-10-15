@@ -1,12 +1,17 @@
 // purchaseOrderExcelParser.ts
 //
 // 解析采购订单 Excel 的「基本资料」与「采购订单明细」sheet。
-// 纯函数：仅依赖 xlsx/dayjs，不触发网络或 DOM。
+// 纯函数：不触发网络或 DOM。
+//
+// 2026-10-21：xlsx 改成 type-only import + 函数体内动态 import —— 这个 parser 自己
+// 持有 ArrayBuffer（不像另两个 parser 收的是已解析的 workbook），所以没有「由调用方
+// 传入 utils」这条路，只能把 `read` 挪进 async 函数。理由（xlsx 415KB 不该进页面
+// 静态闭包）与签名口径见 `xlsxParseUtils.ts` 的 `XlsxUtils`。
 
 import dayjs from 'dayjs';
-import * as XLSX from 'xlsx';
+import type * as XLSX from 'xlsx';
 
-import { cleanText } from './xlsxParseUtils';
+import { cleanText, type XlsxUtils } from './xlsxParseUtils';
 
 export interface PurchaseOrderExcelItem {
   /** 1-based Excel 真实行号。 */
@@ -57,7 +62,7 @@ const EXPECTED_DETAIL_COLUMNS: Record<string, number> = {
 
 type SheetRows = unknown[][];
 
-function readSheetRows(sheet: XLSX.WorkSheet): SheetRows {
+function readSheetRows(sheet: XLSX.WorkSheet, xlsxUtils: XlsxUtils): SheetRows {
   // sheet['!ref'] 由 Excel 写入：若工作簿存在合并单元格或「中间列被全列空跳过」，
   // 实际单元格可能延伸到声明范围之外（实测：含可出货数量的采购订单明细
   // 真实数据到 AG88，但 !ref 仅为 A1:H88），sheet_to_json 默认按 !ref 切，
@@ -68,14 +73,14 @@ function readSheetRows(sheet: XLSX.WorkSheet): SheetRows {
   let maxRow = -1;
   for (const key of Object.keys(sheet)) {
     if (key.startsWith('!')) continue;
-    const addr = XLSX.utils.decode_cell(key);
+    const addr = xlsxUtils.decode_cell(key);
     if (addr.c > maxCol) maxCol = addr.c;
     if (addr.r > maxRow) maxRow = addr.r;
   }
   if (maxCol >= 0 && maxRow >= 0) {
     range = { s: { c: 0, r: 0 }, e: { c: maxCol, r: maxRow } };
   }
-  return XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+  return xlsxUtils.sheet_to_json<unknown[]>(sheet, {
     header: 1,
     raw: false,
     defval: '',
@@ -198,8 +203,19 @@ function emptyResult(errors: string[] = []): ParsedPurchaseOrder {
  * 解析采购订单 Excel，返回单据编号、有效明细以及错误/警告。
  *
  * @param buf ArrayBuffer（来自 el-upload onChange 的 raw.arrayBuffer()）
+ *
+ * 2026-10-21 起为 **async**：xlsx 的运行期面改为函数体内动态 import（口径见文件头）。
+ * 唯一调用方 `PurchaseOrderImportDialog.vue` 本就在 `await raw.arrayBuffer()` 的同一个
+ * async 处理器里，多一个 await 不改变任何可观察行为。
  */
-export function parsePurchaseOrderExcel(buf: ArrayBuffer): ParsedPurchaseOrder {
+export async function parsePurchaseOrderExcel(buf: ArrayBuffer): Promise<ParsedPurchaseOrder> {
+  // 动态 import 拿 xlsx 必须靠 typeof import() 反推类型。项目 eslint 规则
+  // @typescript-eslint/consistent-type-imports 默认禁此内联写法，但此处刻意保持动态
+  // import 以避免 xlsx（415KB）进页面静态闭包，故加行级豁免 —— 与
+  // `usePartBatchPdfFill.ts` 的同一处豁免同款理由。
+  // eslint-disable-next-line @typescript-eslint/consistent-type-imports -- 动态 import 故意不进页面静态闭包，类型只能内联 typeof import() 反推
+  const XLSX: typeof import('xlsx') = await import('xlsx');
+
   let workbook: XLSX.WorkBook;
   try {
     workbook = XLSX.read(buf, { type: 'array', cellDates: true });
@@ -219,7 +235,7 @@ export function parsePurchaseOrderExcel(buf: ArrayBuffer): ParsedPurchaseOrder {
   if (!baseSheet) {
     result.errors.push(`Excel 缺少 "${BASE_SHEET_NAME}" sheet`);
   } else {
-    const rows = readSheetRows(baseSheet);
+    const rows = readSheetRows(baseSheet, XLSX.utils);
     const headerMap = buildHeaderMap(rows[HEADER_ROW_INDEX] ?? []);
     const docNoColumn = headerMap.get('单据编号');
 
@@ -239,7 +255,7 @@ export function parsePurchaseOrderExcel(buf: ArrayBuffer): ParsedPurchaseOrder {
     return result;
   }
 
-  const rows = readSheetRows(detailSheet);
+  const rows = readSheetRows(detailSheet, XLSX.utils);
   const headerMap = buildHeaderMap(rows[HEADER_ROW_INDEX] ?? []);
   const missingRequired = REQUIRED_DETAIL_HEADERS.filter((header) => !headerMap.has(header));
   if (missingRequired.length > 0) {

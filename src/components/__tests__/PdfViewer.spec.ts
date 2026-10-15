@@ -43,7 +43,9 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@/utils/pdfjs', () => ({
-  pdfjsLib: { getDocument: (opts: unknown) => h.getDocument(opts) },
+  // 2026-10-21：真实模块的运行期面改懒加载（`loadPdfjs()`），桩跟着改成同一个形状。
+  // 类型面（`export type * as pdfjsLib`）编译期擦除，这里不需要也不该提供。
+  loadPdfjs: async () => ({ getDocument: (opts: unknown) => h.getDocument(opts) }),
   PDF_CMAP_OPTIONS: {},
 }));
 

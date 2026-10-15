@@ -181,7 +181,9 @@ import {
   ZoomIn,
   ZoomOut,
 } from '@element-plus/icons-vue';
-import { pdfjsLib, PDF_CMAP_OPTIONS } from '@/utils/pdfjs';
+// 2026-10-21：运行期面改成 `loadPdfjs()`（懒加载 pdfjs-dist，见 @/utils/pdfjs 的口径），
+// 类型面仍写成 `pdfjsLib.XXX`（`export type * as`，编译期擦除）。
+import { loadPdfjs, PDF_CMAP_OPTIONS, type pdfjsLib } from '@/utils/pdfjs';
 
 interface Props {
   url: string;
@@ -320,14 +322,19 @@ async function load() {
   }
   loading.value = true;
   error.value = null;
+  // 先取 pdfjs 运行期面（首次调用会下载约 415KB 的 pdfjs-dist 并配置 workerSrc）。
+  // 放在这里而不是 load() 最开头：loading 已经置真 ⇒ 用户看到的是原有的「加载中…」
+  // 而不是一块空白；而下面的 `disposed || seq !== loadSeq` 闸门本来就排在 await 之后，
+  // 两处 await（取运行期面 + 释放旧 task）共用同一道闸，不必再加一条。
+  const pdfjs = await loadPdfjs();
   // 先释放上一份：切 url 时它对应的 worker 还活着，留着就是一次泄漏。
   await releaseLoadingTask();
-  // ⚠️ 必须在建 task **之前** bail：上面那个 await 期间可能又来了一次 load（url
+  // ⚠️ 必须在建 task **之前** bail：上面那两次 await 期间可能又来了一次 load（url
   // 再变）或组件已卸载，那种情况下本次不该再建 task —— 建出来的那份会被后一次
   // load 覆盖掉 loadingTask，从此没有任何句柄能 destroy 它（孤儿 worker），还白白多下
   // 一次同一份文档。
   if (disposed || seq !== loadSeq) return;
-  const task = pdfjsLib.getDocument({ url: props.url, ...PDF_CMAP_OPTIONS });
+  const task = pdfjs.getDocument({ url: props.url, ...PDF_CMAP_OPTIONS });
   loadingTask = task;
   try {
     const doc = await task.promise;

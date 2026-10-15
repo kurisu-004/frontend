@@ -1,4 +1,4 @@
-import { createApp } from 'vue';
+import { createApp, defineAsyncComponent } from 'vue';
 import { createPinia } from 'pinia';
 // 2026-09-24 新增：注册 TanStack Query 仓内首个 QueryClient。
 // 仓内首例 useMutation 出现在 LoginView.vue（2026-09-24 登录页改造）。
@@ -24,9 +24,19 @@ import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 import App from './App.vue';
 import router from './router';
 // 2026-09-30 新增：vue-echarts 8.3 全局注册（沿 CLAUDE.md 硬约束：图表统一 vue-echarts）。
-// 注册位置选 pinia 之后、mount 之前；具体顺序在 VueQueryPlugin 之后，
-// 避免任何未来潜在 plugin 顺序耦合。
-import { VChart } from '@/plugins/echarts';
+// 2026-10-21 改为**懒加载注册**：静态 import 会把 echarts + zrender + vue-echarts 整块
+// （改前实测 660KB / gzip 226KB，摘掉三个未用组件后 628KB / gzip 215KB）拉进入口
+// chunk —— 它只被 `main.ts` 引用一次，所以无法被拆成共享 chunk，那 660KB 恒占首屏
+// （实测占入口 chunk 的 70~85%）。而全站只有
+// dashboard 一张图 + statistics 三个 tab 用到图表，绝大多数页面（登录 / 报工台 / 队列 /
+// 列表…）根本不画图。改成异步组件后，这块只在**第一个 `<v-chart>` 真正渲染时**下载。
+//
+// 仍然是全局注册：模板里 `<v-chart>` / `<VChart>` 两种写法照旧可用，业务组件照旧不局部
+// import（CLAUDE.md「图表」一节的硬约束没有被削弱）。vue-echarts 8 自身的 CSS 由它在
+// 运行时 `createElement('style')` 注入，样式随 chunk 同批到位 ⇒ 不会 FOUC。
+// 守卫见 `src/plugins/__tests__/echartsContract.spec.ts`（「注册必须是动态形态」那条）。
+// ⚠️ 这里**不能**留 `import { VChart } from '@/plugins/echarts'` 的静态语句 ——
+// 留了等于什么都没改（那 660KB 会照旧进入口 chunk），且不会有任何报错。
 // 2026-09-26：迁移到 Pinia setup store useAuthStore（src/stores/auth.ts），
 // 替代原 composables/useAuthSession 模块级单例。store 内 loadFromStorage 自执行
 // 首次 useAuthStore() 时恢复 localStorage；CustomEvent listener 在 setup 里挂，
@@ -87,7 +97,12 @@ app.use(VueQueryPlugin, { queryClient });
 // 注册名用 PascalCase 'VChart'（vue-echarts 官方推荐 + 满足 alloy 的
 // vue/component-definition-name-casing 规则）；模板里 <v-chart> / <VChart>
 // 两种写法都能命中——Vue 模板对组件名自动归一。
-app.component('VChart', VChart);
+// 2026-10-21：注册体改 defineAsyncComponent（理由见文件头那段注释）：首屏不再带
+// echarts/zrender 那 628KB，第一个 <v-chart> 渲染时才拉。
+app.component(
+  'VChart',
+  defineAsyncComponent(() => import('@/plugins/echarts').then((m) => m.VChart)),
+);
 
 // 2026-08-28 重写：dev-only dummy-auth 注入。
 // 改走 `import.meta.env.DEV && import.meta.env.VITE_DUMMY_AUTH === 'true'`
