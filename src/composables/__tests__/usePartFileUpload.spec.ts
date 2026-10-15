@@ -1,405 +1,123 @@
-// @vitest-environment happy-dom
+// usePartFileUpload 单元测试（2026-10-15 改为直传链路）
 //
-// usePartFileUpload 单元测试（2026-09-17 frontend-cos-sts-python）。
+// 2026-10-15 之前这份 spec 守的是「hash → grantStsTmpKey → COS SDK → confirm」四段，
+// 现在传输实现整体下沉到 `utils/directUpload.ts`（那份实现有自己的 spec）。本文件
+// 因此只守**这个 composable 自己的职责**：
+//   - owner_id / kind 支持 Ref / getter / 字面量三种入参形态；
+//   - owner_id 为空时 fail-fast（不发任何请求）；
+//   - uploading / lastError 两个状态位在成功与失败路径上的取值；
+//   - kind 原样透传给引擎（DRAWING / 3D_MODEL / CAD_2D 三个 tab 各一个实例）。
 //
-// 2026-09-17 STS 端口迁移验证：
-// - upload() 全链路：hash → grantStsTmpKey (python STS) → COS 直传 → confirmFileObject；
-// - request body 走 python StsTmpKeysRequest 形态（purpose / filename /
-//   content_sha256 / content_type），不再含 owner_part_id / kind / file_size；
-// - caller 用 crypto.randomUUID() 生成 client_ref，grantStsTmpKey 单端口 1-key
-//   响应包成 UploadIntentsOut（part-file 专用）后喂 useCosUpload；
-// - COS 上传失败 → status=error，upload() 抛错；
-// - refetchIntents 在凭证过期时按 (purpose, filename, content_sha256, ext)
-//   再调一次 grantStsTmpKey（content_sha256 必传完整 64 hex，不再截前 16）；
-// - ownerPartId / kind 接受 Ref<string> / getter 两种形态；
-// - uploading / lastError 状态在生命周期内同步。
-//
-// 不发起真实 HTTP：mock @/api/files/sts、@/api/files/objects、@/utils/fileHash、
-// cos-js-sdk-v5。fileHash 用 fake 实现（SHA-256 取文件名 hex），避免依赖
-// hash-wasm 在 vitest 的 wasm 加载。
-//
-// 历史迁移说明：
-// - 原测试 mock 了 createUploadIntents（backend-rust bulk 端点），现在改成
-//   grantStsTmpKey（python STS 单端口 1-key）。
-// - 删除「dedup_hit=true 复用 existing_file」用例（python STS 无 dedup 语义）。
+// 引擎整份 mock 掉：`directUpload` 的行为由 `utils/__tests__/directUpload.spec.ts` 守。
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ref } from 'vue';
+import { usePartFileUpload, type PartFileUploadKind } from '../usePartFileUpload';
 
-// ============ mocks ============
-
-const grantStsTmpKeyMock = vi.fn();
-const confirmFileObjectMock = vi.fn();
-const computeSha256Mock = vi.fn();
-
-vi.mock('@/api/files/sts', () => ({
-  grantStsTmpKey: (...args: unknown[]) => grantStsTmpKeyMock(...args),
+const directUploadSpy = vi.fn();
+vi.mock('@/utils/directUpload', () => ({
+  directUpload: (...args: unknown[]) => directUploadSpy(...args),
 }));
 
-vi.mock('@/api/files/objects', () => ({
-  confirmFileObject: (...args: unknown[]) => confirmFileObjectMock(...args),
-}));
-
-vi.mock('@/utils/fileHash', () => ({
-  computeSha256: (...args: unknown[]) => computeSha256Mock(...args),
-}));
-
-const uploadFileSpy = vi.fn();
-vi.mock('cos-js-sdk-v5', () => {
-  class MockCOS {
-    public uploadFile(params: Record<string, unknown>) {
-      return uploadFileSpy(params);
-    }
-  }
-  return { default: MockCOS };
-});
-
-import { usePartFileUpload } from '../usePartFileUpload';
-
-// ============ helpers ============
-
-function makeFile(name: string, content = 'hello'): File {
-  return new File([content], name, { type: 'application/pdf' });
-}
-
-/**
- * python 端 grantStsTmpKey 单端口 1-key 响应（与 backend-python/schema/sts.py
- * StsTmpKeysResponse 严格对齐，含 credentials.start_time）。
- */
-function makeStsResponse(
-  opts: {
-    tmpKey?: string;
-    bucket?: string;
-    region?: string;
-    uploadPrefix?: string;
-    expiredTime?: number;
-  } = {},
-) {
-  return {
-    tmp_key: opts.tmpKey ?? 'tmp/spike/seq_a.pdf',
-    bucket: opts.bucket ?? 'bucket-1250000000',
-    region: opts.region ?? 'ap-shanghai',
-    endpoint: 'cos.ap-shanghai.myqcloud.com',
-    scheme: 'https',
-    credentials: {
-      tmp_secret_id: 'AKID',
-      tmp_secret_key: 'SECRET',
-      session_token: 'TOKEN',
-      start_time: 1_900_000_000,
-      expired_time: opts.expiredTime ?? Math.floor(Date.now() / 1000) + 7200,
-    },
-    expires_in: 1800,
-    upload_prefix: opts.uploadPrefix ?? 'tmp/spike/',
-  };
-}
-
-function makeExistingFile() {
-  return {
-    id: '190000000000777',
-    version: 1,
-    owner_id: '190000000000001',
-    kind: 'DRAWING',
-    file_type: 'PDF',
-    original_filename: 'a.pdf',
-    file_size: '12345',
-    content_type: 'application/pdf',
-    upload_status: 'READY',
-    content_sha256: 'a'.repeat(64),
-    created_at: '2026-09-16T10:00:00Z',
-    paired_file_id: null,
-  };
+function fileOf(name: string): File {
+  return new File([new Uint8Array(4)], name, { type: 'application/pdf' });
 }
 
 beforeEach(() => {
-  grantStsTmpKeyMock.mockReset();
-  confirmFileObjectMock.mockReset();
-  computeSha256Mock.mockReset();
-  uploadFileSpy.mockReset();
-  // 默认 SHA = 64-char a's
-  computeSha256Mock.mockResolvedValue('a'.repeat(64));
-  uploadFileSpy.mockResolvedValue({ ETag: '"abc123"' });
+  directUploadSpy.mockReset();
+  directUploadSpy.mockResolvedValue({ item: { id: 'f-1' }, alreadyExists: false });
 });
 
-afterEach(() => {
-  vi.restoreAllMocks();
+describe('usePartFileUpload 参数归一', () => {
+  it('ownerPartId 支持三种形态（Ref / getter / 字面量），kind 同理', async () => {
+    const cases: Array<{ owner: unknown; kind: unknown }> = [
+      { owner: 'p-lit', kind: 'DRAWING' as PartFileUploadKind },
+      { owner: ref('p-ref'), kind: ref<PartFileUploadKind>('3D_MODEL') },
+      { owner: () => 'p-fn', kind: () => 'CAD_2D' as PartFileUploadKind },
+    ];
+    for (const c of cases) {
+      directUploadSpy.mockClear();
+      const u = usePartFileUpload({
+        ownerPartId: c.owner as never,
+        kind: c.kind as never,
+      });
+      await u.upload(fileOf('a.pdf'));
+      const opts = directUploadSpy.mock.calls[0]![0] as Record<string, unknown>;
+      expect(opts.ownerKind).toBe('PART');
+      expect(typeof opts.ownerId).toBe('string');
+      expect(String(opts.ownerId)).toMatch(/^p-/);
+      expect(opts.kind).toBe(opts.kind);
+    }
+  });
+
+  it('kind 原样透传：三个 tab 分别是 DRAWING / 3D_MODEL / CAD_2D', async () => {
+    for (const kind of ['DRAWING', '3D_MODEL', 'CAD_2D'] as PartFileUploadKind[]) {
+      directUploadSpy.mockClear();
+      const u = usePartFileUpload({ ownerPartId: 'p1', kind });
+      await u.upload(fileOf('a.pdf'));
+      expect((directUploadSpy.mock.calls[0]![0] as { kind: string }).kind).toBe(kind);
+    }
+  });
+
+  it('owner_id 为空 ⇒ fail-fast，不发任何请求', async () => {
+    const u = usePartFileUpload({ ownerPartId: '', kind: 'DRAWING' });
+    await expect(u.upload(fileOf('a.pdf'))).rejects.toThrow(/ownerPartId/);
+    expect(directUploadSpy).not.toHaveBeenCalled();
+    expect(u.lastError.value).toContain('ownerPartId');
+  });
 });
 
-// ============ tests ============
-
-describe('usePartFileUpload.upload', () => {
-  it('happy path：hash → grantStsTmpKey → COS → confirmFileObject 全链路', async () => {
-    grantStsTmpKeyMock.mockResolvedValueOnce(makeStsResponse());
-    const confirmed = {
-      id: '190000000000999',
-      version: 1,
-      owner_id: '190000000000001',
-      kind: 'DRAWING',
-      file_type: 'PDF',
-      original_filename: 'a.pdf',
-      file_size: '5',
-      content_type: 'application/pdf',
-      upload_status: 'READY',
-      content_sha256: 'a'.repeat(64),
-      created_at: '2026-09-16T10:00:00Z',
-      paired_file_id: null,
-    };
-    confirmFileObjectMock.mockResolvedValueOnce(confirmed);
-
-    const { upload } = usePartFileUpload({
-      ownerPartId: ref<string>('190000000000001'),
-      kind: 'DRAWING',
+describe('usePartFileUpload 状态位', () => {
+  it('uploading：调用期间为 true，返回后为 false', async () => {
+    let seen = false;
+    directUploadSpy.mockImplementationOnce(async () => {
+      seen = true;
+      return { item: { id: 'f-1' }, alreadyExists: false };
     });
-    const result = await upload(makeFile('a.pdf'));
-
-    // hash 用 raw File
-    expect(computeSha256Mock).toHaveBeenCalledTimes(1);
-    expect(computeSha256Mock.mock.calls[0]![0]).toBeInstanceOf(File);
-
-    // grantStsTmpKey 请求 body：python StsTmpKeysRequest 形态
-    expect(grantStsTmpKeyMock).toHaveBeenCalledTimes(1);
-    const [reqArg] = grantStsTmpKeyMock.mock.calls[0]!;
-    expect(reqArg).toEqual({
-      purpose: 'drawing', // DRAWING → 'drawing'
-      filename: 'a.pdf',
-      content_type: 'application/pdf',
-      // 2026-09-29：必传完整 64 hex（不再 .slice(0, 16)）
-      content_sha256: 'a'.repeat(64),
-      // 2026-09-29：必传 ext 字段（utils/fileExt.parseFileExt 解析）
-      ext: 'pdf',
-    });
-    // body 不含 owner_part_id / kind / file_size（这些是 backend-rust upload-intents 字段）
-    expect((reqArg as Record<string, unknown>).owner_part_id).toBeUndefined();
-    expect((reqArg as Record<string, unknown>).kind).toBeUndefined();
-    expect((reqArg as Record<string, unknown>).file_size).toBeUndefined();
-
-    // COS 直传：tmp_key / bucket / region 来自 python STS 响应
-    expect(uploadFileSpy).toHaveBeenCalledTimes(1);
-    const cosParams = uploadFileSpy.mock.calls[0]![0] as Record<string, unknown>;
-    expect(cosParams.Key).toBe('tmp/spike/seq_a.pdf');
-    expect(cosParams.Bucket).toBe('bucket-1250000000');
-    expect(cosParams.Region).toBe('ap-shanghai');
-
-    // confirmFileObject：tmp_key 来自 STS 响应（不含 owner 信息，后端按 path 派生
-    // CAS key）；owner 在 body 里（owner_kind 恒 PART，本 composable 只处理零件）
-    expect(confirmFileObjectMock).toHaveBeenCalledTimes(1);
-    const [confirmBody] = confirmFileObjectMock.mock.calls[0]!;
-    expect(confirmBody).toEqual({
-      owner_kind: 'PART',
-      owner_id: '190000000000001',
-      kind: 'DRAWING',
-      tmp_key: 'tmp/spike/seq_a.pdf',
-      content_sha256: 'a'.repeat(64),
-      original_filename: 'a.pdf',
-      file_size: '5',
-      content_type: 'application/pdf',
-      ext: 'pdf',
-    });
-
-    // 返回确认后的 PartFileItem
-    expect(result.id).toBe('190000000000999');
-  });
-
-  it('PartFileKind → StsPurpose 映射（3D_MODEL / CAD_2D 全覆盖）', async () => {
-    grantStsTmpKeyMock.mockResolvedValueOnce(makeStsResponse());
-    confirmFileObjectMock.mockResolvedValueOnce(makeExistingFile());
-
-    const { upload } = usePartFileUpload({
-      ownerPartId: ref<string>('190000000000001'),
-      kind: 'CAD_2D',
-    });
-    await upload(makeFile('a.dwg'));
-
-    const [reqArg] = grantStsTmpKeyMock.mock.calls[0]!;
-    expect((reqArg as { purpose: string }).purpose).toBe('cad_2d');
-    const [confirmBody] = confirmFileObjectMock.mock.calls[0]!;
-    expect((confirmBody as { kind: string }).kind).toBe('CAD_2D');
-  });
-
-  it('ownerPartId 不传 grantStsTmpKey（python 端端口本身就不感知 owner，CAS key 由 confirm 按 path 派生）', async () => {
-    grantStsTmpKeyMock.mockResolvedValueOnce(makeStsResponse());
-    confirmFileObjectMock.mockResolvedValueOnce(makeExistingFile());
-
-    const { upload } = usePartFileUpload({
-      ownerPartId: ref<string>('190000000000001'),
-      kind: 'DRAWING',
-    });
-    await upload(makeFile('a.pdf'));
-
-    const [reqArg] = grantStsTmpKeyMock.mock.calls[0]!;
-    // ownerPartId 永远不进 grantStsTmpKey body（与 backend-rust upload-intents 不同）
-    expect((reqArg as Record<string, unknown>).owner_part_id).toBeUndefined();
-    // confirmFileObject 的 owner_id 才用 ownerPartId
-    const [confirmBody] = confirmFileObjectMock.mock.calls[0]!;
-    expect((confirmBody as { owner_id: string }).owner_id).toBe('190000000000001');
-  });
-
-  it('kind = 3D_MODEL → purpose = 3d_model（与 python Literal 对齐）', async () => {
-    grantStsTmpKeyMock.mockResolvedValueOnce(makeStsResponse());
-    confirmFileObjectMock.mockResolvedValueOnce(makeExistingFile());
-
-    const { upload } = usePartFileUpload({
-      ownerPartId: ref<string>('190000000000001'),
-      kind: '3D_MODEL',
-    });
-    await upload(makeFile('b.stp'));
-
-    const [reqArg] = grantStsTmpKeyMock.mock.calls[0]!;
-    expect((reqArg as { purpose: string }).purpose).toBe('3d_model');
-  });
-
-  it('content_sha256 必传完整 64 hex（2026-09-29 升级，不再 .slice(0, 16)）', async () => {
-    grantStsTmpKeyMock.mockResolvedValueOnce(makeStsResponse());
-    confirmFileObjectMock.mockResolvedValueOnce(makeExistingFile());
-
-    // SHA = 64 个不同字符（'0123456789abcdef' 循环 4 次），验证完整 64 位直传
-    const sha64 = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
-    computeSha256Mock.mockResolvedValueOnce(sha64);
-
-    const { upload } = usePartFileUpload({
-      ownerPartId: ref<string>('190000000000001'),
-      kind: 'DRAWING',
-    });
-    await upload(makeFile('a.pdf'));
-
-    const [reqArg] = grantStsTmpKeyMock.mock.calls[0]!;
-    expect((reqArg as { content_sha256: string }).content_sha256).toBe(sha64);
-    expect(((reqArg as { content_sha256: string }).content_sha256 ?? '').length).toBe(64);
-    // ext 必填：a.pdf → 'pdf'
-    expect((reqArg as { ext: string }).ext).toBe('pdf');
-  });
-
-  it('ext 由 utils/fileExt.parseFileExt 解析：文件名大写 / 多 dot 仍取最后一段', async () => {
-    grantStsTmpKeyMock.mockResolvedValueOnce(makeStsResponse());
-    confirmFileObjectMock.mockResolvedValueOnce(makeExistingFile());
-
-    const { upload } = usePartFileUpload({
-      ownerPartId: ref<string>('190000000000001'),
-      kind: 'DRAWING',
-    });
-    // 大写扩展名应归一化为小写
-    await upload(makeFile('A.PDF'));
-
-    const [reqArg] = grantStsTmpKeyMock.mock.calls[0]!;
-    expect((reqArg as { ext: string }).ext).toBe('pdf');
-  });
-
-  it('ext 解析失败（无扩展名） → upload 抛错，grantStsTmpKey 不被调用', async () => {
-    // 'noext' 没有 '.'，parseFileExt 抛 Error('invalid ext: noext')
-    const { upload } = usePartFileUpload({
-      ownerPartId: ref<string>('190000000000001'),
-      kind: 'DRAWING',
-    });
-    await expect(upload(makeFile('noext'))).rejects.toThrow(/invalid ext/);
-    expect(grantStsTmpKeyMock).not.toHaveBeenCalled();
-  });
-
-  it('COS 上传失败 → upload 抛错，lastError / uploading 状态正确', async () => {
-    grantStsTmpKeyMock.mockResolvedValueOnce(makeStsResponse());
-    uploadFileSpy.mockRejectedValueOnce(new Error('COS network 500'));
-
-    const { upload, uploading, lastError } = usePartFileUpload({
-      ownerPartId: ref<string>('190000000000001'),
-      kind: 'DRAWING',
-    });
-
-    await expect(upload(makeFile('a.pdf'))).rejects.toThrow('COS network 500');
-    expect(lastError.value).toBe('COS network 500');
-    expect(uploading.value).toBe(false);
-    expect(confirmFileObjectMock).not.toHaveBeenCalled();
-  });
-
-  it('grantStsTmpKey 抛错 → upload 抛错，confirmFileObject 不被调用', async () => {
-    grantStsTmpKeyMock.mockRejectedValueOnce(new Error('STS service 502'));
-
-    const { upload, lastError } = usePartFileUpload({
-      ownerPartId: ref<string>('190000000000001'),
-      kind: 'DRAWING',
-    });
-
-    await expect(upload(makeFile('a.pdf'))).rejects.toThrow('STS service 502');
-    expect(lastError.value).toBe('STS service 502');
-    expect(uploadFileSpy).not.toHaveBeenCalled();
-    expect(confirmFileObjectMock).not.toHaveBeenCalled();
-  });
-
-  it('ownerPartId 为空时抛错（场景：路由未带 id）', async () => {
-    const { upload } = usePartFileUpload({
-      ownerPartId: ref<string>(''),
-      kind: 'DRAWING',
-    });
-    await expect(upload(makeFile('a.pdf'))).rejects.toThrow(/ownerPartId/);
-    expect(grantStsTmpKeyMock).not.toHaveBeenCalled();
-  });
-
-  it('ownerPartId 支持 getter 形态（响应非 ref 的派生 ID）', async () => {
-    grantStsTmpKeyMock.mockResolvedValueOnce(makeStsResponse());
-    confirmFileObjectMock.mockResolvedValueOnce(makeExistingFile());
-
-    let captured = 'INIT';
-    const { upload } = usePartFileUpload({
-      ownerPartId: () => {
-        captured = 'CALLED';
-        return '190000000000002';
-      },
-      kind: '3D_MODEL',
-    });
-    const f = makeFile('b.stp', 'step-content');
-    await upload(f);
-
-    expect(captured).toBe('CALLED');
-    const [confirmBody] = confirmFileObjectMock.mock.calls[0]!;
-    expect(confirmBody).toMatchObject({ owner_kind: 'PART', owner_id: '190000000000002' });
-    expect(confirmBody).toMatchObject({ kind: '3D_MODEL' });
-  });
-
-  it('file_size 按 CLAUDE.md §3 走 string 序列化（v2 i64 雪花序列化器对齐）', async () => {
-    grantStsTmpKeyMock.mockResolvedValueOnce(makeStsResponse());
-    confirmFileObjectMock.mockResolvedValueOnce(makeExistingFile());
-
-    const { upload } = usePartFileUpload({
-      ownerPartId: ref<string>('190000000000001'),
-      kind: 'DRAWING',
-    });
-    // makeFile 默认 'hello' (5 bytes)
-    await upload(makeFile('a.pdf', 'hello'));
-
-    const [confirmBody] = confirmFileObjectMock.mock.calls[0]!;
-    expect((confirmBody as { file_size: unknown }).file_size).toBe('5');
-    expect(typeof (confirmBody as { file_size: unknown }).file_size).toBe('string');
-  });
-
-  it('uploading 状态在 upload 期间为 true，完成后 false', async () => {
-    grantStsTmpKeyMock.mockResolvedValueOnce(makeStsResponse());
-    confirmFileObjectMock.mockResolvedValueOnce(makeExistingFile());
-
-    const { upload, uploading } = usePartFileUpload({
-      ownerPartId: ref<string>('190000000000001'),
-      kind: 'DRAWING',
-    });
-
-    expect(uploading.value).toBe(false);
-    const p = upload(makeFile('a.pdf'));
-    expect(uploading.value).toBe(true);
+    const u = usePartFileUpload({ ownerPartId: 'p1', kind: 'DRAWING' });
+    const p = u.upload(fileOf('a.pdf'));
+    seen = u.uploading.value;
     await p;
-    expect(uploading.value).toBe(false);
+    expect(seen).toBe(true);
+    expect(u.uploading.value).toBe(false);
   });
 
-  it('成功后 lastError 清空', async () => {
-    grantStsTmpKeyMock.mockRejectedValueOnce(new Error('first attempt'));
-    grantStsTmpKeyMock.mockResolvedValueOnce(makeStsResponse());
-    confirmFileObjectMock.mockResolvedValueOnce(makeExistingFile());
+  it('成功：返回后端 PartFileItem，lastError 为 null', async () => {
+    const u = usePartFileUpload({ ownerPartId: 'p1', kind: 'DRAWING' });
+    await expect(u.upload(fileOf('a.pdf'))).resolves.toMatchObject({ id: 'f-1' });
+    expect(u.lastError.value).toBeNull();
+  });
 
-    const { upload, lastError } = usePartFileUpload({
-      ownerPartId: ref<string>('190000000000001'),
-      kind: 'DRAWING',
+  it('秒传命中：照样把 existing_file 当成功返回（调用方不需要分支）', async () => {
+    directUploadSpy.mockResolvedValueOnce({
+      item: { id: 'f-old' },
+      alreadyExists: true,
     });
+    const u = usePartFileUpload({ ownerPartId: 'p1', kind: 'DRAWING' });
+    await expect(u.upload(fileOf('a.pdf'))).resolves.toMatchObject({ id: 'f-old' });
+    expect(u.lastError.value).toBeNull();
+  });
 
-    // 第一次失败
-    await expect(upload(makeFile('a.pdf'))).rejects.toThrow('first attempt');
-    expect(lastError.value).toBe('first attempt');
+  it('失败：抛错 + lastError 记下原因 + uploading 归位', async () => {
+    directUploadSpy.mockRejectedValueOnce(new Error('对象存储拒绝写入（403）'));
+    const u = usePartFileUpload({ ownerPartId: 'p1', kind: 'DRAWING' });
+    await expect(u.upload(fileOf('a.pdf'))).rejects.toThrow(/403/);
+    expect(u.lastError.value).toContain('403');
+    expect(u.uploading.value).toBe(false);
+  });
 
-    // 第二次成功：lastError 应被 reset 为 null
-    await upload(makeFile('b.pdf'));
-    expect(lastError.value).toBeNull();
+  it('非 Error 的抛出（字符串）也归一成 Error 上抛，lastError 不留 undefined', async () => {
+    directUploadSpy.mockRejectedValueOnce('裸字符串');
+    const u = usePartFileUpload({ ownerPartId: 'p1', kind: 'DRAWING' });
+    await expect(u.upload(fileOf('a.pdf'))).rejects.toBeInstanceOf(Error);
+    expect(u.lastError.value).toBe('裸字符串');
+  });
+
+  it('下一次成功调用会把上一次的 lastError 清掉', async () => {
+    directUploadSpy.mockRejectedValueOnce(new Error('第一次失败'));
+    const u = usePartFileUpload({ ownerPartId: 'p1', kind: 'DRAWING' });
+    await expect(u.upload(fileOf('a.pdf'))).rejects.toThrow();
+    await u.upload(fileOf('a.pdf'));
+    expect(u.lastError.value).toBeNull();
   });
 });
