@@ -101,7 +101,7 @@ const shiftSegmentSchema = z
  *   格式契约归前端所有），所以本域写出去的颜色恒是 `#rrggbb` 或空。
  *
  * ⚠️ **空串是合法出参**：后端 `Option<String>` 收下 `''` 就落 `''`（清空语义见
- *   `docs/api/hr.md` §5.4），所以库里存的就是空串而不是 NULL —— 把它按 `#rrggbb` 拒掉会让
+ *   `docs/api/hr.md` §5.5），所以库里存的就是空串而不是 NULL —— 把它按 `#rrggbb` 拒掉会让
  *   「清空过颜色的班次」把整个班次列表打成坏响应。「空 ⇒ 走默认色」的归一收在 store 的
  *   `shifts`（`color: '' | null` 一律给 `null`），视图层因此只需要处理 `null`。
  */

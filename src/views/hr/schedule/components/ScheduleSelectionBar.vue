@@ -111,6 +111,17 @@ watch(
   },
 );
 
+/** ⚠️ **换档位同样要复位**：上一档若是不要名称的档，store 的 `setDraftDayType` 会把残留的
+ *  `draftName` 清空 —— 于是「按过一次应用 → 换成 `CUSTOM_LEAVE`」会在用户**还没按应用**时就
+ *  让 `nameMissing` 成立，输入框凭空先红。与换选区复位同源：这条红只在「当前这组草稿已被用户
+ *  按过一次应用」时才有来由。 */
+watch(
+  () => props.draftDayType,
+  () => {
+    appliedOnce.value = false;
+  },
+);
+
 /** 补上名称后立刻撤红：这一态的判据是「按过应用且仍为空」，不再空就不该继续红。 */
 watch(
   () => props.draftName,

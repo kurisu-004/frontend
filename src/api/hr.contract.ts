@@ -87,7 +87,12 @@ export interface ShiftCalendarDayOut {
 }
 
 /** 批量写日历端点的出参（端点 2 / 3 共用 `CalendarDaysWriteOut`、端点 9 / 10 共用
- *  `ShiftDaysWriteOut`，两者形状相同：都是 `{ affected }`）。 */
+ *  `ShiftDaysWriteOut`，两者形状相同：都是 `{ affected }`）。
+ *
+ *  ⚠️ **本类型当前没有生产消费方**：四条写端点一律返 `Promise<void>`、`resp.data` 被 api 层直接
+ *  丢弃（写成功与否看 HTTP 状态与业务码，不需要读回显）。**唯一的消费方是那条类型断言**
+ *  （`api/__tests__/hrContractShape.spec.ts::W1`）—— 它的作用是让「后端给写回显加字段 / 改键名」
+ *  在 `vue-tsc` 这一层就红。刻意保留一份形状契约，而不是零声明。 */
 export interface HrCalendarWriteOut {
   /** 实际改动行数（upsert = `INSERT … ON CONFLICT DO UPDATE` 命中行数；delete = 被软删的
    *  显式行数）。

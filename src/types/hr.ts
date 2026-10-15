@@ -114,7 +114,7 @@ export interface CreateShiftPayload {
  *   `req.x.clone().or_else(|| row.x.clone())` 回落旧值）。所以本类型里 `color` / `remark`
  *   是**非 null 的 `string`**：
  *   - 不发这个键 = 「这次不改」；
- *   - 发 `''` = 「把这一列清空」（后端落空串，语义口径见 `docs/api/hr.md` §5.4）。
+ *   - 发 `''` = 「把这一列清空」（后端落空串，语义口径见 `docs/api/hr.md` §5.5）。
  *   发 `color: null` 与不发**完全等价**且都是「不改」—— 想清空必须传空串。 */
 export interface UpdateShiftPayload {
   version: number;

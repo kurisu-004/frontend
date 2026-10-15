@@ -5,7 +5,7 @@
 // （`composables/useScheduleStore.ts::handleWriteError`）。形态照
 // `views/wecom/webhooks/weComWebhookErrorText.ts`：
 //
-//   - 本文件是**域内口吻**：21901–21908 八个业务码各配一句「用户该做什么」的话；
+//   - 本文件是**域内口吻**：21901–21909 九个业务码各配一句「用户该做什么」的话；
 //   - 机制（识别 ZodError + console.error + fallback）是跨域的，收在
 //     `src/utils/contractDriftError.ts`。
 //
@@ -39,6 +39,12 @@ export const HR_SCHEDULE_ERROR_CODES = {
   CALENDAR_LEAVE_NAME_REQUIRED: 21907,
   /** 班次总跨度 > 24:00。 */
   SHIFT_SPAN_EXCEEDS_DAY: 21908,
+  /** 必填项 trim 后为空白，或某字段超 `varchar` 列宽（2026-10-19 后端新增；守卫细节与列宽表见
+   *  `docs/api/hr.md` §5.7）。⚠️ **当前 UI 走不到**：班次表单按 `.trim().min(1)` 与三条长度
+   *  上限守着，日历名称输入框的 `maxlength`（30）又远小于后端列宽（50）⇒ 空白与超长都在提交
+   *  之前就被卡住。它今天是「这一码真落下来时给用户一句人话」的兜底，不是死条目；跨仓集合对账
+   *  （`hrContractShape.spec.ts::H8`）保证后端再加码时前端不会漏。 */
+  FIELD_INVALID: 21909,
   /** OCC 版本冲突（**通用段非本域专有**）。 */
   VERSION_CONFLICT: 40901,
 } as const;
@@ -55,6 +61,8 @@ export const HR_SCHEDULE_ERROR_TEXT: Partial<Record<number, string>> = {
   [HR_SCHEDULE_ERROR_CODES.SHIFT_INACTIVE]: '班次已停用，请先启用或换一个班次',
   [HR_SCHEDULE_ERROR_CODES.CALENDAR_LEAVE_NAME_REQUIRED]: '自定义休息日必须填写名称',
   [HR_SCHEDULE_ERROR_CODES.SHIFT_SPAN_EXCEEDS_DAY]: '班次跨度超过 24 小时，与相邻工作日会冲突',
+  [HR_SCHEDULE_ERROR_CODES.FIELD_INVALID]:
+    '有必填项留空或内容超长（只打空格按留空算）：请检查编码、名称、颜色与备注的长度',
   [HR_SCHEDULE_ERROR_CODES.VERSION_CONFLICT]: '配置已被他人修改，请刷新后重试',
 };
 

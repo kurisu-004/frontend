@@ -410,7 +410,7 @@ describe('useScheduleStore — 班次 CRUD（OCC + 不动 vs 显式清空）', (
     const [, body] = updateHrShiftMock.mock.calls[0]!;
     expect('color' in body).toBe(true);
     // ⚠️ `''` 才是「清空」：`null` 与键缺失在 serde 里都解成 `None`、一律回落旧值
-    // （`docs/api/hr.md` §5.4），发 `null` 会让用户「清空颜色」静默失败而后端仍返 200。
+    // （`docs/api/hr.md` §5.5），发 `null` 会让用户「清空颜色」静默失败而后端仍返 200。
     expect(body.color).toBe('');
   });
 

@@ -135,7 +135,7 @@ export async function createHrShift(payload: CreateShiftPayload): Promise<ShiftO
  *   纯文本，拿不到业务码）。可选键只有两种效果：缺省 = 「这次不改」，**要清空可空列就传空串
  *   `''`**（`color` / `remark`）。⚠️ 后端 `Option<String>` + `#[serde(default)]` 把 `null` 与
  *   键缺失都解成 `None` 并回落旧值，**发 `null` 等于「不改」**，不会清空（口径见
- *   `docs/api/hr.md` §5.4）。
+ *   `docs/api/hr.md` §5.5）。
  *
  * 失败抛 `ApiError`：40101 未登录 / 403 无 `hr.schedule.manage` / **21901 班次不存在或已软删** /
  * **21902 编码重复** / **21903 时段非法** / **21906 班次已停用** / **21908 总跨度 > 24:00** /

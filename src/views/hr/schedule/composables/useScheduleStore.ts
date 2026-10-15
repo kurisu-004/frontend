@@ -24,7 +24,7 @@
 // ⚠️ **updateHrShift 的可选键只有两种效果：「不改」与「写成这个值」**：`color` / `remark` 逐列
 //   与原行值比对（归一后比，`null` 与 `''` 都算「空」），**没动就不发这个键**；动了才发，且
 //   **清空发空串而不是 `null`** —— 后端 `Option<String>` + `#[serde(default)]` 把 `null` 与键
-//   缺失都解成 `None` 并回落旧值（口径见 `docs/api/hr.md` §5.4）。
+//   缺失都解成 `None` 并回落旧值（口径见 `docs/api/hr.md` §5.5）。
 
 import { computed, reactive, ref } from 'vue';
 import { defineStore } from 'pinia';
@@ -147,7 +147,7 @@ export const useScheduleStore = defineStore('hr-schedule', () => {
   /** 班次栏数据。**恒为数组**（拿不到时给 `[]`，页面据此渲染空态）。
    *
    *  ⚠️ 这里顺带把 `color` 归一：清空过的颜色在库里是**空串**（后端 `Option<String>` 收 `''`
-   *  就落 `''`，口径见 `docs/api/hr.md` §5.4），而下游 `ScheduleDayCell` / `ShiftSidebar` /
+   *  就落 `''`，口径见 `docs/api/hr.md` §5.5），而下游 `ScheduleDayCell` / `ShiftSidebar` /
    *  `ShiftTimeAxis` 都用 `color ?? 默认色`（`??` 拦不住空串）⇒ 不在这里归一就会渲染成
    *  「无背景色」而不是「默认色」。出参 schema 相应地放行空串、只把非空串按 `#rrggbb` 守。 */
   const shifts = computed<HrShiftData[]>(() =>
@@ -438,7 +438,7 @@ export const useScheduleStore = defineStore('hr-schedule', () => {
    *  ⚠️ **改档的可选键语义**：`color` / `remark` 逐列与原行比对（都经 `blankIfEmpty` 归一）——
    *  值没变就**不发这个键**（缺省 = 不改）；变了就发 `String(v ?? '')`，**清空发空串**。
    *  ⚠️ 绝不能发 `null`：后端 `Option<String>` 的 `None` 与键缺失不可区分，一律回落旧值，
-   *  于是「清空颜色」会静默失败而后端仍返 200。口径见 `docs/api/hr.md` §5.4。 */
+   *  于是「清空颜色」会静默失败而后端仍返 200。口径见 `docs/api/hr.md` §5.5。 */
   async function submitShift(): Promise<boolean> {
     if (!validateShiftForm()) return false;
     const base = {

@@ -146,4 +146,17 @@ describe('ScheduleSelectionBar — 应用的两个失败分支都有反馈', () 
     await applyButton(w).trigger('click');
     expect(w.emitted('apply')).toEqual([['CUSTOM_LEAVE', '厂庆']]);
   });
+
+  it('B9：换档位不继承上一组的红态（选上 `CUSTOM_LEAVE` 后**未经应用**不红，按过应用才红）', async () => {
+    // 复现路径：还没选档时按过一次应用（`appliedOnce` 置位）→ 换成 `CUSTOM_LEAVE`。store 的
+    // `setDraftDayType` 在上一档不要名称时已把 `draftName` 清空，所以缺名立刻成立 —— 不复位
+    // 的话输入框会在用户动手之前先红，与本组件「一上来就红是一片没有来由的红」相抵。
+    const w = mountBar();
+    await applyButton(w).trigger('click');
+    await w.setProps({ draftDayType: 'CUSTOM_LEAVE' });
+    expect(w.find('.mock-name').classes()).not.toContain('is-error');
+    // 反向：本次草稿真被按过一次应用之后，红态照常亮（不是把红态整个关掉）。
+    await applyButton(w).trigger('click');
+    expect(w.find('.mock-name').classes()).toContain('is-error');
+  });
 });
