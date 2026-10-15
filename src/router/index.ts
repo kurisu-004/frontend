@@ -445,6 +445,42 @@ const routes: RouteRecordRaw[] = [
           menuCode: 'process_work_type',
         },
       },
+      {
+        // 2026-10-19 新增：人事管理 → 排班日历（`/hr/schedule`）。考勤排班的**配置页**：
+        // 全局日历表（工作日 / 法定节假日 / 正常周末 / 调休上班 / 调休放假 / 自定义休息日）
+        // + 班次表（班次含多个可跨天时段，每个班次有自己的工作日历）。**本期不做班次与
+        // 实际工人的绑定**，是纯配置页。
+        //
+        // ⚠️ `name: 'HrScheduleCalendar'` 必须与视图文件名 `HrScheduleCalendar.vue`
+        // **逐字一致**：MainLayout 的 `<keep-alive :include="tags.cachedViewNames">` 按名字
+        // 匹配（tagsView store 只在 `typeof name === 'string'` 时 push），对不上 ⇒ 本页
+        // **根本没被缓存**：切走再切回时组件销毁重建，已翻到的月份与未提交的编辑全部消失，
+        // 且现场没有任何报错。
+        //
+        // ⚠️ `menuCode` 必须与后端 `seeds/menu.sql` 里 `hr_schedule_calendar` 的 `code`
+        // **逐字一致**：不一致时路由守卫第 3 条（menuCode 不在菜单树 → 踢回菜单树里第一个有
+        // path 的节点）会把用户踢出本页，症状是「点菜单闪一下又回到别的页」，**不是编译错误**。
+        // dummy 模式那一侧由 `composables/__fixtures__/adminMenus.ts` 的 `hr_group` /
+        // `hr_schedule_calendar` 两个节点对齐（`__fixtures__/__tests__/adminMenus.spec.ts`
+        // 把 path / icon / sort_order 逐字钉死），两边必须同时改。
+        //
+        // ⚠️ 一级分组「人事管理」（code `hr_group`、path NULL）**没有前端路由** —— 它由后端
+        // 菜单树下发，渲染成 `el-sub-menu`（见 `MenuTreeItem.vue` 的分支判定：「有 path 且无
+        // children」才渲染成可点的 `el-menu-item`）。照 `order_group` / `auth_group` /
+        // `scheduled_task` 等既有分组节点的既有做法。
+        //
+        // ⚠️ `path` 是浏览器书签 URL / 后端菜单表 `t_menu.path` 的值，与后端 API URL
+        // （`/api/v2/hr/*`）是两层，**不要求一致**（沿 `shelves` / `iam/roles` / `mail` /
+        // `wecom` 那几条同款做法）。
+        path: 'hr/schedule',
+        name: 'HrScheduleCalendar',
+        component: () => import('@/views/hr/schedule/HrScheduleCalendar.vue'),
+        meta: {
+          title: '排班日历',
+          icon: 'Calendar',
+          menuCode: 'hr_schedule_calendar',
+        },
+      },
     ],
   },
   // 工位扫码台
