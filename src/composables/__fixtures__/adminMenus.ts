@@ -1,4 +1,14 @@
 // src/composables/__fixtures__/adminMenus.ts
+// 2026-10-19 同步 backend-rust seeds/menu.sql（人事排班日历）：
+//   - **新增**一级分组 `hr_group`「人事管理」（path NULL → 渲染成 el-sub-menu，不需前端
+//     路由）、sort_order **48**、icon `Avatar`、id `9000000000000015`；
+//   - 其下子菜单 `hr_schedule_calendar`「排班日历」，path `/hr/schedule`（与 router 的
+//     `path: 'hr/schedule'` 逐字一致）、sort_order **10**、icon `Calendar`、id
+//     `9000000000000910`；
+//   - ⚠️ **数组物理位置插在 scheduled_task(45) 与 settings_root(50) 之间**（渲染链路是
+//     直接 `v-for` 数组、**没有排序**，物理顺序 = 渲染顺序）。
+//   - ⚠️ 本节点的 `path` 是前端路由 / 浏览器书签 URL，与后端 API URL（`/api/v2/hr/*`）是
+//     两层、不要求一致（与 `shelves` / `iam/roles` / `mail` / `wecom` 同款做法）。
 // 2026-10-16 review 第 1 轮 MAJOR-1 同步 backend-rust seeds/menu.sql（送货单打印模板）：
 //   - **复活** `template_management` 一级分组（2026-09-24 随 x-data-spreadsheet 弃用整段
 //     从本 fixture 删除，但后端 t_menu 里那两行从未被软删、rbac.sql 也一直给 MANAGER 授
@@ -588,7 +598,52 @@ export const ADMIN_MENUS: MenuNode[] = [
       },
     ],
   },
-  // 12. settings_root — 设置（分组，3 children）
+  // 12. hr_group — 人事管理（分组，1 children）
+  // 2026-10-19 同步 backend-rust seeds/menu.sql（人事排班日历）：一级分组 path=null
+  // （渲染成 el-sub-menu，**不需要**前端路由，照 order_group / auth_group / scheduled_task
+  // 等既有分组节点的既有做法）；子菜单 path `/hr/schedule` 与 router 的
+  // `path: 'hr/schedule'` 逐字一致。
+  //
+  // ⚠️ **sort_order=48 的插入位是硬约束**：数组物理顺序必须与 sort_order 升序一致
+  // （MenuTreeItem / MainLayout 都是直接 v-for 数组、渲染链路上没有排序），所以本块
+  // 插在 scheduled_task(45) 与 settings_root(50) 之间 ——
+  // `__tests__/adminMenus.spec.ts` 的「menu tree is in ascending sort_order」用例会守住
+  // 这个位置，本块下方那组定位断言再钉一遍。
+  //
+  // ⚠️ **id / code / path / sort_order / icon 必须与后端 seeds/menu.sql 逐字一致**：菜单由
+  // 后端 `t_menu` 下发（后端 seed 是真源），本文件只是 dev dummy 模式的 fixture，两边分叉
+  // 的直接后果是「dummy 下点得进、真库下点不进」（或反之）——真库那侧的症状是路由守卫第 3 条
+  // 把他踢回首一个有 path 的节点，现象是「点菜单闪一下又回到别的页」，与真实故障无法区分。
+  //
+  // ⚠️ **id 写死字面量、不走 `id(n)` 生成器**：与 `scheduled_task` / `template_management`
+  // 那几个节点同款做法 —— id 逐字对齐后端 seed 才能对账。
+  {
+    id: '9000000000000015',
+    version: 0,
+    parent_id: null,
+    code: 'hr_group',
+    title: '人事管理',
+    path: null,
+    icon: 'Avatar',
+    sort_order: 48,
+    children: [
+      {
+        // path 与 router 的 `path: 'hr/schedule'` 逐字一致；`meta.menuCode` 是
+        // `hr_schedule_calendar`（见 router/index.ts 的同名注释），两者互为对账。
+        // icon `Calendar` 必须在 ICON_MAP 内（查不到会**静默不显示**、不报错）。
+        id: '9000000000000910',
+        version: 0,
+        parent_id: '9000000000000015',
+        code: 'hr_schedule_calendar',
+        title: '排班日历',
+        path: '/hr/schedule',
+        icon: 'Calendar',
+        sort_order: 10,
+        children: [],
+      },
+    ],
+  },
+  // 13. settings_root — 设置（分组，3 children）
   {
     id: id(9),
     version: 0,

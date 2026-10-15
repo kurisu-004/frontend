@@ -934,4 +934,54 @@ export const qk = {
   /** 每日总结域前缀（**只覆盖 config + meta 两条**）。⚠️ **不覆盖 logs** —— 理由见上方
    *  「logs 刻意不挂 prefix 之下」那一段。⚠️ 不要在调用点拼 `['wecom-daily']` 字面量。 */
   wecomDailyPrefix: ['wecom-daily'] as const,
+  // ============================================================
+  // 2026-10-19 新增：hr 域（人事排班日历页）queryKey 工厂。
+  //
+  // 根命名空间取 `hr`（与页面路由段 / 菜单域、后端 URL 段 `/hr/*` 逐段对齐，便于按 URL
+  // 反查键），**不**挂 `partsPrefix` 下 —— 理由沿本文件 `mail` / `inspection` /
+  // `statistics` 几段的「根命名空间」取舍：键的根只要求「同根前缀匹配」才有意义，挂了才
+  // 有共享写点。本域的写端点（建 / 改 / 停用班次、写 / 删日历行）写的是 hr 域自己的
+  // 日历表与班次表，**一个字都不写 `t_part` / `t_part_batch`** ⇒ 与零件域、生产队列零共享
+  // 写点；挂 parts 下只会让全仓最热的 `qk.partsPrefix` 一把全刷把本页缓存连带重拉。
+  //
+  // 三条读键：
+  //   - hrCalendarDays(from, to)     —— GET /hr/calendar/days（**参数键**：端点接必填的
+  //     `from` / `to`，键不进区间则翻月时命中上一个月的日历）
+  //   - hrShifts(includeInactive)    —— GET /hr/shifts（**参数键**：`include_inactive`
+  //     决定返不返停用班次，两种形态的行集不同，必须分开身份）
+  //   - hrShiftCalendar(id, from, to) —— GET /hr/shifts/{id}/calendar（**参数键**：shiftId
+  //     走**独立键位**，不进数组对象 —— 端点按班次分片返回，不带 id 切班次时会命中上一个
+  //     班次的日历）
+  //
+  // 失效编排点（消费方 = 排班日历页 store）：
+  //   - 写 / 删全局日历行 → `qc.invalidateQueries({ queryKey: qk.hrCalendarDaysPrefix })`
+  //     **外加** `qk.hrShiftCalendarPrefix`：全局日型一变，每个班次的「最终日型」派生值
+  //     全变（`effective_day_type` / `is_workday` 都是从全局日型叠出来的），只刷前者会
+  //     留下「日历表更新了、各班次栏没跟着变」的半截状态；
+  //   - 建 / 改 / 停用班次 → `qk.hrShiftsPrefix`（`is_active` / `segments` / `version` 全变）；
+  //   - 写 / 删班次日历覆盖行 → `qk.hrShiftCalendarPrefix`。
+  // ⚠️ 编排点 ≠ 全部写点：与 CLAUDE.md「跨页面写操作不做穷举失效」一致，本域的新鲜度由
+  // 30s 有限 staleTime + 本页自身的显式 refetch 兜底。
+  // ============================================================
+  /** 全局日历日行键（`GET /api/v2/hr/calendar/days`）。**参数键**：`from` / `to` 是后端必填的
+   * 区间（`from <= to` 且跨度 ≤ 366 天），不进键则翻月时拿到上一段的日历冒充当前月。 */
+  hrCalendarDays: (from: string, to: string) => ['hr', 'calendar-days', from, to] as const,
+  /** 全局日历域前缀 —— 写 / 删全局日历行后一把全失效（任意区间形态都命中）。 */
+  hrCalendarDaysPrefix: ['hr', 'calendar-days'] as const,
+  /** 班次列表键（`GET /api/v2/hr/shifts`）。**参数键**：`include_inactive` 决定返不返停用
+   * 班次（停用是软删，行仍在库里），两种形态行集不同。
+   * ⚠️ 形参给默认值 `false` 是刻意的：`hrShifts()` 与 `hrShifts(false)` 必须同一条键 ——
+   * 两者发的是同一个请求（`include_inactive` 缺省即 false），拆成两个缓存身份是白发一趟。 */
+  hrShifts: (includeInactive = false) => ['hr', 'shifts', includeInactive] as const,
+  /** 班次域前缀 —— 建 / 改 / 停用班次后一把全失效（任意 includeInactive 形态都命中）。 */
+  hrShiftsPrefix: ['hr', 'shifts'] as const,
+  /** 某班次的日历键（`GET /api/v2/hr/shifts/{id}/calendar`）。**参数键**：shiftId 走独立
+   * 键位（端点按班次分片返回，不带 id 切班次会拿上一个班次的日历冒充当前班次），
+   * `from` / `to` 区间同理（不进键则翻月命中上一段）。shiftId 空串 → 占位键
+   * （`enabled=false` 闸门 + queryFn 二次守卫拦掉，理由同 `deliveryNoteDetail`）。 */
+  hrShiftCalendar: (shiftId: string, from: string, to: string) =>
+    ['hr', 'shift-calendar', shiftId, from, to] as const,
+  /** 班次日历域前缀 —— 写 / 删班次日历覆盖行后一把全失效（任意 shiftId 与区间形态都命中）；
+   * **全局日历行变更也要失效它**（`effective_day_type` / `is_workday` 由全局日型派生）。 */
+  hrShiftCalendarPrefix: ['hr', 'shift-calendar'] as const,
 } as const;

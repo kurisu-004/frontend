@@ -44,6 +44,12 @@ import {
   // ⚠️ 漏掉这一行的话，`MenuTreeItem.vue` 的 `ICON_MAP[icon]` 查不到 → `v-if` **静默隐藏**
   //   （不报错），表现为侧栏「企业微信」那一项没有图标而无人察觉。
   ChatDotRound,
+  // 2026-10-19：新增「人事管理」分组（hr_group，用 Avatar）与「排班日历」子菜单
+  // （hr_schedule_calendar，用 Calendar）。⚠️ 漏掉这两行命名导入的话，
+  // `MenuTreeItem.vue` 的 `ICON_MAP[icon]` 查不到 → 模板 `v-if="iconComp"` **静默隐藏**
+  // （不报错），表现为侧栏这两项没有图标而无人察觉。
+  Avatar,
+  Calendar,
 } from '@element-plus/icons-vue';
 
 /** 图标名 → 组件（覆盖 router `meta.icon` 与后端菜单树 `t_menu.icon` 的取值域）。 */
@@ -72,4 +78,6 @@ export const ICON_MAP: Record<string, unknown> = {
   Message,
   Lock,
   ChatDotRound,
+  Avatar,
+  Calendar,
 };

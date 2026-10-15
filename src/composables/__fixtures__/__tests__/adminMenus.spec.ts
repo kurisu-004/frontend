@@ -62,6 +62,9 @@ function flatten(nodes: MenuNode[]): MenuNode[] {
  *     **守不住「fixture 与后端 seeds/menu.sql 一致」** —— 后者靠文件头「每次后端菜单树变更
  *     必须同步」的纪律 + 本文件下方那组定位断言（它们把 id / path / sort_order / icon 逐字
  *     钉死，缺节点时「定位断言整个 describe 找不到节点即红」）。
+ *   - 2026-10-19（人事排班日历）：新增 `hr_group`（一级分组「人事管理」、path NULL）与
+ *     `hr_schedule_calendar`（子菜单「排班日历」、path /hr/schedule）。**新增 code 也必须改
+ *     这里**：漏改的症状同上（fixture 里多两个 code、清单里没有 → 红）。
  *
  * ⚠️ **不再维护「总数 N」这个数字**：自本轮起数量已由穷尽比较隐含（清单多一个、少一个
  * 都会红），原先的 `has exactly 32 codes` 与注释里的 `30 → 32` 箭头一并删除 —— 再维护
@@ -111,6 +114,11 @@ const COVERED_CODES: readonly string[] = [
   'mail',
   // 2026-10-17（企业微信推送子模块）：scheduled_task 分组下新增 wecom（path /wecom）。
   'wecom',
+  // 2026-10-19（人事排班日历）：新增一级分组 hr_group「人事管理」（path NULL）及其子菜单
+  // hr_schedule_calendar「排班日历」（path /hr/schedule）。⚠️ 少这两个 code 的症状不是
+  // 「侧栏少两项」而是「dummy 模式下直接敲 /hr/schedule 也进不去」（守卫第 3 条）。
+  'hr_group',
+  'hr_schedule_calendar',
   'settings_root',
   'work_types_list',
   'processes_list',
@@ -235,8 +243,14 @@ describe('ADMIN_MENUS', () => {
 
     it('**数组物理位置**落在 floor_group(40) 与 settings_root(50) 之间', () => {
       const codes = ADMIN_MENUS.map((n) => n.code);
+      // 紧贴 floor_group(40) 之后：45 槽位紧邻上一个顶级节点，这一点不变。
       expect(codes.indexOf('scheduled_task')).toBe(codes.indexOf('floor_group') + 1);
-      expect(codes.indexOf('scheduled_task') + 1).toBe(codes.indexOf('settings_root'));
+      // ⚠️ 右邻**刻意只断先后不断相邻**（2026-10-19 起）：hr_group(48) 插进了
+      // scheduled_task(45) 与 settings_root(50) 之间，「紧邻 settings_root」已不成立，而本组
+      // 用例守的是本节点的插入位。hr_group 自己的物理位置由下方 `hr_group /
+      // hr_schedule_calendar 节点` 那组的两条相邻断言守（scheduled_task + 1 === hr_group
+      // 且 hr_group + 1 === settings_root），两头合起来仍把整段序列钉死。
+      expect(codes.indexOf('scheduled_task')).toBeLessThan(codes.indexOf('settings_root'));
     });
 
     it('旧 code 已彻底下线（fixture 里不得残留 mail_group / mail_digest）', () => {
@@ -329,6 +343,62 @@ describe('ADMIN_MENUS', () => {
       expect(group().sort_order).toBeLessThan(
         all().find((n) => n.code === 'auth_group')!.sort_order,
       );
+    });
+  });
+
+  // 2026-10-19 新增：`hr_group` / `hr_schedule_calendar` 两个节点的定位断言。照
+  // `scheduled_task` / `template_management` 那两组的形态写 —— 上面那条穷尽比较只管
+  // 「code 集合」，管不到「path 与 router 逐字一致吗 / icon 渲染得出来吗 / 数组物理位置
+  // 对吗」，而这几件里任何一件错位在 dummy 模式下的症状都是同一个：页面进不去或侧栏顺序错。
+  // 缺节点时下面 `group()` / `leaf()` 的 `!` 会抛 TypeError（而不是静默通过），这是刻意的：
+  // 「节点被删了」必须红，不能变成一组恒真断言。
+  describe('hr_group / hr_schedule_calendar 节点（人事排班日历）', () => {
+    const all = () => flatten(ADMIN_MENUS);
+    const group = () => all().find((n) => n.code === 'hr_group')!;
+    const leaf = () => all().find((n) => n.code === 'hr_schedule_calendar')!;
+
+    it('一级分组 hr_group「人事管理」path 为 null、icon 为 Avatar、sort_order 48', () => {
+      expect(group().title).toBe('人事管理');
+      // path=null 是「分组」的判定口径：MenuTreeItem 渲染成 el-sub-menu，不需要前端路由。
+      expect(group().path).toBeNull();
+      expect(group().icon).toBe('Avatar');
+      expect(group().sort_order).toBe(48);
+    });
+
+    it('**数组物理位置**落在 scheduled_task(45) 与 settings_root(50) 之间（侧栏按数组顺序渲染）', () => {
+      const codes = ADMIN_MENUS.map((n) => n.code);
+      expect(codes.indexOf('hr_group')).toBe(codes.indexOf('scheduled_task') + 1);
+      expect(codes.indexOf('hr_group') + 1).toBe(codes.indexOf('settings_root'));
+    });
+
+    it("二级 hr_schedule_calendar「排班日历」path 为 /hr/schedule（与 router 的 `path: 'hr/schedule'` 逐字一致）", () => {
+      // ⚠️ path 与 router 逐字一致是**硬约束**：不一致时守卫第 3 条把用户踢走，现象是
+      // 「点菜单闪一下又回到别的页」，不是编译错误（router 侧没有反向测试）。
+      // ⚠️ path 与后端 API URL（/api/v2/hr/*）**无关**：它是浏览器书签 URL + 后端菜单表
+      // t_menu.path 的值。
+      expect(leaf().title).toBe('排班日历');
+      expect(leaf().path).toBe('/hr/schedule');
+      expect(leaf().parent_id).toBe(group().id);
+    });
+
+    it('子菜单物理位置是 children[0]、sort_order 为 10（分组内首项）', () => {
+      expect(group().children.map((c) => c.code)).toEqual(['hr_schedule_calendar']);
+      expect(group().children[0].sort_order).toBe(10);
+    });
+
+    it('两个 icon 都在 MenuTreeItem 的 ICON_MAP 白名单内（查不到会静默不显示）', () => {
+      // 直接查**真实**白名单（`layouts/components/menuIcons.ts`），不抄副本。
+      expect(ICON_MAP[group().icon!]).toBeDefined();
+      expect(ICON_MAP[leaf().icon!]).toBeDefined();
+      // 权威值单独钉住：`Avatar` / `Calendar` 都在白名单里，换成任意另一个白名单图标不会
+      // 让上一条红，这条才有「dummy 模式与生产图标不一致」的测试信号。
+      expect(group().icon).toBe('Avatar');
+      expect(leaf().icon).toBe('Calendar');
+    });
+
+    it('id 与 backend-rust seeds/menu.sql 逐字一致（9000000000000015 / …910）', () => {
+      expect(group().id).toBe('9000000000000015');
+      expect(leaf().id).toBe('9000000000000910');
     });
   });
 
