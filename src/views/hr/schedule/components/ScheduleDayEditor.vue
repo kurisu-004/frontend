@@ -59,8 +59,13 @@
 
         <!-- 名称只在两档要求填时启用：`CUSTOM_LEAVE` 必填（后端 21907），`STATUTORY_HOLIDAY`
              填了有用（国庆 / 春节）。其余档禁用而不是隐藏 —— 保持栅格稳定，用户也不会以为
-             「换个日型名称就跟着清掉了」。 -->
-        <el-form-item>
+             「换个日型名称就跟着清掉了」。
+
+             ⚠️ **红框挂在 `el-form-item` 的 `error` 上、不挂在 `el-input` 上**：`el-input`
+               压根没有 `error` 这个 prop（2.14.6 的 Attributes 里查无此项），给它传 `:error`
+               只会作为一个同名 HTML 属性落到根 div 上、什么样式都不触发；红框是 Element Plus
+               用后代选择器 `.el-form-item.is-error .el-input__wrapper` 画的。 -->
+        <el-form-item :error="nameMissing ? NAME_REQUIRED_HINT : ''">
           <el-input
             v-model="draftName"
             :disabled="!nameEnabled"
@@ -118,7 +123,8 @@
 //
 // 2026-10-19 新建：见文件头。
 
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
+import { ElMessage } from 'element-plus';
 import type { HrDayType } from '@/types/hr';
 import { HR_DAY_TYPE_OPTIONS, dayTypeLabel, dayTypeNeedsName } from '../utils/dayType';
 import type { ScheduleDayView } from '../composables/useScheduleStore';
@@ -149,12 +155,19 @@ const emit = defineEmits<
 const visible = ref(false);
 const draftType = ref<HrDayType>('WORKDAY');
 const draftName = ref('');
+/** 「用户按过一次应用」：缺名的红只在它之后才亮（见 `nameMissing`）。每次打开弹层复位。 */
+const appliedOnce = ref(false);
+
+/** 缺名的两句人话：toast 说「你还得做什么」，红字说「这一栏错在哪」。 */
+const NAME_REQUIRED_TOAST = '「自定义休息」必须填写名称';
+const NAME_REQUIRED_HINT = '请填写名称';
 
 /** 弹层打开时把当前值灌进草稿（不灌的话上一次编辑的草稿会留给下一次），
  *  并通知月历「这一天是当前编辑对象」—— store 的 `activeIso` 由那一侧写。 */
 function syncDraft(): void {
   draftType.value = props.day?.dayType ?? 'WORKDAY';
   draftName.value = props.day?.name ?? '';
+  appliedOnce.value = false;
   emit('open');
 }
 
@@ -167,7 +180,44 @@ const globalTypeLabel = computed(() =>
 /** 名称输入只在需要它的两档启用（见模板注释）。 */
 const nameEnabled = computed(() => dayTypeNeedsName(draftType.value));
 
+/**
+ * 这一档**是不是必须**带名称。
+ *
+ * ⚠️ **只在全局日历上要名称**：班次覆盖行的表里没有名称列（那个名字属于全局日历的语义），
+ *   班次作用域的写端点也**不**校验 `CUSTOM_LEAVE` 必须带 name ⇒ 在班次作用域按缺名去拦，
+ *   拦的是一条后端本就允许的写，还会逼用户填一个发不出去的名字。口径见 `docs/api/hr.md` §3.8。
+ * ⚠️ **判空口径与后端同源**：后端拒的是 `trim()` 后为空（不是「有没有这个字段」），所以全空格
+ *   同样算缺名 —— 两处各判一次「空」，判法必须一样。
+ */
+const nameRequired = computed(() => !props.scopeIsShift && dayTypeNeedsName(draftType.value));
+
+/** 「名称没填」这态要不要红：只在「这一档必须带名称 + 名称空 + 用户按过应用」之后才亮 ——
+ *  一上来就红是一片没有来由的红。 */
+const nameMissing = computed(
+  () => nameRequired.value && appliedOnce.value && !draftName.value.trim(),
+);
+
+/** 补上名称后立刻撤红：判据是「按过应用且仍为空」，不再空就不该继续红。 */
+watch(
+  () => draftName.value,
+  () => {
+    if (!nameMissing.value) appliedOnce.value = false;
+  },
+);
+
+/**
+ * 按「应用」。
+ *
+ * ⚠️ **缺名必须在这个弹层里拦**（2026-10-19 补）：后端拒 21907，而弹层正开着、名字能就地补上，
+ *   让用户白跑一趟往返只为读一句「自定义休息日必须填写名称」没有意义。
+ * ⚠️ **拦下时绝不关弹层**：关掉就把「补个名字再试」变成「重新点开那一格」。
+ */
 function onApply(): void {
+  appliedOnce.value = true;
+  if (nameRequired.value && !draftName.value.trim()) {
+    ElMessage.warning(NAME_REQUIRED_TOAST);
+    return;
+  }
   emit('apply', draftType.value, nameEnabled.value ? draftName.value.trim() : null);
   visible.value = false;
 }
