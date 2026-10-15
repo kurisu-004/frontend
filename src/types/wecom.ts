@@ -112,6 +112,15 @@ export interface SaveWeComDailyConfigPayload {
   webhook_id: string | null;
   /** 「N 日内交期」的天数。取值域由 `GET /meta` 的 `upcoming_days_range` 下发。 */
   upcoming_days: number;
+  /** 2026-10-23 新增：第三节按交期日期分组列工单清单时，**每个分组最多列多少条**。
+   *  取值域 `0..=200`，**`0` 表示不限**（与 `worker_top_n === 0` 同语义）。超出部分不逐条
+   *  列出，只在组末出一行「另有 N 行未列出」脚注 —— **不静默截断**。装配件的子件与工单吃
+   *  同一个额度。
+   *  ⚠️ 这一段范围**不由 `GET /meta` 下发**（meta 只在 `defaults` 段多给了 `order_list_limit`
+   *  与 `include_drawings` 两个键，没有对应的 `*_range`），所以取值域的真源是前端域内常量
+   *  `weComDailySchema.ts::WECOM_DAILY_ORDER_LIST_LIMIT_RANGE`（表单校验与输入项 `:min/:max`
+   *  共用同一份，不写死第二份字面量）。 */
+  order_list_limit: number;
   /** 第四节条形图的指标口径。取值域由 `GET /meta` 的 `worker_metrics[]` 下发。 */
   worker_metric: WeComDailyWorkerMetric;
   /** 第四节最多列多少个工人。0 = 不限。范围由 `GET /meta` 的 `worker_top_n_range` 下发。 */
@@ -120,11 +129,14 @@ export interface SaveWeComDailyConfigPayload {
   max_chunks: number;
   /** 节开关一：全厂报工总览。 */
   include_overview: boolean;
-  /** 节开关二：今日出货单数。 */
+  /** 节开关二：本期出货单数。 */
   include_delivery: boolean;
   /** 节开关三：逾期未交工单 + N 日内交期工单。 */
   include_orders: boolean;
-  /** 节开关四：所有工人今日报工统计（条形字符图）。 */
+  /** 2026-10-23 新增：第三节的工单行上是否挂图纸预览链接（缺省 true）。为 false 时**不触发
+   *  任何图片转码**，日报只出纯文字清单（第三节行数多、群里刷屏时可关）。 */
+  include_drawings: boolean;
+  /** 节开关四：所有工人本期报工统计（条形字符图）。 */
   include_workers: boolean;
   /** 标题模板；null = 用后端默认标题（页面留空即 null）。 */
   subject_template: string | null;

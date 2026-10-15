@@ -73,12 +73,20 @@ function initialFormModel(): WeComDailyFormModel {
     // 选错通道，所以由告警 + 按钮禁用承担（见 `sendDisabled`）。
     webhook_id: null,
     upcoming_days: 3,
+    // 2026-10-23 新增：第三节每个交期分组最多列多少条（0 = 不限，不逐条列出、只出「另有 N 行
+    // 未列出」脚注）。
+    order_list_limit: 30,
     worker_metric: 'QUANTITY',
     worker_top_n: 15,
-    max_chunks: 3,
+    // 2026-10-23：后端把这一项的缺省由 3 提到 6（日报第三节每行 ≈135 字节，4 个分组 × 30 条
+    // ≈ 16.4 KB ≈ 5 片，缺省 3 会让一份正常日报直接超限失败）。这段初值只是配置到达前的
+    // 一瞬，hydrate 之后一律以 `GET /config` 为准。
+    max_chunks: 6,
     include_overview: true,
     include_delivery: true,
     include_orders: true,
+    // 2026-10-23 新增：第三节工单行默认挂图纸预览链接。
+    include_drawings: true,
     include_workers: true,
     subject_template: '',
   };
@@ -146,12 +154,14 @@ export const useWeComDailyStore = defineStore('wecom-daily', () => {
       // 通道 id 原样搬过来（雪花 ID 恒为 string，不做数字化）。
       webhook_id: config.webhook_id,
       upcoming_days: config.upcoming_days,
+      order_list_limit: config.order_list_limit,
       worker_metric: config.worker_metric,
       worker_top_n: config.worker_top_n,
       max_chunks: config.max_chunks,
       include_overview: config.include_overview,
       include_delivery: config.include_delivery,
       include_orders: config.include_orders,
+      include_drawings: config.include_drawings,
       include_workers: config.include_workers,
       // 留空串 = 用后端默认标题（提交时转 null），页面不绑 null。
       subject_template: config.subject_template ?? '',
@@ -357,12 +367,14 @@ export const useWeComDailyStore = defineStore('wecom-daily', () => {
       // 通道 id（雪花 ID ⇒ JSON string，**不要**过 Number()）。
       webhook_id: form.webhook_id,
       upcoming_days: Number(form.upcoming_days ?? 0),
+      order_list_limit: Number(form.order_list_limit ?? 0),
       worker_metric: form.worker_metric,
       worker_top_n: Number(form.worker_top_n ?? 0),
       max_chunks: Number(form.max_chunks ?? 0),
       include_overview: form.include_overview,
       include_delivery: form.include_delivery,
       include_orders: form.include_orders,
+      include_drawings: form.include_drawings,
       include_workers: form.include_workers,
       subject_template: form.subject_template.trim() === '' ? null : form.subject_template.trim(),
     };
@@ -497,12 +509,14 @@ export const useWeComDailyStore = defineStore('wecom-daily', () => {
         day_of_month: form.day_of_month,
         webhook_id: form.webhook_id,
         upcoming_days: Number(form.upcoming_days ?? 0),
+        order_list_limit: Number(form.order_list_limit ?? 0),
         worker_metric: form.worker_metric,
         worker_top_n: Number(form.worker_top_n ?? 0),
         max_chunks: Number(form.max_chunks ?? 0),
         include_overview: form.include_overview,
         include_delivery: form.include_delivery,
         include_orders: form.include_orders,
+        include_drawings: form.include_drawings,
         include_workers: form.include_workers,
         subject_template: form.subject_template.trim() === '' ? null : form.subject_template.trim(),
       });

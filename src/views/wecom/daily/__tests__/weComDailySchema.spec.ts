@@ -5,7 +5,7 @@
 //  1. **键集守门**：`.strict()` 少一个键必抛、多一个键必抛。这两组是 CLAUDE.md 已登记的
 //     「11 处同款事故」的正面守卫 —— 本域的出参是 `.strict()` 的，后端每加 / 少一个字段而前端
 //     没同步时，症状是**页面恒空 + 一句「加载失败」**（或更糟：某个表格整页白屏）。
-//     `ConfigOut` 的 21 个键、`MetaOut` 的 6 个键、`PreviewOut` 的 15 个键、`LogRow` 的 19 个键
+//     `ConfigOut` 的 23 个键、`MetaOut` 的 6 个键、`PreviewOut` 的 13 个键、`LogRow` 的 18 个键
 //     逐条对照，见下面各组的 `expect(Object.keys(...).sort())`。
 //  2. **枚举与可空**：frequency / worker_metric / trigger_source / status 四个封闭集；
 //     `MANUAL_ONLY` 时三个时刻字段必为 null。
@@ -17,6 +17,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_WECOM_DAILY_FREQUENCY_FLAGS,
   DEFAULT_WECOM_DAILY_RANGES,
+  WECOM_DAILY_ORDER_LIST_LIMIT_RANGE,
   makeWeComDailyFormSchema,
   toWeComDailyFieldErrors,
   weComDailyConfigDefaultsSchema,
@@ -33,7 +34,7 @@ import {
 // fixtures（逐字照后端 DTO）
 // ============================================================================
 
-/** `GET /config` 的出参（后端 `ConfigOut`，**21 键**，`.strict()`）。 */
+/** `GET /config` 的出参（后端 `ConfigOut`，**23 键**，`.strict()`）。 */
 const CONFIG = {
   id: '9000000000000800',
   version: 3,
@@ -45,12 +46,14 @@ const CONFIG = {
   day_of_month: null,
   webhook_id: '9000000000000903',
   upcoming_days: 3,
+  order_list_limit: 30,
   worker_metric: 'QUANTITY',
   worker_top_n: 15,
-  max_chunks: 3,
+  max_chunks: 6,
   include_overview: true,
   include_delivery: true,
   include_orders: true,
+  include_drawings: true,
   include_workers: true,
   subject_template: null,
   webhook_configured: true,
@@ -58,7 +61,7 @@ const CONFIG = {
   updated_at: '2026-10-17 08:00:00',
 };
 
-/** `GET /meta` 的 `defaults`（与 ConfigOut 的共享字段同构，**16 键**）。 */
+/** `GET /meta` 的 `defaults`（与 ConfigOut 的共享字段同构，**18 键**）。 */
 const DEFAULTS: WeComDailyConfigDefaultsData = {
   enabled: false,
   frequency: 'MANUAL_ONLY',
@@ -68,12 +71,14 @@ const DEFAULTS: WeComDailyConfigDefaultsData = {
   day_of_month: null,
   webhook_id: null,
   upcoming_days: 3,
+  order_list_limit: 30,
   worker_metric: 'QUANTITY',
   worker_top_n: 15,
-  max_chunks: 3,
+  max_chunks: 6,
   include_overview: true,
   include_delivery: true,
   include_orders: true,
+  include_drawings: true,
   include_workers: true,
   subject_template: null,
 };
@@ -127,9 +132,7 @@ const PREVIEW = {
   overview_quantity: 340,
   completed_count: 4,
   in_process_count: 18,
-  repair_part_count: 1,
-  note_count: 3,
-  note_part_count: 56,
+  note_count: 56,
   overdue_count: 2,
   upcoming_count: 7,
   worker_rows: [{ worker_name: '张三', badge_code: 'B001', batch_count: 4, quantity: 120 }],
@@ -137,7 +140,7 @@ const PREVIEW = {
   sections: ['全厂报工总览', '工人报工'],
 };
 
-/** `GET /logs` 的一行（后端 `LogRow`，**19 键**，`.strict()`）。 */
+/** `GET /logs` 的一行（后端 `LogRow`，**18 键**，`.strict()`）。 */
 const LOG_ROW = {
   log_id: '9000000000000900',
   config_version: 3,
@@ -151,8 +154,7 @@ const LOG_ROW = {
   chunk_sent: 2,
   overview_batch_count: 12,
   overview_quantity: 340,
-  note_count: 3,
-  note_part_count: 56,
+  note_count: 56,
   overdue_count: 2,
   upcoming_count: 7,
   worker_row_total: 22,
@@ -164,14 +166,14 @@ const LOG_ROW = {
 // S 组：键集守门
 // ============================================================================
 
-describe('weComDailySchema — ConfigOut 键集（21 键，.strict()）', () => {
+describe('weComDailySchema — ConfigOut 键集（23 键，.strict()）', () => {
   it('S1：一份完整的好响应能过守门，且键集与契约逐字相等', () => {
     const parsed = weComDailyConfigSchema.parse(CONFIG);
     expect(parsed.version).toBe(3);
     // ⚠️ 这条是「**少声明一个键**」的唯一信号：把下面任何一个键从 schema 里删掉，本用例
     // 立刻红（而 typecheck 与 lint 都照样绿 —— Zod 默认的 strip 会静默吞掉缺字段）。
     expect(Object.keys(parsed).sort()).toEqual(Object.keys(CONFIG).sort());
-    expect(Object.keys(parsed)).toHaveLength(21);
+    expect(Object.keys(parsed)).toHaveLength(23);
   });
 
   it('S1b：少一个键必抛（.strict() 对「少声明的键」同样抛）', () => {
@@ -256,7 +258,7 @@ describe('weComDailySchema — MetaOut 键集（6 键，.strict()）', () => {
     // range 全部退兜底 + 首屏弹一次「元数据加载失败」。
     const parsed = weComDailyConfigDefaultsSchema.parse(DEFAULTS);
     expect(Object.keys(parsed).sort()).toEqual(Object.keys(DEFAULTS).sort());
-    expect(Object.keys(parsed)).toHaveLength(16);
+    expect(Object.keys(parsed)).toHaveLength(18);
     expect(Object.keys(parsed)).toContain('webhook_id');
 
     // 行级字段**不在** defaults 里（后端 `ConfigDefaultsOut` 明确不含这 5 个）。
@@ -273,7 +275,7 @@ describe('weComDailySchema — MetaOut 键集（6 键，.strict()）', () => {
   });
 });
 
-describe('weComDailySchema — PreviewOut 键集（15 键，.strict()）', () => {
+describe('weComDailySchema — PreviewOut 键集（13 键，.strict()）', () => {
   it('P1：好响应过守门；chunks 是数组且逐条 ≤ 4096 字节', () => {
     const parsed = weComDailyPreviewSchema.parse(PREVIEW);
     expect(parsed.chunks).toHaveLength(2);
@@ -295,14 +297,41 @@ describe('weComDailySchema — PreviewOut 键集（15 键，.strict()）', () =>
     const { badge_code: _drop, ...row } = PREVIEW.worker_rows[0]!;
     expect(() => weComDailyPreviewSchema.parse({ ...PREVIEW, worker_rows: [row] })).toThrow();
   });
+
+  // 2026-10-23 新增：PreviewOut 的键集守卫（改前本组只守「多一个键必抛」的零星几个键，
+  // 少一个键要等别的用例偶然踩到才红）。
+  it('P5：键集与契约**逐字相等**且恰好 13 个 —— 后端增删出参字段时必红（.strict() 的设计意图）', () => {
+    const parsed = weComDailyPreviewSchema.parse(PREVIEW);
+    expect(Object.keys(parsed).sort()).toEqual([
+      'chunk_count',
+      'chunks',
+      'completed_count',
+      'in_process_count',
+      'note_count',
+      'overdue_count',
+      'overview_batch_count',
+      'overview_quantity',
+      'sections',
+      'subject',
+      'upcoming_count',
+      'worker_row_total',
+      'worker_rows',
+    ]);
+    expect(Object.keys(parsed)).toHaveLength(13);
+  });
+
+  it('P6：少一个键必抛（`.strict()` 对「少声明的键」同样抛，症状是预览弹窗恒空白）', () => {
+    const { completed_count: _drop, ...noCompleted } = PREVIEW;
+    expect(() => weComDailyPreviewSchema.parse(noCompleted)).toThrow();
+  });
 });
 
-describe('weComDailySchema — LogRow 键集（19 键，.strict()）', () => {
+describe('weComDailySchema — LogRow 键集（18 键，.strict()）', () => {
   it('L1：好响应过守门，键集与契约逐字相等', () => {
     const parsed = weComDailyLogSchema.parse(LOG_ROW);
     expect(parsed.log_id).toBe('9000000000000900');
     expect(Object.keys(parsed).sort()).toEqual(Object.keys(LOG_ROW).sort());
-    expect(Object.keys(parsed)).toHaveLength(19);
+    expect(Object.keys(parsed)).toHaveLength(18);
   });
 
   it('L2：少一个键必抛（少 error_message ⇒ 失败行整表空，管理员看不到「为什么失败」）', () => {
@@ -351,12 +380,14 @@ function form(over: Partial<WeComDailyFormModel> = {}): WeComDailyFormModel {
     day_of_month: null,
     webhook_id: '9000000000000903',
     upcoming_days: 3,
+    order_list_limit: 30,
     worker_metric: 'QUANTITY',
     worker_top_n: 15,
-    max_chunks: 3,
+    max_chunks: 6,
     include_overview: true,
     include_delivery: true,
     include_orders: true,
+    include_drawings: true,
     include_workers: true,
     subject_template: '',
     ...over,
@@ -446,6 +477,18 @@ describe('makeWeComDailyFormSchema — 3 条本域特有分支', () => {
     });
     expect(schema.safeParse(form({ max_chunks: 10 })).success).toBe(false);
     expect(schema.safeParse(form({ max_chunks: 5 })).success).toBe(true);
+  });
+
+  it('F11b：order_list_limit 按**域内常量**判（meta 不下发这一段 range），且 0 = 不限合法', () => {
+    // ⚠️ 这一段的范围不在 `ranges` 形参里（`GET /meta` 没有 `order_list_limit_range`），真源是
+    // 域内常量 —— 越界判错 + 两端（0 / 200）放行，一起钉死。
+    expect(WECOM_DAILY_ORDER_LIST_LIMIT_RANGE).toEqual({ min: 0, max: 200 });
+    expect(check({ order_list_limit: 0 })).toEqual({});
+    expect(check({ order_list_limit: 200 })).toEqual({});
+    const tooMany = check({ order_list_limit: 201 });
+    expect(tooMany.order_list_limit).toBeDefined();
+    expect(tooMany.order_list_limit).toContain('0..200');
+    expect(check({ order_list_limit: undefined }).order_list_limit).toBeDefined();
   });
 
   it('F12：webhook_id 空选**不拦保存**（代价落在发送时的 21801，由页面告警承担）', () => {
