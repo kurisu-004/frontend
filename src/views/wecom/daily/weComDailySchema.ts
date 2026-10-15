@@ -33,11 +33,16 @@
 //   ② 即使后端已上，**配置表 / 日志表的字段也是必填键**：漏声明一个键，本文件 `.strict()`
 //      当场抛 ⇒ 本页恒空 + 一句「加载失败」；
 //   ③ **本批的四个键，后端必须先上**（逐条点名，与 CLAUDE.md 的 customers / shelves /
-//      printTemplates 几处同款）：`order_list_limit` / `include_drawings` 是后端**新增**的必填
-//      键，`note_part_count` / `repair_part_count` 是后端**删除**的键。两个方向的爆炸半径
-//      都是**整页** —— 旧后端不返前两个键 ⇒ 配置页与发送历史一起恒空；旧后端仍返后两个键 ⇒
-//      预览弹窗与发送历史一起恒空（`.strict()` 抛 `unrecognized_keys`）。现场只有一句
-//      「加载失败」，排障先看部署顺序、别去查配置。
+//      printTemplates 几处同款）。⚠️ **四个键分属三条不同的守门 schema，症状各不相同**，
+//      按 schema 分开看：
+//
+//      | 键的方向 | 命中的守门 schema | 现场症状 |
+//      |---|---|---|
+//      | 新增 `order_list_limit` / `include_drawings`（旧后端不返 ⇒ 必填键缺键） | `weComDailyConfigSchema`（config）**与** `weComDailyConfigDefaultsSchema`（meta 的 `defaults`）—— 这两个键**只出现在这两处** | **表单退回 `initialFormModel()` 初值** + 一条常驻 el-alert + config / meta 各一条 ElMessage；**发送历史照常显示**（它走独立的 `weComDailyLogListSchema`，页面上也没有任何 `v-if` 把日志表挂在 config 错误下）。此时点保存会带着 `version ?? 0` 提交，配置行已存在（version ≥ 1）时后端按 OCC 返 40901 |
+//      | 删除 `note_part_count`（旧后端仍返 ⇒ `.strict()` 抛 `unrecognized_keys`） | `weComDailyLogSchema`（logs）**与** `weComDailyPreviewSchema`（preview） | 发送历史恒空 + 一条「发送历史加载失败」；预览弹窗取不到结果 |
+//      | 删除 `repair_part_count`（旧后端仍返） | **只有** `weComDailyPreviewSchema` —— 该键从来不在 `LogRow` 里 | **只有**预览弹窗恒空，发送历史照常 |
+//
+//      现场往往只看到一句「加载失败」，排障先看部署顺序、别去查配置。
 
 import { z } from 'zod';
 import {
@@ -139,7 +144,7 @@ const weComDailyConfigFields = {
   /** 2026-10-23 新增：第三节工单行上是否挂图纸预览链接（默认 true）。false = 不触发任何图片
    *  转码，只出纯文字清单。 */
   include_drawings: z.boolean(),
-  /** 节开关四：所有工人今日报工统计（**条形字符图，由后端渲染成 markdown 字符条**）。 */
+  /** 节开关四：所有工人本期报工统计（**条形字符图，由后端渲染成 markdown 字符条**）。 */
   include_workers: z.boolean(),
   /** 标题模板；null = 用后端默认标题。 */
   subject_template: z.string().nullable(),
@@ -259,15 +264,15 @@ export const weComDailyPreviewSchema = z
     chunks: z.array(z.string()),
     /** 冗余字段，恒等于 `chunks.length`（后端显式下发，省得前端自己数）。 */
     chunk_count: z.number(),
-    /** 第一节：全厂今日报工批次数。 */
+    /** 第一节：全厂本期报工批次数。 */
     overview_batch_count: z.number(),
-    /** 第一节：全厂今日送检 / 放回件数。 */
+    /** 第一节：全厂本期送检 / 放回件数。 */
     overview_quantity: z.number(),
-    /** 第一节：今日完工单数。 */
+    /** 第一节：本期完工单数。 */
     completed_count: z.number(),
     /** 第一节：当前在制工单数。 */
     in_process_count: z.number(),
-    /** 第二节（唯一）：本期出货单数。口径 = 今日送货单里**去重**的 `part` 数
+    /** 第二节（唯一）：本期出货单数。口径 = 本期送货单里**去重**的 `part` 数
      *  （`COUNT(DISTINCT part_id)`，数的是工单而非送货单张数）—— 2026-10-23 起第二节的
      *  展示职责由本键承载，标题栏「出货 N 单」渲染的就是它。 */
     note_count: z.number(),
@@ -325,7 +330,7 @@ export const weComDailyLogSchema = z
     chunk_sent: z.number(),
     overview_batch_count: z.number(),
     overview_quantity: z.number(),
-    /** 第二节（唯一）：本期出货单数（今日送货单里去重后的 `part` 数），口径同
+    /** 第二节（唯一）：本期出货单数（本期送货单里去重后的 `part` 数），口径同
      *  `weComDailyPreviewSchema::note_count`。 */
     note_count: z.number(),
     overdue_count: z.number(),

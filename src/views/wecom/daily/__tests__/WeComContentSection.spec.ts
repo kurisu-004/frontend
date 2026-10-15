@@ -148,7 +148,7 @@ describe('WeComContentSection.vue — 第三节清单的两个细粒度控件（
     expect(drawingsRow, '找不到 include_drawings 那一行').toBeDefined();
     expect(drawingsRow).toMatch(/:disabled="!modelValue\.include_orders"/);
     // 全文件恰好三处随第三节禁用（天数 / 每组条数 / 图纸预览链接），多一处即多一个
-    // 与第三节无关的禁用绑定。
+    // 未登记的禁用绑定。
     expect(CODE.match(/:disabled="!modelValue\.include_orders"/g) ?? []).toHaveLength(3);
     expect(CODE).not.toMatch(/:disabled="false"/);
   });

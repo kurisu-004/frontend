@@ -136,7 +136,7 @@ export interface SaveWeComDailyConfigPayload {
   /** 2026-10-23 新增：第三节的工单行上是否挂图纸预览链接（缺省 true）。为 false 时**不触发
    *  任何图片转码**，日报只出纯文字清单（第三节行数多、群里刷屏时可关）。 */
   include_drawings: boolean;
-  /** 节开关四：所有工人今日报工统计（条形字符图）。 */
+  /** 节开关四：所有工人本期报工统计（条形字符图）。 */
   include_workers: boolean;
   /** 标题模板；null = 用后端默认标题（页面留空即 null）。 */
   subject_template: string | null;
