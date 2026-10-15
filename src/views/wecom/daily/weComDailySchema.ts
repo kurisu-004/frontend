@@ -20,7 +20,8 @@
 //   - **雪花 / 业务 ID 一律 JSON string**：`id` / `log_id` / `webhook_id` 是 `z.string()`，
 //     禁 `z.number()`（19 位 ID 在 JS Number 下丢精度）。
 //   - **计数 / 版本号 / 时分天 / 字节数一律 JSON number**：`version` / `upcoming_days` /
-//     `worker_top_n` / `max_chunks` / `send_hour` / `markdown_bytes` / `total` 等。
+//     `order_list_limit` / `worker_top_n` / `max_chunks` / `send_hour` / `markdown_bytes` /
+//     `total` 等。
 //
 // ⚠️ **`.strict()` 的取舍**：信封 / 行层一律 `.strict()`，与 mailDigest 域同款 —— 后端给本域
 //   加派生字段时会被这里挡住、需要显式决策，而不是被 Zod 默认的 strip 静默吞掉（吞掉后前端
@@ -109,12 +110,19 @@ const weComDailyConfigFields = {
   webhook_id: z.string().nullable(),
   /** 第三节「N 日内交期」的天数（默认 3）。取值域由 `meta.upcoming_days_range` 下发。 */
   upcoming_days: z.number().int(),
+  /** 2026-10-23 新增：第三节按交期日期分组列工单清单时，每个分组最多列多少条（默认 30）。
+   *  **0 = 不限**；超出部分不逐条列出，只在组末出一行「另有 N 条未列出」脚注，不静默截断。
+   *  装配件的子件与工单吃同一个额度。取值域见本文件的
+   *  `WECOM_DAILY_ORDER_LIST_LIMIT_RANGE`（**不由 meta 下发**，见该常量的说明）。 */
+  order_list_limit: z.number().int(),
   /** 第四节条形图的指标口径（默认 QUANTITY）。取值域由 `meta.worker_metrics[]` 下发。 */
   worker_metric: weComDailyWorkerMetricSchema,
   /** 第四节最多列多少个工人（0 = 不限，默认 15）。范围由 `meta.worker_top_n_range` 下发。 */
   worker_top_n: z.number().int(),
-  /** 一次触发最多发几条（默认 3；企业微信官方限频 20 条/分钟）。范围由
-   *  `meta.max_chunks_range` 下发。 */
+  /** 一次触发最多发几条（默认 6；企业微信官方限频 20 条/分钟）。范围由
+   *  `meta.max_chunks_range` 下发。
+   *  2026-10-23：缺省由 3 提到 6 —— 第三节每行 ≈135 字节（含一条 ≈95 字节的图纸预览直链），
+   *  4 个分组 × 30 条 ≈ 16.4 KB ≈ 5 片，缺省 3 会让一份正常日报直接超限失败。 */
   max_chunks: z.number().int(),
   /** 节开关一：全厂报工总览。 */
   include_overview: z.boolean(),
@@ -122,6 +130,9 @@ const weComDailyConfigFields = {
   include_delivery: z.boolean(),
   /** 节开关三：逾期未交工单 + N 日内交期工单。 */
   include_orders: z.boolean(),
+  /** 2026-10-23 新增：第三节工单行上是否挂图纸预览链接（默认 true）。false = 不触发任何图片
+   *  转码，只出纯文字清单。 */
+  include_drawings: z.boolean(),
   /** 节开关四：所有工人今日报工统计（**条形字符图，由后端渲染成 markdown 字符条**）。 */
   include_workers: z.boolean(),
   /** 标题模板；null = 用后端默认标题。 */
@@ -132,7 +143,7 @@ const weComDailyConfigFields = {
 // GET /api/v2/cron/wecom-daily/config
 // ============================================================
 
-/** 单条每日总结配置（后端 `ConfigOut`，**21 个字段逐字对齐**）。
+/** 单条每日总结配置（后端 `ConfigOut`，**23 个字段逐字对齐**）。
  *
  *  ⚠️ **表里无行时后端返「全部默认值 + `version: 0` + `id: "0"`」**（不是 404、不是
  *  `null`）⇒ 消费侧永远拿到可用的配置对象，首次保存时用 `version: 0` 作为 OCC 锚建行。
@@ -160,12 +171,12 @@ export type WeComDailyConfigData = z.infer<typeof weComDailyConfigSchema>;
 // GET /api/v2/cron/wecom-daily/meta
 // ============================================================
 
-/** `defaults` 段（后端 `ConfigDefaultsOut`）：**逐字就是上面那个共享字段对象**，16 个键
- *  一个不少不少 —— 相对 `ConfigOut` 去掉的只有 `id` / `version` / 两个时间戳 /
- *  `webhook_configured` 这 5 个行级字段。
+/** `defaults` 段（后端 `ConfigDefaultsOut`）：**逐字就是上面那个共享字段对象**，18 个键
+ * 一个不少不少 —— 相对 `ConfigOut` 去掉的只有 `id` / `version` / 两个时间戳 /
+ * `webhook_configured` 这 5 个行级字段。
  *
  *  ⚠️ **`webhook_id` 在 `defaults` 里恒为 `null`**（默认配置不该替用户选一条通道），但**键本身
- *  恒在**：它与另外 15 个字段走的是同一个 schema 对象。所以这条 schema 是 `.strict()` 的 ——
+ *  恒在**：它与另外 17 个字段走的是同一个 schema 对象。所以这条 schema 是 `.strict()` 的 ——
  *  后端哪天在 `defaults` 里少下发一个键（哪怕是恒为 `null` 的 `webhook_id`），parse 当场抛，
  *  频率选项与三段 range 全部退兜底 + 首屏弹一次「元数据加载失败」。
  *  守卫见 `__tests__/weComDailySchema.spec.ts` 的 M4 组（键集逐字相等 + 少一个键必抛）。 */
@@ -383,7 +394,7 @@ export const DEFAULT_WECOM_DAILY_WORKER_METRIC_OPTIONS: WeComDailyWorkerMetricOp
 
 /** 表单态（页面持有的可编辑模型）。与 `GET /config` 的差别只有两处，都是 UI 需要：
  *  - `subject_template` 恒为 `string`（`el-input` 绑不了 null，留空 = 发 null）；
- *  - 三个数字输入（天数 / 人数 / 分片）允许 `undefined` / `null`
+ *  - 四个数字输入（天数 / 每组条数 / 人数 / 分片）允许 `undefined` / `null`
  *    （`el-input-number` 被清空时的取值）。 */
 export interface WeComDailyFormModel {
   enabled: boolean;
@@ -394,12 +405,17 @@ export interface WeComDailyFormModel {
   day_of_month: number | null;
   webhook_id: string | null;
   upcoming_days: number | undefined;
+  /** 2026-10-23 新增：第三节每个交期分组最多列多少条工单（0 = 不限）。 */
+  order_list_limit: number | undefined;
   worker_metric: WeComDailyWorkerMetric;
   worker_top_n: number | undefined;
   max_chunks: number | undefined;
   include_overview: boolean;
   include_delivery: boolean;
   include_orders: boolean;
+  /** 2026-10-23 新增：第三节工单行是否挂图纸预览链接（布尔量，不在 `WeComDailyFormField`
+   *  里 —— 与另外三个 `include_*` 节开关同款：布尔开关不可能越界，没有红字可挂）。 */
+  include_drawings: boolean;
   include_workers: boolean;
   subject_template: string;
 }
@@ -411,6 +427,7 @@ export type WeComDailyFormField =
   | 'day_of_month'
   | 'webhook_id'
   | 'upcoming_days'
+  | 'order_list_limit'
   | 'worker_metric'
   | 'worker_top_n'
   | 'max_chunks'
@@ -439,9 +456,9 @@ const nullableInt = (min: number, max: number, message: string) =>
       .nullable(),
   );
 
-/** 必填整数（`upcoming_days` / `worker_top_n` / `max_chunks`）。`el-input-number` 被清空时给
- *  的是 `undefined` / `null`，`z.coerce.number()` 会把 `null` 静默转成 **0**
- *  （`Number(null) === 0`）—— 那会让「清空」看起来像「0 天 / 0 人 / 0 条」。故先把空值转成
+/** 必填整数（`upcoming_days` / `order_list_limit` / `worker_top_n` / `max_chunks`）。
+ *  `el-input-number` 被清空时给的是 `undefined` / `null`，`z.coerce.number()` 会把 `null` 静默转成
+ *  **0**（`Number(null) === 0`）—— 那会让「清空」看起来像「0 天 / 0 人 / 0 条」。故先把空值转成
  *  `NaN`，让类型校验按「没填」报错。 */
 const requiredInt = (min: number, max: number, message: string) =>
   z.preprocess(
@@ -465,6 +482,17 @@ export interface WeComDailyRanges {
   worker_top_n: { min: number; max: number };
   max_chunks: { min: number; max: number };
 }
+
+/** 2026-10-23 新增：第三节「每个交期分组最多列多少条」的取值域（`0..=200`，**0 = 不限**）。
+ *
+ *  ⚠️ **这一段是前端域内常量、不是 meta 下发的**，与上面三段（`upcoming_days` /
+ *  `worker_top_n` / `max_chunks`）不同：`GET /meta` 的契约里只在 `defaults` 段多了
+ *  `order_list_limit` 与 `include_drawings` 两个键，**没有** `order_list_limit_range`。所以
+ *  它不进 `WeComDailyRanges`（那个形参的语义是「三段 meta 下发的范围」）。
+ *
+ *  但「UI 放行、schema 却拒」这条矛盾照样要堵：输入项的 `:min/:max` 与表单校验的越界判读
+ *  **同一份常量**（组件 `WeComContentSection.vue` 直接引它），不写第二份字面量。 */
+export const WECOM_DAILY_ORDER_LIST_LIMIT_RANGE = { min: 0, max: 200 } as const;
 
 /**
  * 构造表单校验 schema。
@@ -510,6 +538,13 @@ export function makeWeComDailyFormSchema(
       ranges.upcoming_days.max,
       `未来天数需在 ${ranges.upcoming_days.min}..${ranges.upcoming_days.max} 之间`,
     ),
+    // 2026-10-23 新增。范围取自域内常量 `WECOM_DAILY_ORDER_LIST_LIMIT_RANGE`（meta 不下发这一段），
+    // 与输入项的 `:min/:max` 同一份。
+    order_list_limit: requiredInt(
+      WECOM_DAILY_ORDER_LIST_LIMIT_RANGE.min,
+      WECOM_DAILY_ORDER_LIST_LIMIT_RANGE.max,
+      `每组条数上限需在 ${WECOM_DAILY_ORDER_LIST_LIMIT_RANGE.min}..${WECOM_DAILY_ORDER_LIST_LIMIT_RANGE.max} 之间（0 = 不限）`,
+    ),
     worker_metric: weComDailyWorkerMetricSchema,
     worker_top_n: requiredInt(
       ranges.worker_top_n.min,
@@ -524,6 +559,8 @@ export function makeWeComDailyFormSchema(
     include_overview: z.boolean(),
     include_delivery: z.boolean(),
     include_orders: z.boolean(),
+    // 2026-10-23 新增：布尔开关，与另外三个 `include_*` 同款，不做额外校验。
+    include_drawings: z.boolean(),
     include_workers: z.boolean(),
     // 留空合法（= 用后端默认标题），超长才拒。
     subject_template: z.string().trim().max(200, '标题模板长度不能超过 200 个字符'),

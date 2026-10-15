@@ -70,12 +70,14 @@ const CONFIG: WeComDailyConfigData = {
   day_of_month: null,
   webhook_id: '9000000000000903',
   upcoming_days: 3,
+  order_list_limit: 30,
   worker_metric: 'QUANTITY',
   worker_top_n: 15,
-  max_chunks: 3,
+  max_chunks: 6,
   include_overview: true,
   include_delivery: true,
   include_orders: true,
+  include_drawings: true,
   include_workers: true,
   subject_template: null,
   webhook_configured: true,
@@ -127,12 +129,14 @@ const META = {
     day_of_month: null,
     webhook_id: null,
     upcoming_days: 3,
+    order_list_limit: 30,
     worker_metric: 'QUANTITY',
     worker_top_n: 15,
-    max_chunks: 3,
+    max_chunks: 6,
     include_overview: true,
     include_delivery: true,
     include_orders: true,
+    include_drawings: true,
     include_workers: true,
     subject_template: null,
   },
@@ -382,8 +386,8 @@ describe('useWeComDailyStore — 保存（OCC 硬约束 + 逐字段写全）', (
     expect(payload.webhook_id).toBe('9000000000000903');
     expect(payload.worker_metric).toBe('QUANTITY');
     expect(payload.worker_top_n).toBe(15);
-    expect(payload.max_chunks).toBe(3);
-    // ⚠️ 这条逐条把 16 个配置键都点一遍：后端加一个必填配置字段而本地漏发时，typecheck 会当场
+    expect(payload.max_chunks).toBe(6);
+    // ⚠️ 这条逐条把 18 个配置键都点一遍：后端加一个必填配置字段而本地漏发时，typecheck 会当场
     // 把这里判红（照 CLAUDE.md 登记的「`.strict()` 少键 = 页面恒空」那条纪律的前置防线）。
     expect(Object.keys(payload).sort()).toEqual(
       [
@@ -391,10 +395,12 @@ describe('useWeComDailyStore — 保存（OCC 硬约束 + 逐字段写全）', (
         'enabled',
         'frequency',
         'include_delivery',
+        'include_drawings',
         'include_orders',
         'include_overview',
         'include_workers',
         'max_chunks',
+        'order_list_limit',
         'send_hour',
         'send_minute',
         'subject_template',

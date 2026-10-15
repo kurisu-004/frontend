@@ -1,7 +1,14 @@
 <!--
-  WeComContentSection.vue — 推送内容（四节开关 + 天数 / 人数 / 分片上限 + 条形图口径 + 标题）
+  WeComContentSection.vue — 推送内容（四节开关 + 天数 / 每组条数 / 人数 / 分片上限 +
+  条形图口径 + 标题）
 
   2026-10-17 新建。**纯组件，零 store / 零 api 依赖**。
+
+  2026-10-23 新增第三节的两个细粒度控件：`order_list_limit`（每个交期分组最多列多少条）与
+  `include_drawings`（工单行是否挂图纸预览链接），都落在 ③「交期工单」那一组的紧下方。
+  ⚠️ `order_list_limit` 的 `:min/:max` 引**域内常量** `WECOM_DAILY_ORDER_LIST_LIMIT_RANGE`
+  而不是 `ranges` prop —— `GET /meta` 的契约里**没有**这一段 range（只在 `defaults` 段多了两
+  个键），而表单校验的越界判读同一份常量，所以不会出现「UI 放行、schema 却拒」。
 
   ⚠️ **条形图由后端渲染成 markdown 字符条随消息下发，本组件不引入任何图表组件**：CLAUDE.md
   「图表」一节要求业务组件一律走 `vue-echarts`，而这里是**明确的例外且刻意如此** —— 推送内容
@@ -71,6 +78,40 @@
       <span v-if="errors?.upcoming_days" class="field-error">{{ errors.upcoming_days }}</span>
     </div>
 
+    <!-- 2026-10-23 新增：第三节工单清单的两个细粒度控件，都只在第三节开着时生效。
+         放 ③ 这一行的紧下方（而不是「单次最多条数」那块）：这两个字段管的是**第三节的清单
+         本身**，跟第四节工人、跟整份日报的发几条都不是一回事。关掉第三节时同样禁用但不清值
+         （与天数那条同款理由：关 → 开之后不该发现设置丢了）。 -->
+    <div :class="['field-row', rowClass('order_list_limit')]">
+      <span class="field-label field-label--wide">交期清单每组最多列出</span>
+      <el-input-number
+        :model-value="modelValue.order_list_limit"
+        class="limit-input"
+        :min="ORDER_LIST_LIMIT_RANGE.min"
+        :max="ORDER_LIST_LIMIT_RANGE.max"
+        :step="1"
+        :precision="0"
+        controls-position="right"
+        :disabled="!modelValue.include_orders"
+        :placeholder="`${ORDER_LIST_LIMIT_RANGE.min}..${ORDER_LIST_LIMIT_RANGE.max}`"
+        aria-label="交期清单每组最多列出"
+        @update:model-value="onOrderListLimitChange"
+      />
+      <span class="field-hint"> 0 = 不限；超出部分只出「另有 N 条未列出」脚注，不会静默截断 </span>
+      <span v-if="errors?.order_list_limit" class="field-error">{{ errors.order_list_limit }}</span>
+    </div>
+
+    <div class="field-row">
+      <span class="field-label field-label--wide">附带图纸预览链接</span>
+      <el-switch
+        :model-value="modelValue.include_drawings"
+        aria-label="附带图纸预览链接"
+        :disabled="!modelValue.include_orders"
+        @update:model-value="patch({ include_drawings: Boolean($event) })"
+      />
+      <span class="field-hint">关闭后不触发图片转码，只出纯文字清单</span>
+    </div>
+
     <div :class="['field-row', rowClass('worker_metric')]">
       <span class="field-label">④ 工人报工</span>
       <el-switch
@@ -119,7 +160,10 @@
         aria-label="单次最多条数"
         @update:model-value="onMaxChunksChange"
       />
-      <span class="field-hint"> 内容超长会拆成多条发出（不截断）；这里限制一次触发最多发几条 </span>
+      <span class="field-hint">
+        内容超长会拆成多条发出（不截断）；这里限制一次触发最多发几条，实际片数超出它则整份日报
+        发送失败（错误码 21804），不会静默截断
+      </span>
       <span v-if="errors?.max_chunks" class="field-error">{{ errors.max_chunks }}</span>
     </div>
 
@@ -151,6 +195,7 @@
 import { computed } from 'vue';
 import {
   DEFAULT_WECOM_DAILY_RANGES,
+  WECOM_DAILY_ORDER_LIST_LIMIT_RANGE as ORDER_LIST_LIMIT_RANGE,
   type WeComDailyFormField,
   type WeComDailyFormFieldErrors,
   type WeComDailyFormModel,
@@ -199,6 +244,12 @@ function patch(patchValue: Partial<WeComDailyFormModel>): void {
  *  （空值 → NaN）判错，不在这里兜成 0（那会让「清空」看起来像「0 天 / 0 人 / 0 条」）。 */
 function onUpcomingDaysChange(v: unknown): void {
   patch({ upcoming_days: v === '' ? undefined : (v as number | undefined) });
+}
+
+/** 2026-10-23 新增：与上面三个数字输入同款处理（清空交 undefined，不兜 0 —— 0 在这一项上
+ *  是有意义的值「不限」，兜成 0 会把「没填」说成「不限」）。 */
+function onOrderListLimitChange(v: unknown): void {
+  patch({ order_list_limit: v === '' ? undefined : (v as number | undefined) });
 }
 
 function onWorkerTopNChange(v: unknown): void {
@@ -253,8 +304,15 @@ function rowClass(field: WeComDailyFormField): Record<string, boolean> {
   color: var(--text-secondary);
 }
 
+/* 2026-10-23 新增：两个新控件的 label 比 96px 长（「交期清单每组最多列出」10 个字），硬塞进
+   窄列会折成两行。给它们一个加宽档，其余行保持原样、不动既有视觉。 */
+.field-label--wide {
+  width: 140px;
+}
+
 .days-input,
 .topn-input,
+.limit-input,
 .chunks-input {
   width: 140px;
 }

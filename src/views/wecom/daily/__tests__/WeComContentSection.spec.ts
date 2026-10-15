@@ -14,6 +14,9 @@
 //     值** —— 清值会让用户「关 → 开」之后发现设置丢了。
 //  4. **四节全关的提示挂在虚拟字段 `sections` 上**，不挂到任何一个开关上（那是四个开关**共同**
 //     的责任，挂到任一个都会误导）。
+//  5. **第三节清单的两个细粒度控件**（`order_list_limit` / `include_drawings`）：取值界读域内常量
+//     而不是 `ranges` prop（meta 不下发这一段），提示文案说清「0 = 不限 / 不静默截断」与
+//     「关掉就不转码」。
 
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -100,6 +103,40 @@ describe('WeComContentSection.vue — 四个开关与三个数字', () => {
   it('S6：标题模板留空合法（= 用后端默认标题），placeholder 说清这一点', () => {
     expect(CODE).toMatch(/留空则用后端默认标题/);
     expect(CODE).toMatch(/maxlength="200"/);
+  });
+});
+
+describe('WeComContentSection.vue — 第三节清单的两个细粒度控件（2026-10-23 新增）', () => {
+  it('C1：每组条数是 el-input-number，上下界引**域内常量**（meta 不下发这一段 range）', () => {
+    expect(CODE).toMatch(/aria-label="交期清单每组最多列出"/);
+    expect(CODE).toMatch(/:min="ORDER_LIST_LIMIT_RANGE\.min"/);
+    expect(CODE).toMatch(/:max="ORDER_LIST_LIMIT_RANGE\.max"/);
+    // 反向确认：没有把这两个界写死成字面量（会与 schema 的越界判读分叉）。
+    expect(CODE).not.toMatch(/:min="0"/);
+    expect(CODE).not.toMatch(/:max="200"/);
+  });
+
+  it('C2：提示写明 0 = 不限、且不静默截断（管理员据此判断调不调）', () => {
+    expect(CODE).toMatch(/0 = 不限；超出部分只出「另有 N 条未列出」脚注，不会静默截断/);
+  });
+
+  it('C3：图纸预览链接是 el-switch，提示写明关掉就不转码', () => {
+    expect(CODE).toMatch(/aria-label="附带图纸预览链接"/);
+    expect(CODE).toMatch(/关闭后不触发图片转码，只出纯文字清单/);
+    expect(CODE).toMatch(/patch\(\{ include_drawings: Boolean\(\$event\) \}\)/);
+  });
+
+  it('C4：两个控件都随第三节开关禁用（与天数那条同款，不清值）', () => {
+    expect(CODE).toMatch(/modelValue\.order_list_limit/);
+    expect(CODE).toMatch(/modelValue\.include_drawings/);
+    // 两处 :disabled 都绑第三节开关（不写死布尔字面量）。
+    expect(CODE).not.toMatch(/:disabled="false"/);
+  });
+
+  it('C5：单次最多条数的 hint 补上「超上限整份失败」的险提示（不只说「会拆成多条」）', () => {
+    expect(CODE).toMatch(/内容超长会拆成多条发出（不截断）/);
+    expect(CODE).toMatch(/超出它则整份日报/);
+    expect(CODE).toMatch(/21804/);
   });
 });
 
