@@ -140,8 +140,8 @@ async function onDeactivate(row: HrShiftData): Promise<void> {
 </script>
 
 <style lang="scss" scoped>
-/* 2026-10-16 新增：与左列月历**同高**，班次多了在自己这一列里滚（原先整页被撑长、两列
-   底边不齐）。`flex: 1` 吃卡片体的剩余高度，`min-height: 0` 才允许收缩到内容以下。 */
+/* 2026-10-16 新增：与左列月历**同高**，两列等高、班次多了在自己这一列里滚。`flex: 1` 吃卡片体的
+   剩余高度，`min-height: 0` 才允许收缩到内容以下。 */
 .shift-sidebar {
   display: flex;
   flex: 1;

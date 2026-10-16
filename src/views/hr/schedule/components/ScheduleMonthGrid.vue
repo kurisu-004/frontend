@@ -28,7 +28,7 @@
         <el-button size="small" @click="emit('gotoMonth', -1)">上一月</el-button>
         <span class="grid-title">{{ cursor.year }} 年 {{ cursor.month }} 月</span>
         <el-button size="small" @click="emit('gotoMonth', 1)">下一月</el-button>
-        <!-- ⚠️ 三个翻页按钮必须同形态（原先只有它带 `text`，一个默认、一个文字按钮）。 -->
+        <!-- ⚠️ 三个翻页按钮必须同形态：混着默认按钮与文字按钮会让一排翻页控件看着像两套控件。 -->
         <el-button size="small" @click="emit('gotoToday')">本月</el-button>
       </div>
 

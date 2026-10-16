@@ -86,11 +86,16 @@ describe('ScheduleDayCell — 色带的闸门（班次级，不是日级）', ()
     });
     expect(w.findAll('.shift-band')).toHaveLength(1);
     expect(w.find('.shift-bands').exists()).toBe(true);
+    // 日级 `workday` 唯一的运行时去处就是这一跳（`types/hr.ts::isHrWorkday` 口径收敛后的
+    // 消费链）：它只弱化日期号，**不碰色带**。
+    expect(w.classes()).toContain('is-rest');
   });
 
   it('C2：没有上工的班次 ⇒ 一段都不画（容器也不出）', () => {
     const w = mountCell({ cell: cell('2026-10-08'), bands: [] });
     expect(w.find('.shift-bands').exists()).toBe(false);
+    // 工作日（`workday` 默认 `true`）不该带 `is-rest`：上一条钉住「假 ⇒ 有」，这条钉住「真 ⇒ 无」。
+    expect(w.classes()).not.toContain('is-rest');
   });
 
   it('C3：**补格**（前后月）不出色带 —— 写进去用户会以为改到了当月', () => {
@@ -146,10 +151,14 @@ describe('ScheduleDayCell — 格内密度预算的字面量守门（读源文�
   it('C7：`el-tag` 压回 10px 字 / 16px 行高，省略号打在 `.el-tag__content` 上', () => {
     // ⚠️ 三条尺寸必须**同属 `.day-badges :deep(.el-tag)` 这一条规则块**：拆成三条
     //   `toContain` 时它们是全文件级匹配，而 `.override-flag` 里同样写着 `padding: 0 4px;`
-    //   ——把 `.el-tag` 的 `padding` 整条删掉，旧写法照样绿（恒真断言）。
-    expect(css).toMatch(
-      /\.day-badges :deep\(\.el-tag\)\s*\{[^}]*--el-tag-font-size:\s*10px;[^}]*height:\s*16px;[^}]*padding:\s*0 4px;/,
-    );
+    //   ——把 `.el-tag` 的 `padding` 整条删掉，`toContain` 照样绿（恒真断言）。
+    // 先切出规则块、再逐条断言，每条都锚在「声明自己的行首」（`^` 配 `m` 标志按行匹配，或上一条
+    //   声明的 `;` 之后）。这样两条性质同时成立：①三条**顺序无关**，手改 / 整理重排属性不会得到
+    //   一条看不懂的假红；②`line-height` / `min-height` 这类前缀属性不会被误当成 `height`。
+    const block = /\.day-badges :deep\(\.el-tag\)\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(block).toMatch(/(?:^|[\n;])\s*--el-tag-font-size:\s*10px;/m);
+    expect(block).toMatch(/(?:^|[\n;])\s*height:\s*16px;/m);
+    expect(block).toMatch(/(?:^|[\n;])\s*padding:\s*0 4px;/m);
     // 省略号必须打在承载文字的内层 span 上（写在外层 `.el-tag` 上是空操作：文字被硬切、无省略号）。
     expect(css).toContain('.day-badges :deep(.el-tag__content)');
     // 高度不够时裁切优先落在徽标区，而不是把整块顶出 `.day-cell`。

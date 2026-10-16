@@ -52,16 +52,18 @@ export const HR_DAY_TYPE_META: Record<HrDayType, { label: string; isWorkday: boo
 };
 
 /** 2026-10-19 新增：算作「上班」的 2 档日型（`WORKDAY` / `MAKEUP_WORKDAY`）。
- *  与后端 `is_workday` 判定**同源**，两处改一处即可，别各判一遍。 */
+ *  与后端 `is_workday` 判定**同源**。
+ *  ⚠️ **当前全 `src/` 无消费方**：日型 → 是否上班的判据只有 `isHrWorkday` 这一个入口
+ *    （它读 `HR_DAY_TYPE_META[].isWorkday`），改判据时同步核对这份清单。 */
 export const HR_WORKDAY_DAY_TYPES: readonly HrDayType[] = ['WORKDAY', 'MAKEUP_WORKDAY'];
 
 /** 该日型是否算上班。
  *
  *  ⚠️ **当前只有一条运行时消费链**：全局作用域下由 store 转成 `ScheduleDayView.workday`
  *    （`views/hr/schedule/composables/useScheduleStore.ts::calendarDays`），月历格据此给
- *    休息日弱化日期号（`is-rest` 类）。`HR_DAY_TYPE_OPTIONS[].workday` 直接取的就是这份判据
- *    （两个下拉当前都不按它过滤，同源性由 `views/hr/schedule/utils/__tests__/dayType.spec.ts`
- *    钉住）。
+ *    休息日弱化日期号（`is-rest` 类）。日型 → 是否上班的判据只此一处，页面内其余入口一律转发
+ *    本函数（`views/hr/schedule/utils/dayType.ts::isWorkdayDayType`）；判据本身由
+ *    `views/hr/schedule/utils/__tests__/dayType.spec.ts` 的 W1 / W2 钉住。
  *  ⚠️ **月历色带的闸门不是它**（2026-10-16 收敛）：色带判据是**班次级**的
  *    `shift_bands[].is_workday`，由 store 侧解析，见
  *    `views/hr/schedule/composables/useScheduleStore.ts::bandsOf` 与 `calendarDays`。

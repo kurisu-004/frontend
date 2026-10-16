@@ -21,16 +21,12 @@ export interface DayTypeOption {
   value: HrDayType;
   /** 中文标签（后端 message 是给日志看的，下拉一律用这个）。 */
   label: string;
-  /** 是否算上班（= `isHrWorkday(value)`，与格内 `is-rest` 弱化同源；两个下拉当前都不按它
-   *  过滤，属实但不消费的值）。 */
-  workday: boolean;
 }
 
 /** 6 档日型的展示选项，顺序即 `HR_DAY_TYPES` 的顺序。 */
 export const HR_DAY_TYPE_OPTIONS: readonly DayTypeOption[] = HR_DAY_TYPES.map((value) => ({
   value,
   label: HR_DAY_TYPE_META[value].label,
-  workday: isHrWorkday(value),
 }));
 
 /** 中文标签。未知值回落到原样输出（**不抛**）：日型来自后端，守门在 Zod 那层，
@@ -47,7 +43,7 @@ export type DayTypeTagType = 'primary' | 'success' | 'info' | 'warning' | 'dange
  *  不在组件里另抄一份映射）。
  *
  * ⚠️ **6 档挤 5 个 type 是已定的取舍**：`REST_DAY`（休息日）与 `MAKEUP_HOLIDAY`（调休放假）
- *   同落 `info` —— 丢掉两者的颜色区分（原先也都是灰系，区分度本就极低），靠徽标上的**文字**
+ *   同落 `info` —— 丢掉两者的颜色区分（两者同属灰系，区分度本就极低），靠徽标上的**文字**
  *   区分（`休息日` / `调休放假`）。反过来 `MAKEUP_WORKDAY`（调休上班）与 `WORKDAY` 分开，
  *   因为「这天本该休却要上班」是排班员最需要一眼看到的那类日子。
  * ⚠️ **无数据（`dayType === null`）给 `info` 而不是 `primary`**：给 `primary` 会把「这条

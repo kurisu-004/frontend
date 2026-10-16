@@ -33,10 +33,9 @@ describe('HR_DAY_TYPE_OPTIONS — 与 `@/types/hr` 同源', () => {
     ]);
   });
 
-  it('T2：**每个 option 的 label / workday 都取自 `HR_DAY_TYPE_META`**（没抄第二份）', () => {
+  it('T2：**每个 option 的 label 都取自 `HR_DAY_TYPE_META`**（没抄第二份）', () => {
     for (const opt of HR_DAY_TYPE_OPTIONS) {
       expect(opt.label).toBe(HR_DAY_TYPE_META[opt.value].label);
-      expect(opt.workday).toBe(HR_DAY_TYPE_META[opt.value].isWorkday);
       expect(opt.label.length).toBeGreaterThan(0);
     }
   });
@@ -118,7 +117,7 @@ describe('dayTypeTagType — 6 档日型 → `el-tag` 的 type（映射表在 da
   });
 
   it('T7：`REST_DAY` 与 `MAKEUP_HOLIDAY` 同落 `info` 是**已定的取舍**（靠文字区分）', () => {
-    // 元素只有 5 个 type 而日型有 6 档，牺牲的是两档休息日的颜色区分（原先也都是灰系）。
+    // 元素只有 5 个 type 而日型有 6 档，牺牲的是两档休息日的颜色区分（两者同属灰系）。
     expect(dayTypeTagType('REST_DAY')).toBe(dayTypeTagType('MAKEUP_HOLIDAY'));
     expect(dayTypeLabel('REST_DAY')).not.toBe(dayTypeLabel('MAKEUP_HOLIDAY'));
   });
