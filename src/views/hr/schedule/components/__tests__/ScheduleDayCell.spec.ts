@@ -14,6 +14,9 @@
 //     在 1366×768 这类笔记本视口下会把格子顶出裁切。本仓没有布局测试环境，所以这组用例直接
 //     读源文件文本钉住那几条规则（照 `api/__tests__/hrContractShape.spec.ts` 「真读源码」
 //     的纪律），规则被删 / 被改回 Element Plus 原生尺寸时当场红。
+//     ⚠️ **这层守卫只认字面量，不是布局回归守卫**：它发现得了「这条声明被删了 / 被改回 EP
+//     原生尺寸」，发现不了选择器与真实 DOM 脱钩、Element Plus 改名改结构、以及层叠顺序 /
+//     特异性回归（本仓没有能算布局的测试环境，这几类只能靠评审与人工在真视口下看）。
 
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -127,10 +130,12 @@ describe('ScheduleDayCell — 覆盖标记落到 UI', () => {
   });
 });
 
-describe('ScheduleDayCell — 格内密度预算（42 格 × 6 行的纵向/横向硬约束）', () => {
+describe('ScheduleDayCell — 格内密度预算的字面量守门（读源文件，不是布局回归守卫）', () => {
   // 本仓没有布局测试环境（happy-dom 不计算 SFC 的 `<style scoped>`，更没有真实视口），
   // 所以这组用例直接读组件**源文件**钉住那几条规则：规则被删、或被改回 Element Plus 的
   // 原生尺寸时当场红，而不是等有人在 1366×768 的笔记本上看见裁切才发现。
+  // ⚠️ **能力边界**：只认字面量 ⇒ 抓得到「声明被删 / 被改回 EP 原生尺寸」，抓不到选择器与
+  //   DOM 脱钩、EP 改名、以及层叠顺序 / 特异性回归。别把它当布局守卫用。
   // 路径取 Vite 注入的 `__file`（本仓唯一的组件源文件绝对路径真源），不拼 `import.meta.url`
   // ——happy-dom 环境下后者不是 `file:` scheme。
   const css = readFileSync(
@@ -139,9 +144,12 @@ describe('ScheduleDayCell — 格内密度预算（42 格 × 6 行的纵向/横�
   );
 
   it('C7：`el-tag` 压回 10px 字 / 16px 行高，省略号打在 `.el-tag__content` 上', () => {
-    expect(css).toContain('--el-tag-font-size: 10px');
-    expect(css).toContain('height: 16px;');
-    expect(css).toContain('padding: 0 4px;');
+    // ⚠️ 三条尺寸必须**同属 `.day-badges :deep(.el-tag)` 这一条规则块**：拆成三条
+    //   `toContain` 时它们是全文件级匹配，而 `.override-flag` 里同样写着 `padding: 0 4px;`
+    //   ——把 `.el-tag` 的 `padding` 整条删掉，旧写法照样绿（恒真断言）。
+    expect(css).toMatch(
+      /\.day-badges :deep\(\.el-tag\)\s*\{[^}]*--el-tag-font-size:\s*10px;[^}]*height:\s*16px;[^}]*padding:\s*0 4px;/,
+    );
     // 省略号必须打在承载文字的内层 span 上（写在外层 `.el-tag` 上是空操作：文字被硬切、无省略号）。
     expect(css).toContain('.day-badges :deep(.el-tag__content)');
     // 高度不够时裁切优先落在徽标区，而不是把整块顶出 `.day-cell`。

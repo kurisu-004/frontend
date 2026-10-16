@@ -309,7 +309,7 @@ describe.skipIf(!BACKEND)('H：出参形状 / 业务码 / 口径锚点真·跨�
     expect(rustStructFields(src, 'ShiftDaysWriteOut').sort()).toEqual(['affected']);
   });
 
-  it('H7：八个 struct 里都不许出现 serde rename / skip_serializing_if（否则 H1..H6 的前提失效）', () => {
+  it('H7：下面逐个点名的 struct 里都不许出现 serde rename / skip_serializing_if（否则 H1..H6 的前提失效）', () => {
     // H1..H6 成立的前提是「Rust 字段名 == wire 上的 JSON 键」。这条把该前提本身钉住：后端一旦
     // 加 `#[serde(rename = "…")]`（wire 键改名）或 `skip_serializing_if`（空值时整个键消失 ⇒
     // `.strict()` 必抛），抽出来的字段名就不再代表 wire 键，会在**两边同时对得上**的情况下

@@ -208,7 +208,12 @@ onBeforeUnmount(() => {
   min-height: 0;
 }
 
-/* `el-col` 只是宽度与 gutter 的载体（还要 `min-height: 0`，否则作为 flex 项不肯收缩）。 */
+/* `el-col` 只是宽度与 gutter 的载体（还要 `min-height: 0`，否则作为 flex 项不肯收缩）。
+   ⚠️ **这里的 `min-height: 0` 仍与 Element Plus 同优先级、仍靠注入顺序取胜**：`col.scss` 里
+   `[class*='el-col-'].is-guttered` 编译后也是 (0,2,0)，与 `.schedule-col[data-v-x]` 打平。
+   它无害，是因为 EP 那条的取值只是 `min-height: 1px`（不构成收缩下限、真空高度链），而
+   **决定高度链的 flex 容器已经挪到本页自己的 `.schedule-col-inner`**（见下条）。也就是说：
+   「不再依赖 EP 类名」只对**高度链**成立，这一处残留是同优先级打平的，只是打平不出错。 */
 .schedule-col {
   min-height: 0;
 }

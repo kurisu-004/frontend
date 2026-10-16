@@ -3,7 +3,7 @@
 //
 // 2026-10-19 新建：排班日历页 store（`useScheduleStore`）单测，形态照
 // `views/wecom/webhooks/__tests__/useWeComWebhooksStore.spec.ts`。覆盖本域最容易静默出错的
-// 五类点：
+// 六类点：
 //
 //  1. **不变量**：enabled 闸门在 `openGate()` 之前**零请求**、开闸后两条 query 各打一次；
 //     `$dispose()` 后重建拿到全新作用域 / 弹窗态（Pinia 单例不 dispose 会把「翻到的月份 +
@@ -17,6 +17,9 @@
 //     **值确实变了**时才进 payload，且**清空发空串 `''`**（不是 `null` —— 后端
 //     `Option<String>` 分不清两者，发 `null` 等于「不改」，清空会静默失败）。
 //  5. **前端校验前置**：时段 V1–V6 不过时**不发请求**，只标红 `segments` 字段。
+//  6. **逐班次色带**（B 组）：全局作用域按 band 自己的 `is_workday` 过滤（休息班次不出段、
+//     `override` 标记落到段上）、班次作用域按该班次自己的 `is_workday` 出 0 或 1 段；
+//     **日级 `workday` 不是闸门** ——「全局是法定节假日、某班次覆盖上班」这一段必须活着。
 //
 // mock 策略：`vi.mock('@/api/hr')` 十端点全桩；`vi.mock('element-plus')` 把 ElMessage 桩成
 // no-op。顺序硬约束：pinia 先、VueQueryPlugin 后（store setup 首行 `useQueryClient()`）。
@@ -108,7 +111,7 @@ function bandRow(shiftId: string, over: Partial<HrShiftBandData> = {}): HrShiftB
 const SHIFTS = {
   items: [
     shiftRow(),
-    shiftRow({ id: '9000000000000902', code: 'NIGHT', name: '夜班', version: 1 }),
+    shiftRow({ id: '9000000000000902', code: 'NIGHT', name: '夜班', version: 1, color: '#4a8fd6' }),
     shiftRow({
       id: '9000000000000903',
       code: 'MID',
@@ -163,6 +166,7 @@ const GLOBAL_DAYS = {
 const SHIFT_DAYS = {
   shift_id: '9000000000000902',
   items: [
+    // 夜班当天被覆盖成休息（班次级 `is_workday: false`）⇒ 不出色段。
     {
       cal_date: '2026-10-05',
       global_day_type: 'WORKDAY' as const,
@@ -170,8 +174,25 @@ const SHIFT_DAYS = {
       is_workday: false,
       is_override: true,
     },
+    // 夜班当天照常上班（班次级 `is_workday: true`）⇒ 出**恰好一段**，内容取作用域行的色与名。
+    {
+      cal_date: '2026-10-08',
+      global_day_type: 'WORKDAY' as const,
+      effective_day_type: 'WORKDAY' as const,
+      is_workday: true,
+      is_override: false,
+    },
   ],
 };
+
+/** B3/B3b 选的作用域：**必须与上面 fixture 的 `shift_id` 是同一个班次**（端点 8 是按班次
+ *  返回的日历，作用域 id 与 fixture 不一致时 fixture 就是失真的）。 */
+const NIGHT_SCOPE = {
+  kind: 'shift',
+  id: '9000000000000902',
+  name: '夜班',
+  color: '#4a8fd6',
+} as const;
 
 function setupApp(): QueryClient {
   const app = createApp({});
@@ -289,17 +310,26 @@ describe('useScheduleStore — 逐班次色带（端点 1 的 shift_bands）', (
     expect(store.query.calendarDays.get('2026-10-03')?.bands).toEqual([]);
   });
 
-  it('B3：班次作用域 ⇒ 只挂当前这一个班次的色带，且休息日不出段', async () => {
+  it('B3：班次作用域下该班次那天休息 ⇒ 一段都不出', async () => {
     const store = await readyStore();
-    store.actions.selectScope({
-      kind: 'shift',
-      id: '9000000000000901',
-      name: '白班',
-      color: '#1e4d8b',
-    });
+    store.actions.selectScope(NIGHT_SCOPE);
     await tick();
     // 10-05 在班次日历里被覆盖成休息（fixture 的 `is_workday: false`）。
     expect(store.query.calendarDays.get('2026-10-05')?.bands).toEqual([]);
+  });
+
+  // ⚠️ **与 B3 互为正反两面**：班次作用域色带的「有段」那半边必须有人钉住 —— 把它改成恒
+  //   `[]`（或反过来让休息日也出段）时，只有这条会红。全局侧那条判据另有 B1–B6 守着，
+  //   两侧不共用同一条实现（班次侧是 0 或 1 条、判据是该班次自己的 `is_workday`）。
+  it('B3b：班次作用域下该班次那天上工 ⇒ 恰好一段（色与名取作用域行那一行）', async () => {
+    const store = await readyStore();
+    store.actions.selectScope(NIGHT_SCOPE);
+    await tick();
+    // 10-08 在班次日历里 `is_workday: true` ⇒ 挂当前班次这一段（`override` 恒 false：
+    // 班次作用域的「覆盖」在格级 `isOverride`，不在段级）。
+    expect(store.query.calendarDays.get('2026-10-08')?.bands).toEqual([
+      { color: NIGHT_SCOPE.color, title: NIGHT_SCOPE.name, override: false },
+    ]);
   });
 
   // ⚠️ `is_override` 进了 schema、进了对账，唯独不进 UI 的话，全局作用域下排班员**完全**

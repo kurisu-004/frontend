@@ -16,12 +16,13 @@ import { MINUTES_PER_DAY } from './absTime';
 
 export type { HrDayType };
 
-/** 一个下拉 / 图例项（日型 + 它的展示元数据）。 */
+/** 一个下拉项（日型 + 它的展示元数据）。消费方是拖选浮条与单元格编辑器两个下拉。 */
 export interface DayTypeOption {
   value: HrDayType;
-  /** 中文标签（后端 message 是给日志看的，图例与下拉一律用这个）。 */
+  /** 中文标签（后端 message 是给日志看的，下拉一律用这个）。 */
   label: string;
-  /** 是否算上班（= `isHrWorkday(value)`，图例分组与浮条判定同源）。 */
+  /** 是否算上班（= `isHrWorkday(value)`，与格内 `is-rest` 弱化同源；两个下拉当前都不按它
+   *  过滤，属实但不消费的值）。 */
   workday: boolean;
 }
 

@@ -70,6 +70,7 @@ import { computed } from 'vue';
 import type { HrDayType } from '@/types/hr';
 import type { MonthCell } from '../utils/monthGrid';
 import { dayTypeLabel, dayTypeTagType } from '../utils/dayType';
+import type { ShiftBandView } from '../composables/useScheduleStore';
 
 const props = defineProps<{
   cell: MonthCell;
@@ -89,8 +90,11 @@ const props = defineProps<{
    * 当天上工的班次色带（**0 或 N 条**）：班次作用域就是当前这个班次（0 或 1 条），全局作用域
    * 是当天所有上班的班次（后端日行的 `shift_bands`，休息班次已由 store 滤掉）。颜色与
    * `override` 标记都由 store 解析好，本组件只画。
+   *
+   * ⚠️ 形状直接引 store 的 `ShiftBandView`（**不要在这里手抄一份内联结构类型**）：store 那侧
+   *   加字段时这里会当场类型报错，而手抄出来的同形类型靠结构兼容悄悄放过、漂移无声）。
    */
-  bands: Array<{ color: string; title: string; override: boolean }>;
+  bands: ShiftBandView[];
   /** 是否是拖选区间的端点 / 区间内。 */
   selected: boolean;
   inRange: boolean;
@@ -233,15 +237,16 @@ function bandTitle(band: { title: string; override: boolean }): string {
   opacity: 0.62;
 }
 
-/* 补格（前后月）：只留一个极淡的框，不可点也不可拖选。 */
+/* 补格（前后月）：只留一个极淡的框，不可点也不可拖选。
+   ⚠️ 这里只藏 `.day-badges`：`.shift-bands` 补格**根本不渲染**（`showBands` 带
+   `cell.inMonth` 闸门），给它写一条 `visibility: hidden` 是够不着的死规则。 */
 .is-out {
   background: #fafbfc;
   border-style: dashed;
   opacity: 0.5;
 }
 
-.is-out .day-badges,
-.is-out .shift-bands {
+.is-out .day-badges {
   visibility: hidden;
 }
 

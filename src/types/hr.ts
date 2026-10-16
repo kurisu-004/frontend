@@ -36,7 +36,8 @@ export type HrDayType = (typeof HR_DAY_TYPES)[number];
 
 /** 2026-10-19 新增：日型 → 中文标签 / 是否工作日。**两档职责不可合并**：
  *  - `label` 是格内徽标、单元格标题、弹层下拉的文案源；
- *  - `isWorkday` 是**前端本地判定**（拖选浮条与月历格都要用，见下方 `isHrWorkday`）。
+ *  - `isWorkday` 是**前端本地判定**（当前唯一消费链是格内休息日弱化 `is-rest`，见下方
+ *    `isHrWorkday`）。
  *
  *  ⚠️ **本表不放颜色**：日型 → 颜色的映射收在
  *    `views/hr/schedule/utils/dayType.ts::dayTypeTagType`（6 档 → `el-tag` 的 5 个 `type`），
@@ -54,11 +55,18 @@ export const HR_DAY_TYPE_META: Record<HrDayType, { label: string; isWorkday: boo
  *  与后端 `is_workday` 判定**同源**，两处改一处即可，别各判一遍。 */
 export const HR_WORKDAY_DAY_TYPES: readonly HrDayType[] = ['WORKDAY', 'MAKEUP_WORKDAY'];
 
-/** 该日型是否算上班（拖选浮条的判定、色带「只给上工班次」的判定都用它）。
+/** 该日型是否算上班。
  *
- *  ⚠️ **前端必须保留这一份本地判定**，不能只读出参的 `is_workday`：拖选浮条在**请求发出前**
- *    就要判断当天能不能上班（那时还没有任何后端数据），全局日历色带的判据同理。两者同源，
- *    因此不会打架。 */
+ *  ⚠️ **当前只有一条运行时消费链**：全局作用域下由 store 转成 `ScheduleDayView.workday`
+ *    （`views/hr/schedule/composables/useScheduleStore.ts::calendarDays`），月历格据此给
+ *    休息日弱化日期号（`is-rest` 类）。`HR_DAY_TYPE_OPTIONS[].workday` 直接取的就是这份判据
+ *    （两个下拉当前都不按它过滤，同源性由 `views/hr/schedule/utils/__tests__/dayType.spec.ts`
+ *    钉住）。
+ *  ⚠️ **月历色带的闸门不是它**（2026-10-16 收敛）：色带判据是**班次级**的
+ *    `shift_bands[].is_workday`，由 store 侧解析，见
+ *    `views/hr/schedule/composables/useScheduleStore.ts::bandsOf` 与 `calendarDays`。
+ *    全局作用域下刻意不再按日级判据过第二道 ——「全局是休息日、某班次有覆盖行使其照常上班」
+ *    这条正是要靠不二次过滤才活得下来。 */
 export function isHrWorkday(dayType: HrDayType): boolean {
   return HR_DAY_TYPE_META[dayType].isWorkday;
 }
