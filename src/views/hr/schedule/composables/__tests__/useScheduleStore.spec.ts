@@ -116,17 +116,19 @@ const SHIFTS = {
       version: 1,
       color: null, // 没填色 ⇒ 走默认色
     }),
+    shiftRow({ id: '9000000000000904', code: 'EVE', name: '晚班', version: 1, color: '#2c6cb8' }),
   ],
 };
 const GLOBAL_DAYS = {
   items: [
     dayRow('2026-10-01', { day_type: 'STATUTORY_HOLIDAY', name: '国庆' }),
     dayRow('2026-10-03', { day_type: 'REST_DAY', derived: true }),
-    // 2026-10-06：两个班次上班、一个那天被覆盖成休息（`is_workday=false`）⇒ 只该出两段色带。
+    // 2026-10-06：**三个班次上班** + 一个被覆盖成休息（`is_workday=false`）⇒ 只该出三段色带。
     dayRow('2026-10-06', {
       shift_bands: [
         bandRow('9000000000000901'),
         bandRow('9000000000000903'),
+        bandRow('9000000000000904'),
         bandRow('9000000000000902', {
           effective_day_type: 'REST_DAY',
           is_workday: false,
@@ -221,8 +223,8 @@ describe('useScheduleStore — 不变量（闸门 / 切片解包 / $dispose）',
 
   it('I2：切片读不写 .value（嵌套 ref 自动解包），且代理 set 能写回', async () => {
     const store = await readyStore();
-    // 3 行：白班（有色）/ 夜班 / 中班（`color: null` ⇒ 走默认色，见 B1）。
-    expect(store.query.shifts).toHaveLength(3);
+    // 4 行：白班 / 夜班 / 中班（`color: null` ⇒ 走默认色，见 B1）/ 晚班。
+    expect(store.query.shifts).toHaveLength(4);
     // 出参是**信封**：hook 里 parse 完已取 `.items`，store 侧是数组而不是 `{items:[]}`。
     expect(Array.isArray(store.query.shifts)).toBe(true);
     expect(store.query.calendarDays instanceof Map).toBe(true);
@@ -262,12 +264,12 @@ describe('useScheduleStore — 逐班次色带（端点 1 的 shift_bands）', (
   it('B1：全局作用域 ⇒ 一格多段色带，各自取该班次的颜色与名字', async () => {
     const store = await readyStore();
     const bands = store.query.calendarDays.get('2026-10-06')?.bands ?? [];
-    // ⚠️ 三个班次里有一个那天被覆盖成休息（`is_workday = false`）⇒ **不出段**：
+    // ⚠️ 四个班次里有一个那天被覆盖成休息（`is_workday = false`）⇒ **不出段**：
     // 休息班次挂出色带等于「这天它在上班」，是直接说反的。
-    expect(bands).toHaveLength(2);
+    expect(bands.map((b) => b.title)).toEqual(['白班', '中班', '晚班']);
     expect(bands[0]).toEqual({ color: '#1e4d8b', title: '白班' });
+    expect(bands[2]).toEqual({ color: '#2c6cb8', title: '晚班' });
     // 没填色的班次（中班）走默认色，而不是「无背景色」。
-    expect(bands[1]!.title).toBe('中班');
     expect(bands[1]!.color).toBe('var(--primary-lighter)');
   });
 
