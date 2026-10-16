@@ -16,6 +16,9 @@
 //     下一次点格静默吞掉。
 //  5. **补格不落进选区** —— 拖到补格时识别作「没命中」，保持上一次悬停格（否则会把当月之外
 //     的日期批量写进库，而 invalidate 后的重查不含它 ⇒ 用户看不到任何变化）。
+//  6. **拖动过程中就有实时预览**（2026-10-16 补）：`update:selectedRange` 只在 mouseup 时才
+//     emit，所以拖动全程若只读 `props.selectedRange`，用户从头到尾看不到任何高亮 ——
+//     「我正在选哪几天」这条反馈缺了。
 //
 // EP 用桩而不是真组件：被测的是**拖选状态机**（区间 / 禁用 / 清理 / click 拦截），不复刻
 // el-popover 的内部实现（桩法照 `views/mail/digest/__tests__/MailScheduleSection.spec.ts`）。
@@ -33,6 +36,7 @@ const ElPopoverStub = {
     '<div class="mock-popover"><div class="mock-ref"><slot name="reference" /></div><slot /></div>',
 };
 const ElButtonStub = { name: 'ElButton', template: '<button><slot /></button>' };
+const ElTagStub = { name: 'ElTag', props: ['type', 'size', 'effect'], template: '<span><slot /></span>' };
 const ElRadioGroupStub = { name: 'ElRadioGroup', template: '<div><slot /></div>' };
 const ElRadioButtonStub = { name: 'ElRadioButton', template: '<span><slot /></span>' };
 const ElInputStub = { name: 'ElInput', template: '<input />' };
@@ -48,6 +52,8 @@ const globalConfig = {
   components: {
     'el-popover': ElPopoverStub,
     'el-button': ElButtonStub,
+    // 2026-10-16：格内日型徽标换成 `el-tag`，不给桩会渲染成未知元素并刷一串 warn。
+    'el-tag': ElTagStub,
     'el-radio-group': ElRadioGroupStub,
     'el-radio-button': ElRadioButtonStub,
     'el-input': ElInputStub,
@@ -68,7 +74,6 @@ function mountGrid(canEdit = true, cells: MonthCell[] = OCT2026) {
       cursor: { year: 2026, month: 10 },
       scopeIsShift: false,
       scopeLabel: '全局日历',
-      shiftColor: null,
       canEdit,
       writing: false,
       selectedRange: null,
@@ -131,6 +136,40 @@ describe('ScheduleMonthGrid — 拖选区间', () => {
     const w = mountGrid();
     await drag(w, '2026-10-04', '2026-10-04');
     expect(lastRange(w)).toBeNull();
+  });
+
+  // ⚠️ **用户报的核心 bug**（2026-10-16 补）：`update:selectedRange` 只在 mouseup 里 emit，
+  //   拖动全程读 `props.selectedRange` 永远是上一次的选区 ⇒ 松手之前零视觉反馈，用户根本
+  //   不知道自己在选哪几天。这条钉住「**mouseup 之前**就有 `is-in-range`」。
+  it('D14：拖到一半（**尚未 mouseup**）区间内格已带 `is-in-range`（实时预览）', async () => {
+    const w = mountGrid();
+    await w.find('[data-date="2026-10-03"]').trigger('mousedown', { button: 0 });
+    vi.spyOn(document, 'elementFromPoint').mockReturnValue(cellEl(w, '2026-10-05'));
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: 20, clientY: 20 }));
+    await w.vm.$nextTick();
+
+    expect(cellEl(w, '2026-10-04').classList.contains('is-in-range')).toBe(true);
+    expect(cellEl(w, '2026-10-03').classList.contains('is-selected')).toBe(true);
+    expect(cellEl(w, '2026-10-05').classList.contains('is-selected')).toBe(true);
+    // 区间外的不许亮：预览不是「全月高亮」。
+    expect(cellEl(w, '2026-10-06').classList.contains('is-in-range')).toBe(false);
+    // ⚠️ 实时预览**只管显示**：选区仍然要等 mouseup 才 emit 出去。
+    expect(w.emitted('update:selectedRange')).toBeFalsy();
+
+    window.dispatchEvent(new MouseEvent('mouseup', { clientX: 20, clientY: 20 }));
+    await w.vm.$nextTick();
+    expect(lastRange(w)).toEqual({ from: '2026-10-03', to: '2026-10-05' });
+  });
+
+  it('D15：松手后选区交回 `props`（拖动预览不留残影）', async () => {
+    const w = mountGrid();
+    await drag(w, '2026-10-03', '2026-10-05');
+    // 壳没把 emit 回来的区间喂回来（props 仍是 null）⇒ 高亮必须已经消失，而不是冻在原地。
+    await w.vm.$nextTick();
+    expect(cellEl(w, '2026-10-04').classList.contains('is-in-range')).toBe(false);
+
+    await w.setProps({ selectedRange: { from: '2026-10-03', to: '2026-10-05' } });
+    expect(cellEl(w, '2026-10-04').classList.contains('is-in-range')).toBe(true);
   });
 });
 

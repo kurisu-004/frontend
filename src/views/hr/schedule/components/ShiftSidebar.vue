@@ -140,16 +140,23 @@ async function onDeactivate(row: HrShiftData): Promise<void> {
 </script>
 
 <style lang="scss" scoped>
+/* 2026-10-16 新增：与左列月历**同高**，班次多了在自己这一列里滚（原先整页被撑长、两列
+   底边不齐）。`flex: 1` 吃卡片体的剩余高度，`min-height: 0` 才允许收缩到内容以下。 */
 .shift-sidebar {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 6px;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .sidebar-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  /* 列表变长时标题行不许被压扁（会被 `overflow-y: auto` 带着一起滚）。 */
+  flex: 0 0 auto;
 }
 
 .sidebar-title {

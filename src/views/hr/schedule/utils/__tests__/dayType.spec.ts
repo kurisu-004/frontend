@@ -12,8 +12,8 @@ import {
   crossDayText,
   dailyMinutesText,
   dayTypeAcceptsName,
-  dayTypeColorKey,
   dayTypeLabel,
+  dayTypeTagType,
   dayTypeRequiresName,
   isWorkdayDayType,
 } from '../dayType';
@@ -77,10 +77,9 @@ describe('isHrWorkday — 只有两档算上班', () => {
   });
 });
 
-describe('dayTypeLabel / dayTypeColorKey / 名称判据', () => {
-  it('L1：label / colorKey 取自 META', () => {
+describe('dayTypeLabel / dayTypeTagType / 名称判据', () => {
+  it('L1：label 取自 META', () => {
     expect(dayTypeLabel('CUSTOM_LEAVE')).toBe('自定义休息');
-    expect(dayTypeColorKey('MAKEUP_WORKDAY')).toBe('makeup-work');
   });
 
   it('L2：**能填名称** = `CUSTOM_LEAVE` / `STATUTORY_HOLIDAY`（法定节假日要能起「国庆节」的名）', () => {
@@ -101,7 +100,33 @@ describe('dayTypeLabel / dayTypeColorKey / 名称判据', () => {
   it('L3：未知日型不抛（守门在 Zod 那层，这里只保证标签渲染不炸）', () => {
     const bogus = 'SOMETHING_ELSE' as HrDayType;
     expect(dayTypeLabel(bogus)).toBe('SOMETHING_ELSE');
-    expect(dayTypeColorKey(bogus)).toBe('rest');
+    expect(dayTypeTagType(bogus)).toBe('info');
+  });
+});
+
+describe('dayTypeTagType — 6 档日型 → `el-tag` 的 type（映射表在 dayType.ts 一处）', () => {
+  it('T5：逐档映射钉死（格内徽标的颜色口径，改一处必须改两处会当场看见）', () => {
+    expect(dayTypeTagType('WORKDAY')).toBe('primary');
+    expect(dayTypeTagType('MAKEUP_WORKDAY')).toBe('success');
+    expect(dayTypeTagType('REST_DAY')).toBe('info');
+    expect(dayTypeTagType('MAKEUP_HOLIDAY')).toBe('info'); // 调休放假
+    expect(dayTypeTagType('STATUTORY_HOLIDAY')).toBe('danger');
+    expect(dayTypeTagType('CUSTOM_LEAVE')).toBe('warning');
+    // 取值必须落在 Element Plus 的 5 个 `type` 里（多写一个渲染不出来）。
+    for (const t of HR_DAY_TYPES) {
+      expect(['primary', 'success', 'info', 'warning', 'danger']).toContain(dayTypeTagType(t));
+    }
+  });
+
+  it('T6：`dayType === null`（后端没返那天）给 `info`，**不给 `primary`**', () => {
+    // 给 primary 会把「这条没数据」渲染成「这天照常上班」，用户照着改日型时判断依据是错的。
+    expect(dayTypeTagType(null)).toBe('info');
+  });
+
+  it('T7：`REST_DAY` 与 `MAKEUP_HOLIDAY` 同落 `info` 是**已定的取舍**（靠文字区分）', () => {
+    // 元素只有 5 个 type 而日型有 6 档，牺牲的是两档休息日的颜色区分（原先也都是灰系）。
+    expect(dayTypeTagType('REST_DAY')).toBe(dayTypeTagType('MAKEUP_HOLIDAY'));
+    expect(dayTypeLabel('REST_DAY')).not.toBe(dayTypeLabel('MAKEUP_HOLIDAY'));
   });
 });
 

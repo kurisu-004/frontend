@@ -54,6 +54,7 @@ import {
   shiftFormSchema,
   toShiftFieldErrors,
   type HrCalendarDayData,
+  type HrShiftBandData,
   type HrShiftCalendarDayData,
   type HrShiftData,
   type ShiftFormFieldErrors,
@@ -68,12 +69,26 @@ import { useHrCalendarQuery, useHrShiftsQuery, type ScheduleScope } from './useS
  *  「用户把选区一路拖出去」这类极端操作兜底的夹紧点。 */
 const MAX_RANGE_DAYS = 366;
 
+/** 班次色的默认值（班次没填色时用）。⚠️ 是个 **CSS 变量串**而不是 `#rrggbb`：它是直接喂给
+ *  格子 `:style="{ backgroundColor }"` 的，取主题变量才能跟着主题走（与 `ShiftSidebar` 的
+ *  `row.color ?? 'var(--primary-lighter)'` 同一口径）。班次色由出参 schema 守过 `#rrggbb`
+ *  （`hrShiftColorSchema`），没有注入面。 */
+const DEFAULT_SHIFT_BAND_COLOR = 'var(--primary-lighter)';
+
+/** 格内色带的一段（已解析到班次自己的色与名）。 */
+export interface ShiftBandView {
+  /** 背景色（`#rrggbb` 或默认的主题浅蓝）。 */
+  color: string;
+  /** 班次名：进原生 tooltip，让「多段颜色对应哪些班次」可辨认。 */
+  title: string;
+}
+
 /** 月历一格归一化后的视图对象。
  *
- *  两种作用域的出参形状不同（全局日历行带 `name` / `derived`，班次日历行带
+ *  两种作用域的出参形状不同（全局日历行带 `name` / `derived` / `shift_bands`，班次日历行带
  *  `global_day_type` / `is_override`），月历格与单元格编辑器却只想要「今天是什么日型、
- *  有没有被覆盖过」这一组判据。归一化收在 store 的 `calendarDays` 里，下游不必各写一遍
- *  作用域分支。 */
+ *  有没有被覆盖过、哪几个班次在上班」这一组判据。归一化收在 store 的 `calendarDays` 里，
+ *  下游不必各写一遍作用域分支。 */
 export interface ScheduleDayView {
   iso: string;
   /** 当前作用域下生效的日型（班次作用域 = `effective_day_type`）。 */
@@ -89,14 +104,14 @@ export interface ScheduleDayView {
   /** 是否算上班。班次作用域读后端算好的 `is_workday`，全局作用域前端本地判
    *  （`isHrWorkday`）—— 两者同源，不会打架。 */
   workday: boolean;
-}
-
-/** 本月统计（顶部那一行）。口径都按**当月格**算，补格不计入。 */
-export interface ScheduleMonthStats {
-  workdays: number;
-  restDays: number;
-  overrides: number;
-  makeupWorkdays: number;
+  /**
+   * 格底色带：**只含这一天上工的班次**（休息班次不出色段，否则整月每格都挂满色带，
+   * 反而看不出哪天有班）。班次作用域 0 或 1 条（就是当前这个班次），全局作用域 0 或 N 条。
+   *
+   * ⚠️ 后端 `shift_bands` 里 `is_workday = false` 的班次**照样给**（它只过滤停用班次），
+   *   过滤动作在本层做 —— 视图层不该自己判「这条要不要画」。
+   */
+  bands: ShiftBandView[];
 }
 
 /** 本地零点取「今天」的年月（翻月的默认落点）。 */
@@ -137,7 +152,7 @@ export const useScheduleStore = defineStore('hr-schedule', () => {
   const range = computed<HrCalendarRangeQuery>(() =>
     monthBounds(cursor.value.year, cursor.value.month),
   );
-  /** 42 格月历（月历格与统计共用同一份，避免两处各生成一次而某处忘了带年份判定）。 */
+  /** 42 格月历（格位与读端点的区间口径同源，避免两处各算一次而某处忘了带年份判定）。 */
   const cells = computed(() => buildMonthGrid(cursor.value.year, cursor.value.month));
 
   // ============ 切片：query（两条读端点）============
@@ -155,6 +170,33 @@ export const useScheduleStore = defineStore('hr-schedule', () => {
       row.color === '' ? { ...row, color: null } : row,
     ),
   );
+  /**
+   * `shift_id` → 班次行（色带的颜色与名字从这儿解析）。
+   *
+   * ⚠️ **只收 `is_active` 的行**：后端给的 `shift_bands` 也只含活动班次（口径见
+   *   `hrShiftBandSchema`），两边同口径；停用班次挂出色带只会让用户去找一个点不动的班次。
+   * ⚠️ **解析不到就给默认色 + 原始 ID**：色带是「这天上工的是谁」的视觉锚，静默丢掉一条
+   *   就变成「这天只有 1 个班次上班」的假信息。
+   */
+  const shiftsById = computed(() => {
+    const m = new Map<string, HrShiftData>();
+    for (const s of shifts.value) if (s.is_active) m.set(s.id, s);
+    return m;
+  });
+
+  /** 全局作用域：日行的逐班次色带 → 格底色段（**只留上工的**，见 `ScheduleDayView.bands`）。 */
+  function bandsOf(rows: HrShiftBandData[]): ShiftBandView[] {
+    return rows
+      .filter((b) => b.is_workday)
+      .map((b) => {
+        const shift = shiftsById.value.get(b.shift_id);
+        return {
+          color: shift?.color ?? DEFAULT_SHIFT_BAND_COLOR,
+          title: shift?.name ?? `班次 ${b.shift_id}`,
+        };
+      });
+  }
+
   /** 当前作用域的数据，已归一化成 `ScheduleDayView` 并按 `cal_date` 建索引。 */
   const calendarDays = computed<Map<string, ScheduleDayView>>(() => {
     const map = new Map<string, ScheduleDayView>();
@@ -171,9 +213,11 @@ export const useScheduleStore = defineStore('hr-schedule', () => {
           derived: d.derived,
           isOverride: false,
           workday: isWorkdayDayType(d.day_type),
+          bands: bandsOf(d.shift_bands),
         });
       } else {
         const d = row as HrShiftCalendarDayData;
+        // 班次作用域只有当前这一个班次 ⇒ 色带 0 或 1 条，判据与全局侧同一条「只给上工的」。
         map.set(d.cal_date, {
           iso: d.cal_date,
           dayType: d.effective_day_type,
@@ -182,6 +226,9 @@ export const useScheduleStore = defineStore('hr-schedule', () => {
           derived: false,
           isOverride: d.is_override,
           workday: d.is_workday,
+          bands: d.is_workday
+            ? [{ color: sc.color ?? DEFAULT_SHIFT_BAND_COLOR, title: sc.name }]
+            : [],
         });
       }
     }
@@ -194,21 +241,6 @@ export const useScheduleStore = defineStore('hr-schedule', () => {
     if (shiftsQuery.error.value) return hrErrorText(shiftsQuery.error.value, '班次列表加载失败');
     if (calendarQuery.error.value) return hrErrorText(calendarQuery.error.value, '日历加载失败');
     return null;
-  });
-
-  /** 本月统计：只数当月格（补格不计入）。 */
-  const stats = computed<ScheduleMonthStats>(() => {
-    const out: ScheduleMonthStats = { workdays: 0, restDays: 0, overrides: 0, makeupWorkdays: 0 };
-    for (const cell of cells.value) {
-      if (!cell.inMonth) continue;
-      const day = calendarDays.value.get(cell.iso);
-      if (!day) continue;
-      if (day.workday) out.workdays += 1;
-      else out.restDays += 1;
-      if (day.isOverride) out.overrides += 1;
-      if (day.dayType === 'MAKEUP_WORKDAY') out.makeupWorkdays += 1;
-    }
-    return out;
   });
 
   /** 当前作用域的人类可读名（「正在编辑：全局日历」/「正在编辑：夜班」）。 */
@@ -621,7 +653,6 @@ export const useScheduleStore = defineStore('hr-schedule', () => {
     scope,
     scopeLabel,
     scopeIsShift,
-    stats,
     loading,
     listErrorText,
     /** 开 enabled 闸门（壳的 onMounted 调）。 */

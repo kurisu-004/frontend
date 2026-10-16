@@ -16,6 +16,10 @@
   派发 `click`，而 `el-popover` 的 `trigger="click"` 就绑在这个 click 上。所以根节点挂
   **捕获阶段**的 click 拦截：刚刚真拖过（终点格 ≠ 起点格）就吞掉这一次 click，只拖一下不改
   单日。捕获阶段在 popover 自己的监听之前跑，所以拦得住。
+
+  2026-10-16 改：①「本月」去掉 `text`（三个翻页按钮形态一致）；② 工具栏右侧的提示文字
+  换成「清空本月覆盖」（页面级的图例 / 作用域两张卡退役后，它是这个动作在页面上**唯一**的入口）；
+  ③ 拖选过程中按本地 anchor + hover 现算实时选区（见 `liveRange`）；④ 色带改复数段。
 -->
 <template>
   <div class="month-grid" @click.capture="onRootClickCapture">
@@ -24,15 +28,22 @@
         <el-button size="small" @click="emit('gotoMonth', -1)">上一月</el-button>
         <span class="grid-title">{{ cursor.year }} 年 {{ cursor.month }} 月</span>
         <el-button size="small" @click="emit('gotoMonth', 1)">下一月</el-button>
-        <el-button size="small" text @click="emit('gotoToday')">本月</el-button>
+        <!-- ⚠️ 三个翻页按钮必须同形态（原先只有它带 `text`，一个默认、一个文字按钮）。 -->
+        <el-button size="small" @click="emit('gotoToday')">本月</el-button>
       </div>
-      <div class="grid-hint">
-        {{
-          canEdit
-            ? '拖选一段日期可批量改日型；单击某天改单日'
-            : '只读模式：可查看与翻月，不能改日历'
-        }}
-      </div>
+
+      <!-- 「清空本月覆盖」是端点 10 在页面上**唯一**的入口（页面级的作用域卡退役后搬到这里），
+           二次确认仍在壳里（`HrScheduleCalendar.onClearMonthOverrides`）。 -->
+      <el-button
+        v-if="scopeIsShift && canEdit"
+        size="small"
+        type="danger"
+        plain
+        :loading="writing"
+        @click="emit('clearMonthOverrides')"
+      >
+        清空本月覆盖
+      </el-button>
     </div>
 
     <div class="grid-weekdays">
@@ -60,8 +71,7 @@
           :derived="derivedOf(cell.iso)"
           :is-override="overrideOf(cell.iso)"
           :workday="workdayOf(cell.iso)"
-          :scope-is-shift="scopeIsShift"
-          :shift-color="shiftColor"
+          :bands="bandsOf(cell.iso)"
           :selected="isSelected(cell.iso)"
           :in-range="inRange(cell.iso)"
           @mousedown="onCellMouseDown(cell.iso, cell.inMonth, $event)"
@@ -92,13 +102,12 @@ const props = defineProps<{
   cursor: { year: number; month: number };
   scopeIsShift: boolean;
   scopeLabel: string;
-  /** 班次色（可空）。 */
-  shiftColor: string | null;
   /** 有没有排班管理权限（false = 拖选整体禁用）。 */
   canEdit: boolean;
-  /** 写端点忙态（透传给单元格编辑器的「应用」按钮）。 */
+  /** 写端点忙态（透传给单元格编辑器的「应用」按钮与「清空本月覆盖」）。 */
   writing: boolean;
-  /** 当前拖选区间（`null` = 没选）。 */
+  /** 当前拖选区间（`null` = 没选）。⚠️ 它**只在 mouseup 时才 emit**，拖动过程中读它永远是
+   *  上一次的选区 —— 拖动中的实时预览走 `liveRange`。 */
   selectedRange: { from: string; to: string } | null;
 }>();
 
@@ -108,7 +117,8 @@ const emit = defineEmits<
     ((e: 'dayApply', dayType: HrDayType, name: string | null) => void) &
     ((e: 'dayReset') => void) &
     ((e: 'gotoMonth', delta: number) => void) &
-    ((e: 'gotoToday') => void)
+    ((e: 'gotoToday') => void) &
+    ((e: 'clearMonthOverrides') => void)
 >();
 
 /** 表头：中文习惯里周日是一周第一天，故列序为 日…六。 */
@@ -129,6 +139,13 @@ function overrideOf(iso: string): boolean {
 }
 function workdayOf(iso: string): boolean {
   return props.calendarDays.get(iso)?.workday ?? false;
+}
+/** 共享的空数组常量：`bandsOf` 每个格子都要返回数组，给同一个引用省掉 42 次分配。 */
+const EMPTY_BANDS: Array<{ color: string; title: string }> = [];
+
+/** 格底色带（班次作用域 0 或 1 条、全局作用域 0 或 N 条；休息班次已由 store 滤掉）。 */
+function bandsOf(iso: string): Array<{ color: string; title: string }> {
+  return props.calendarDays.get(iso)?.bands ?? EMPTY_BANDS;
 }
 
 // ---- 拖选 ----
@@ -234,20 +251,46 @@ onBeforeUnmount(() => {
 });
 
 // ---- 选区判定 ----
+/**
+ * 拖动中的实时选区：拖拽期间用本地 anchor+hover 现算，松手后交回 props。
+ *  ⚠️ `selectedRange` 只在 mouseup 时才 emit，拖动中读它永远是上一次的选区
+ *  ⇒ 用户看不到「我正在选哪几天」。
+ *
+ * ⚠️ **只管显示，不改 emit 时机与载荷**：`update:selectedRange` 仍然只在 `onWindowMouseUp`
+ *   里发一次（松手才落选区 = 拖到一半按 Esc / 切月都不会留下一个没写出的选区）。
+ */
+const liveRange = computed(() => {
+  if (!dragging.value || !anchorIso.value || !hoverIso.value) return props.selectedRange;
+  const [lo, hi] = isoMinMax(anchorIso.value, hoverIso.value);
+  return { from: lo, to: hi };
+});
+
 function isSelected(iso: string): boolean {
-  return props.selectedRange?.from === iso || props.selectedRange?.to === iso;
+  return liveRange.value?.from === iso || liveRange.value?.to === iso;
 }
 function inRange(iso: string): boolean {
-  const r = props.selectedRange;
+  const r = liveRange.value;
   return !!r && iso >= r.from && iso <= r.to;
 }
 </script>
 
 <style lang="scss" scoped>
+/* 2026-10-16：整块月历占满「父级给定的高度」——`.main-content`（MainLayout）是 flex 定高 +
+   `overflow: auto`，壳（`HrScheduleCalendar`）逐层 `height: 100%` / `flex: 1` 放到这里。
+   ⚠️ **少放行一层整页就退回 auto 高度**：`flex: 1` 需要父级有确定高度，`min-height: 0` 需要
+    允许收缩到内容以下，两条缺一不可。 */
 .month-grid {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex: 1;
+  min-height: 0;
+}
+
+/* 工具栏与表头都是「内容高」的那几行：不许被 flex 压扁（表头被压扁时星期文字会挤成一团）。 */
+.grid-toolbar,
+.grid-weekdays {
+  flex: 0 0 auto;
 }
 
 .grid-toolbar {
@@ -271,16 +314,20 @@ function inRange(iso: string): boolean {
   text-align: center;
 }
 
-.grid-hint {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
 .grid-weekdays,
 .grid-body {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 4px;
+}
+
+/* ⚠️ **行数必须写死 6**：`MONTH_GRID_CELLS = 42 = 6 × 7`（`utils/monthGrid.ts`），格数恒定是
+   本域刻意的（翻月时格子位置不动）。写成 `auto` 时行高退回内容高，整块月历不占满；写成 6 行
+   `1fr` 才是「剩余空间按 6 行均分」。 */
+.grid-body {
+  grid-template-rows: repeat(6, minmax(0, 1fr));
+  flex: 1;
+  min-height: 0;
 }
 
 .grid-weekdays {

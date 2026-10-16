@@ -51,6 +51,7 @@ import { HR_SCHEDULE_ERROR_CODES, HR_SCHEDULE_ERROR_TEXT } from '@/views/hr/sche
 import {
   hrCalendarDaySchema,
   hrCalendarDaysResultSchema,
+  hrShiftBandSchema,
   hrShiftCalendarDaySchema,
   hrShiftCalendarResultSchema,
   hrShiftListResultSchema,
@@ -267,6 +268,22 @@ describe.skipIf(!BACKEND)('H：出参形状 / 业务码 / 口径锚点真·跨�
     );
   });
 
+  it('H3b：端点 1 逐班次色带 —— hrShiftBandSchema 的键集与后端 ShiftBandOut 双向相等', () => {
+    // ⚠️ **同 H1 的事故形状，只是这一层更隐蔽**：日行上的 `shift_bands` 元素是**嵌套**结构，
+    // 而前端最初连字段名都没抄 ⇒ `.strict()` 在**每一次** `GET /hr/calendar/days` 上抛
+    //   `unrecognized_keys`，全局日历整月「无数据」。嵌套层同样双向集合相等：后端加字段
+    //   （前端没跟上 → 生产逐屏抛）与前端多声明（恒 `undefined` 的死字段，且真响应直接抛）。
+    const backend = rustStructFields(readBackendVo(), 'ShiftBandOut').sort();
+    const frontend = zodKeys(hrShiftBandSchema);
+    expect(frontend, '端点 1 的 shift_bands 元素键与后端 ShiftBandOut 不一致').toEqual(backend);
+    // 雪花 ID 走 JSON **string**（元素里这一列不是 number）。
+    expect(frontend).toContain('shift_id');
+    expect(frontend).toContain('effective_day_type');
+    // 色带挂在**日行**上、不是信封上。
+    expect(zodKeys(hrCalendarDaySchema)).toContain('shift_bands');
+    expect(zodKeys(hrCalendarDaysResultSchema)).not.toContain('shift_bands');
+  });
+
   it('H4：端点 4 信封 —— hrShiftListResultSchema 的键集与后端 ShiftListOut 双向相等', () => {
     const backend = rustStructFields(readBackendVo(), 'ShiftListOut').sort();
     const frontend = zodKeys(hrShiftListResultSchema);
@@ -306,6 +323,7 @@ describe.skipIf(!BACKEND)('H：出参形状 / 业务码 / 口径锚点真·跨�
       'CalendarDaysWriteOut',
       'ShiftListOut',
       'ShiftOut',
+      'ShiftBandOut',
       'ShiftCalendarOut',
       'ShiftCalendarDayOut',
       'ShiftDaysWriteOut',

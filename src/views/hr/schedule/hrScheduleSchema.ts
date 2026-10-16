@@ -55,6 +55,30 @@ export const HR_SHIFT_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 // GET /api/v2/hr/calendar/days
 // ============================================================
 
+/**
+ * 全局日历里某一个班次在某一天的色带（`CalendarDayOut.shift_bands[]` 的元素）。
+ *
+ * ⚠️ **`is_workday = false` 的班次照样出现**（后端只过滤停用班次，不过滤休息）：前端决定要不要
+ *   渲染它（`useScheduleStore` 归一化时按 `is_workday` 滤掉休息班次，见该文件）。
+ * ⚠️ **必填、且 `.strict()`**：后端把 `shift_bands` 声明成必填数组（不是 `Option`），漏声明
+ *   就会在**每一次** `GET /hr/calendar/days` 上抛 `unrecognized_keys` ⇒ 全局日历整月「无数据」。
+ *   跨仓对账见 `src/api/__tests__/hrContractShape.spec.ts::H3b`。
+ */
+export const hrShiftBandSchema = z
+  .object({
+    /** 班次雪花 ID（JSON **string**，与 `ShiftCalendarOut.shift_id` 同款）。 */
+    shift_id: z.string(),
+    /** 该班次在这一天**真正生效**的日型（覆盖行 > 全局行 > 星期兜底三级推导）。 */
+    effective_day_type: hrDayTypeSchema,
+    /** `effective_day_type` 是否算上班（考勤取数的唯一判据）。 */
+    is_workday: z.boolean(),
+    /** 是否来自本班次的覆盖行（判据是存在性，不是「值是否与全局相同」）。 */
+    is_override: z.boolean(),
+  })
+  .strict();
+
+export type HrShiftBandData = z.infer<typeof hrShiftBandSchema>;
+
 /** 全局日历日行（`CalendarDayOut`）。 */
 export const hrCalendarDaySchema = z
   .object({
@@ -64,6 +88,11 @@ export const hrCalendarDaySchema = z
     name: z.string().nullable(),
     /** 推导标记：true = 无显式行、按星期兜底。渲染据此弱化，编辑器据此禁用「恢复默认」。 */
     derived: z.boolean(),
+    /**
+     * 该日**逐班次**的色带（2026-10-16 新增）：全局日历上渲染「所有班次的颜色」所需的
+     * 每日 × 每班次口径。只含 `is_active` 班次，按 `sort_order` 再 `code` 升序。
+     */
+    shift_bands: z.array(hrShiftBandSchema),
   })
   .strict();
 

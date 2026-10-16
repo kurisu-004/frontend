@@ -89,6 +89,7 @@ const DAY: ScheduleDayView = {
   derived: false,
   isOverride: false,
   workday: false,
+  bands: [],
 };
 
 function dayView(over: Partial<ScheduleDayView> = {}): ScheduleDayView {

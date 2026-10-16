@@ -2,16 +2,19 @@
 //
 // 2026-10-19 新建：6 档日型在本页的展示元数据（中文标签 / 色板键 / 是否工作日 / 班次跨天标注）。
 //
+// 2026-10-16 改：格内日型徽标由手写 `.dt-*` 色块换成 `el-tag` ⇒ 本文件接管「6 档日型 →
+// Element Plus `el-tag` 的 `type`」映射（见 `dayTypeTagType`），`dayTypeColorKey` 与
+// `ScheduleDayCell` 的六档手写色块一并退役（色板键本身仍由 `HR_DAY_TYPE_META` 提供给
+// 下拉选项，两处不再消费）。
+//
 // ⚠️ **枚举真源是 `@/types/hr`**：本文件只做「展示层取数」，**不再声明第二份 6 档字面量数组**
 //   ——`HR_DAY_TYPES` 提供顺序（`HR_DAY_TYPE_META` 是无序的对象，字面量键序不该拿来当
 //   展示顺序），标签 / 色板键 / 工作日判定一律从 `HR_DAY_TYPE_META` 读。防漂移由
 //   `__tests__/utils/dayType.spec.ts` 的「逐字相同」那条钉死。
 //
-// ⚠️ **颜色字面量不在本文件**：`HR_DAY_TYPE_META.colorKey` 是**色板键**（`workday` /
-//   `rest` / …），具体颜色映射写在 `components/ScheduleDayCell.vue` 的 scoped scss 里
-//   （`--primary-color` / `--primary-light` / `--primary-lighter` 三个主题色来自
-//   `src/styles/variables.scss` 的 `:root`）。types 层放颜色会让纯类型文件反向依赖样式口径，
-//   而样式集中在组件里才能随主题一起改。
+// ⚠️ **颜色字面量不在本文件**：`el-tag` 的 5 个 `type`（primary / success / info / warning /
+//   danger）就是颜色口径，本文件只做「日型 → type」的映射，具体配色由 Element Plus 主题给。
+//   班次色是另一套（用户自己填的 `#rrggbb`），与日型无关。
 
 import { HR_DAY_TYPE_META, HR_DAY_TYPES, isHrWorkday, type HrDayType } from '@/types/hr';
 import { MINUTES_PER_DAY } from './absTime';
@@ -38,14 +41,36 @@ export const HR_DAY_TYPE_OPTIONS: readonly DayTypeOption[] = HR_DAY_TYPES.map((v
 }));
 
 /** 中文标签。未知值回落到原样输出（**不抛**）：日型来自后端，守门在 Zod 那层，
- * 这里的非穷尽分支只服务于「标签渲染不出来」时不至于白屏。 */
+ *  这里的非穷尽分支只服务于「标签渲染不出来」时不至于白屏。 */
 export function dayTypeLabel(dayType: HrDayType): string {
   return HR_DAY_TYPE_META[dayType]?.label ?? String(dayType);
 }
 
-/** 色板键（`.dt-${key}` 的 key 部分）。 */
-export function dayTypeColorKey(dayType: HrDayType): string {
-  return HR_DAY_TYPE_META[dayType]?.colorKey ?? 'rest';
+/** 格内日型徽标用的 `el-tag` `type`（Element Plus 只给 5 档，元素与取值见其文档）。 */
+export type DayTypeTagType = 'primary' | 'success' | 'info' | 'warning' | 'danger';
+
+/**
+ * 6 档日型 → `el-tag` 的 `type`，**全页唯一一处**（`ScheduleDayCell` 只读这个函数，
+ *  不在组件里另抄一份映射）。
+ *
+ * ⚠️ **6 档挤 5 个 type 是已定的取舍**：`REST_DAY`（休息日）与 `MAKEUP_HOLIDAY`（调休放假）
+ *   同落 `info` —— 丢掉两者的颜色区分（原先也都是灰系，区分度本就极低），靠徽标上的**文字**
+ *   区分（`休息日` / `调休放假`）。反过来 `MAKEUP_WORKDAY`（调休上班）与 `WORKDAY` 分开，
+ *   因为「这天本该休却要上班」是排班员最需要一眼看到的那类日子。
+ * ⚠️ **无数据（`dayType === null`）给 `info` 而不是 `primary`**：给 `primary` 会把「这条
+ *   没返数据」渲染成「这天照常上班」，用户照着改日型时判断依据是错的。
+ */
+const DAY_TYPE_TAG_TYPE: Record<HrDayType, DayTypeTagType> = {
+  WORKDAY: 'primary',
+  MAKEUP_WORKDAY: 'success',
+  REST_DAY: 'info',
+  MAKEUP_HOLIDAY: 'info',
+  STATUTORY_HOLIDAY: 'danger',
+  CUSTOM_LEAVE: 'warning',
+};
+
+export function dayTypeTagType(dayType: HrDayType | null): DayTypeTagType {
+  return dayType ? (DAY_TYPE_TAG_TYPE[dayType] ?? 'info') : 'info';
 }
 
 /** 是否算上班。**转发 `@/types/hr` 的 `isHrWorkday`**，本页只此一处入口，判据改一处即可。 */

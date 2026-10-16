@@ -58,7 +58,7 @@ vi.mock('@/api/hr', () => ({
 import { ElMessage } from 'element-plus';
 import { useScheduleStore } from '../useScheduleStore';
 import { HR_SCHEDULE_ERROR_CODES } from '../../hrErrorText';
-import type { HrCalendarDayData, HrShiftData } from '../../hrScheduleSchema';
+import type { HrCalendarDayData, HrShiftBandData, HrShiftData } from '../../hrScheduleSchema';
 
 function shiftRow(over: Partial<HrShiftData> = {}): HrShiftData {
   return {
@@ -84,19 +84,56 @@ function shiftRow(over: Partial<HrShiftData> = {}): HrShiftData {
 }
 
 function dayRow(iso: string, over: Partial<HrCalendarDayData> = {}): HrCalendarDayData {
-  return { cal_date: iso, day_type: 'WORKDAY', name: null, derived: false, ...over };
+  return {
+    cal_date: iso,
+    day_type: 'WORKDAY',
+    name: null,
+    derived: false,
+    shift_bands: [],
+    ...over,
+  };
+}
+
+/** 日行上的逐班次色带（端点 1 的 `shift_bands`，2026-10-16 起**必填**）。 */
+function bandRow(shiftId: string, over: Partial<HrShiftBandData> = {}): HrShiftBandData {
+  return {
+    shift_id: shiftId,
+    effective_day_type: 'WORKDAY',
+    is_workday: true,
+    is_override: false,
+    ...over,
+  };
 }
 
 const SHIFTS = {
   items: [
     shiftRow(),
     shiftRow({ id: '9000000000000902', code: 'NIGHT', name: '夜班', version: 1 }),
+    shiftRow({
+      id: '9000000000000903',
+      code: 'MID',
+      name: '中班',
+      version: 1,
+      color: null, // 没填色 ⇒ 走默认色
+    }),
   ],
 };
 const GLOBAL_DAYS = {
   items: [
     dayRow('2026-10-01', { day_type: 'STATUTORY_HOLIDAY', name: '国庆' }),
     dayRow('2026-10-03', { day_type: 'REST_DAY', derived: true }),
+    // 2026-10-06：两个班次上班、一个那天被覆盖成休息（`is_workday=false`）⇒ 只该出两段色带。
+    dayRow('2026-10-06', {
+      shift_bands: [
+        bandRow('9000000000000901'),
+        bandRow('9000000000000903'),
+        bandRow('9000000000000902', {
+          effective_day_type: 'REST_DAY',
+          is_workday: false,
+          is_override: true,
+        }),
+      ],
+    }),
   ],
 };
 /**
@@ -184,7 +221,8 @@ describe('useScheduleStore — 不变量（闸门 / 切片解包 / $dispose）',
 
   it('I2：切片读不写 .value（嵌套 ref 自动解包），且代理 set 能写回', async () => {
     const store = await readyStore();
-    expect(store.query.shifts).toHaveLength(2);
+    // 3 行：白班（有色）/ 夜班 / 中班（`color: null` ⇒ 走默认色，见 B1）。
+    expect(store.query.shifts).toHaveLength(3);
     // 出参是**信封**：hook 里 parse 完已取 `.items`，store 侧是数组而不是 `{items:[]}`。
     expect(Array.isArray(store.query.shifts)).toBe(true);
     expect(store.query.calendarDays instanceof Map).toBe(true);
@@ -210,16 +248,45 @@ describe('useScheduleStore — 不变量（闸门 / 切片解包 / $dispose）',
     expect(second.dialogs.shiftVisible).toBe(false);
   });
 
-  it('I4：42 格月历与统计同源（统计只数当月格，补格不计入）', async () => {
+  it('I4：42 格月历与读端点区间同源（格数恒 42 = 6 行 × 7 列，区间恒为当月 1 号起）', async () => {
     const store = await readyStore();
     store.actions.gotoMonth(0);
     // 游标落在当月（测试运行时是今天所在月），后端返的 10-01 / 10-03 只在 10 月算数。
     store.actions.gotoMonth(new Date().getMonth() + 1 - new Date().getMonth());
     expect(store.query.cells).toHaveLength(42);
     expect(store.query.range.from.slice(8)).toBe('01');
-    expect(store.query.stats.workdays + store.query.stats.restDays).toBe(
-      store.query.cells.filter((c) => c.inMonth && store.query.calendarDays.has(c.iso)).length,
-    );
+  });
+});
+
+describe('useScheduleStore — 逐班次色带（端点 1 的 shift_bands）', () => {
+  it('B1：全局作用域 ⇒ 一格多段色带，各自取该班次的颜色与名字', async () => {
+    const store = await readyStore();
+    const bands = store.query.calendarDays.get('2026-10-06')?.bands ?? [];
+    // ⚠️ 三个班次里有一个那天被覆盖成休息（`is_workday = false`）⇒ **不出段**：
+    // 休息班次挂出色带等于「这天它在上班」，是直接说反的。
+    expect(bands).toHaveLength(2);
+    expect(bands[0]).toEqual({ color: '#1e4d8b', title: '白班' });
+    // 没填色的班次（中班）走默认色，而不是「无背景色」。
+    expect(bands[1]!.title).toBe('中班');
+    expect(bands[1]!.color).toBe('var(--primary-lighter)');
+  });
+
+  it('B2：没有色带的日子给空数组（不是 `undefined`）—— 格子据此不出色带容器', async () => {
+    const store = await readyStore();
+    expect(store.query.calendarDays.get('2026-10-03')?.bands).toEqual([]);
+  });
+
+  it('B3：班次作用域 ⇒ 只挂当前这一个班次的色带，且休息日不出段', async () => {
+    const store = await readyStore();
+    store.actions.selectScope({
+      kind: 'shift',
+      id: '9000000000000901',
+      name: '白班',
+      color: '#1e4d8b',
+    });
+    await tick();
+    // 10-05 在班次日历里被覆盖成休息（fixture 的 `is_workday: false`）。
+    expect(store.query.calendarDays.get('2026-10-05')?.bands).toEqual([]);
   });
 });
 

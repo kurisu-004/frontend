@@ -13,7 +13,7 @@
 //
 // 后两条**合成一个 hook**（`useHrCalendarQuery`）：月历只有一个数据源，作用域一变就换端点，
 // 拆成两条会让 store 里多出一组「A 作用域用 queryA、B 作用域用 queryB」的 enabled 编排，
-// 而它们的下游（`days` / `stats` / loading / 错误条）完全一致。代价是 queryKey 要随作用域
+// 而它们的下游（`days` 归一化 / loading / 错误条）完全一致。代价是 queryKey 要随作用域
 // 变（见下）。
 //
 // ⚠️ **`data` 是已剥掉信封的数组**（不是 `{items:[...]}`）：三条 hook 都在 queryFn 里

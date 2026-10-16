@@ -2,15 +2,23 @@
   HrScheduleCalendar.vue — 排班日历页壳
 
   2026-10-19 新建。职责只有**拼装 + 生命周期**（形态照
-  `views/wecom/webhooks/WeComWebhooksTab.vue`）：顶部图例与本月统计 + 作用域提示 + 左月历 +
-  右班次栏 + 拖选浮条 + 班次弹窗。全部页面态在
-  `composables/useScheduleStore.ts`（Pinia setup store，4 不变量见该文件头）。
+  `views/wecom/webhooks/WeComWebhooksTab.vue`）：左月历 + 右班次栏 + 拖选浮条 + 班次弹窗。
+  全部页面态在 `composables/useScheduleStore.ts`（Pinia setup store，4 不变量见该文件头）。
 
   ⚠️ **路由 `name: 'HrScheduleCalendar'` 与本文件名必须逐字一致**：MainLayout 的
   `<keep-alive :include>` 按名字匹配，对不上本页就没被缓存（切走再切回已翻到的月份与
   未提交的编辑全部消失，且没有任何报错）。见 `src/router/index.ts` 的同款注记。
 
   消费 store **不写 .value**（Pinia 深代理自动解包），统一 `store.切片.字段`。
+
+  2026-10-16 改：
+    - **删掉「图例 + 本月统计」卡与「正在编辑：X」作用域卡**。作用域标注不会全丢 ——
+      点单日弹层（`components/ScheduleDayEditor.vue`）的头部仍写着「正在编辑：X」，那条防误
+      操作的护栏保留；删的只是页面级的重复提示与没人消费的本月统计。
+    - 「清空本月覆盖」搬进月历工具栏（它是端点 10 在页面上唯一的入口，删卡就等于删功能）。
+    - 整块内容**占满 view 高度**：`.main-content`（MainLayout）是 flex 定高 + `overflow: auto`，
+      本页逐层放行高度（`.hr-schedule` → `el-row` → `el-card__body` → 月历 / 班次栏），
+      少一层整页就退回 auto 高度、月历只占上半屏。
 -->
 <template>
   <div v-loading="store.query.loading" class="hr-schedule">
@@ -33,70 +41,15 @@
       :title="store.query.listErrorText"
     />
 
-    <!-- 图例 + 本月统计 -->
-    <el-card shadow="never" class="legend-card">
-      <div class="legend-row">
-        <span class="legend-title">图例</span>
-        <span
-          v-for="opt in HR_DAY_TYPE_OPTIONS"
-          :key="opt.value"
-          :class="['legend-item', `dt-${opt.colorKey}`]"
-        >
-          {{ opt.label }}{{ opt.workday ? '' : '（休）' }}
-        </span>
-      </div>
-      <div class="stats-row">
-        <span class="stats-title">本月</span>
-        <span class="stats-item"
-          >工作日 <b>{{ store.query.stats.workdays }}</b> 天</span
-        >
-        <span class="stats-item"
-          >休息日 <b>{{ store.query.stats.restDays }}</b> 天</span
-        >
-        <span class="stats-item"
-          >覆盖 <b>{{ store.query.stats.overrides }}</b> 天</span
-        >
-        <span class="stats-item"
-          >加班 <b>{{ store.query.stats.makeupWorkdays }}</b> 天</span
-        >
-      </div>
-    </el-card>
-
-    <!-- 作用域提示 + 「清空本月覆盖」。⚠️ 作用域必须显式写在页面上：月历与批量动作的行为
-         随它变（全局是「恢复默认」，班次是「恢复继承全局」+ 清空覆盖）。 -->
-    <el-card shadow="never" class="scope-card">
-      <div class="scope-row">
-        <el-tag type="primary" effect="dark">正在编辑：{{ store.query.scopeLabel }}</el-tag>
-        <span class="scope-hint">
-          {{
-            store.query.scopeIsShift
-              ? '月历显示该班次的最终日型（覆盖优先），色带取班次色'
-              : '月历显示全局日型；拖选一段可批量改，点单格改单日'
-          }}
-        </span>
-        <el-button
-          v-if="store.query.scopeIsShift && canEdit"
-          size="small"
-          type="danger"
-          plain
-          :loading="store.actions.writing"
-          @click="onClearMonthOverrides"
-        >
-          清空本月覆盖
-        </el-button>
-      </div>
-    </el-card>
-
-    <el-row v-if="canView" :gutter="12">
-      <el-col :span="16">
-        <el-card shadow="never">
+    <el-row v-if="canView" :gutter="12" class="schedule-row">
+      <el-col :span="16" class="schedule-col">
+        <el-card shadow="never" class="schedule-card">
           <ScheduleMonthGrid
             :cells="store.query.cells"
             :calendar-days="store.query.calendarDays"
             :cursor="store.query.cursor"
             :scope-is-shift="store.query.scopeIsShift"
             :scope-label="store.query.scopeLabel"
-            :shift-color="scopeColor"
             :can-edit="canEdit"
             :writing="store.actions.writing"
             :selected-range="store.selection.range"
@@ -106,6 +59,7 @@
             @day-reset="store.actions.resetDay()"
             @goto-month="store.actions.gotoMonth($event)"
             @goto-today="store.actions.gotoThisMonth()"
+            @clear-month-overrides="onClearMonthOverrides"
           />
 
           <!-- 拖选浮条：只读模式下**不出现**（没得批量可做，给一条死浮条只会让人白点）。
@@ -128,8 +82,8 @@
         </el-card>
       </el-col>
 
-      <el-col :span="8">
-        <el-card shadow="never">
+      <el-col :span="8" class="schedule-col">
+        <el-card shadow="never" class="schedule-card">
           <ShiftSidebar
             :shifts="store.query.shifts"
             :scope="store.query.scope"
@@ -163,14 +117,13 @@
 //
 // 2026-10-19 新建：见文件头。
 
-import { computed, onBeforeUnmount, onMounted } from 'vue';
+import { onBeforeUnmount, onMounted } from 'vue';
 import { ElMessageBox } from 'element-plus';
 import ScheduleMonthGrid from './components/ScheduleMonthGrid.vue';
 import ScheduleSelectionBar from './components/ScheduleSelectionBar.vue';
 import ShiftSidebar from './components/ShiftSidebar.vue';
 import ShiftEditDialog from './components/ShiftEditDialog.vue';
 import { useScheduleStore } from './composables/useScheduleStore';
-import { HR_DAY_TYPE_OPTIONS } from './utils/dayType';
 import { canEditSchedule, canViewSchedule } from '@/utils/hrPermissions';
 import type { HrDayType } from '@/types/hr';
 import type { ShiftFormModel } from './hrScheduleSchema';
@@ -184,11 +137,6 @@ const store = useScheduleStore();
 const canEdit = canEditSchedule();
 const canView = canViewSchedule();
 
-/** 当前班次作用域的色带颜色（全局作用域无班次色，给 null 走默认）。 */
-const scopeColor = computed(() =>
-  store.query.scope === 'global' ? null : store.query.scope.color,
-);
-
 function onDayApply(dayType: HrDayType, name: string | null): void {
   void store.actions.setDay(dayType, name);
 }
@@ -197,7 +145,8 @@ function onBatchApply(dayType: HrDayType, name: string | null): void {
   void store.actions.applySelection(dayType, name);
 }
 
-/** 「清空本月覆盖」二次确认：它是**按区间批量删**一整个月的覆盖行，手一抖就擦掉一整月。 */
+/** 「清空本月覆盖」二次确认：它是**按区间批量删**一整个月的覆盖行，手一抖就擦掉一整月。
+ *  按钮搬进月历工具栏后本函数原样不动（壳仍是这条写端点的唯一入口）。 */
 async function onClearMonthOverrides(): Promise<void> {
   const { year, month } = store.query.cursor;
   try {
@@ -231,86 +180,50 @@ onBeforeUnmount(() => {
 </script>
 
 <style lang="scss" scoped>
+/* 2026-10-16 新增 `height: 100%`：`.main-content`（MainLayout）是 flex 定高 + `overflow: auto`
+   + `padding: 16px`，所以这里能解析出确定高度，月历才有「把剩余空间铺满」的基准。 */
 .hr-schedule {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  height: 100%;
 }
 
 .page-alert {
   margin-bottom: 0;
 }
 
-.legend-row,
-.stats-row {
+/* ⚠️ **逐层放行高度，少一层整页就退回 auto 高度**（月历只占上半屏）：
+     `el-row` 拿剩余空间 → `el-col` 自己是 flex 容器且允许收缩 → 卡片与卡片体撑满。
+   - `min-height: 0` 不能省：flex 项默认 `min-height: auto`，内容一高就不肯收缩；
+   - `el-card__body` 是 Element Plus 的内部结构，**必须 `:deep`** 才能改。 */
+.schedule-row {
+  flex: 1;
+  min-height: 0;
+}
+
+.schedule-col {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
+  min-height: 0;
 }
 
-.stats-row {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border-color);
-  font-size: 13px;
-  color: var(--text-regular);
-}
-
-.legend-title,
-.stats-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-/* 图例色板：与 `ScheduleDayCell.vue` 的 `.dt-*` 同六个键，两处必须同改。 */
-.legend-item {
-  padding: 1px 6px;
-  border-radius: 2px;
-  font-size: 12px;
-  line-height: 18px;
-}
-
-.dt-workday {
-  background: rgba(30, 77, 139, 0.12);
-  color: #1e4d8b;
-}
-
-.dt-makeup-work {
-  background: rgba(42, 108, 184, 0.14);
-  color: #2c6cb8;
-}
-
-.dt-rest {
-  background: #f0f2f5;
-  color: #6b7280;
-}
-
-.dt-holiday {
-  background: rgba(214, 122, 26, 0.16);
-  color: #b45309;
-}
-
-.dt-makeup-rest {
-  background: rgba(120, 113, 108, 0.16);
-  color: #78716c;
-}
-
-.dt-custom {
-  background: rgba(103, 58, 183, 0.14);
-  color: #673ab7;
-}
-
-.scope-row {
+.schedule-card {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
+  flex: 1;
+  flex-direction: column;
+  width: 100%;
+  min-height: 0;
 }
 
-.scope-hint {
-  font-size: 12px;
-  color: var(--text-secondary);
+.schedule-card :deep(.el-card__body) {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* 批量浮条在月历下方：高度按内容，不许被压扁（月历把剩余空间吃掉即可）。 */
+.schedule-card :deep(.selection-bar) {
+  flex: 0 0 auto;
 }
 </style>
