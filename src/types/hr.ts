@@ -34,23 +34,20 @@ export const HR_DAY_TYPES = [
 
 export type HrDayType = (typeof HR_DAY_TYPES)[number];
 
-/** 2026-10-19 新增：日型 → 中文标签 / 色板 key / 是否工作日。**三档职责不可合并**：
+/** 2026-10-19 新增：日型 → 中文标签 / 是否工作日。**两档职责不可合并**：
  *  - `label` 是格内徽标、单元格标题、弹层下拉的文案源；
- *  - `colorKey` 是**色板键**（`'workday'` / `'rest'` / …），**types 层不放颜色字面量**（那会让
- *    纯类型文件反向依赖样式口径）。2026-10-16 起页面上不再有消费它的色块（图例卡退役、
- *    格内徽标换成 `el-tag`），日型 → 颜色的映射改收在
- *    `views/hr/schedule/utils/dayType.ts::dayTypeTagType`（6 档 → `el-tag` 的 5 个 type）；
- *  - `isWorkday` 是**前端本地判定**（拖选浮条与月历格都要用，见下方 `isHrWorkday`）。 */
-export const HR_DAY_TYPE_META: Record<
-  HrDayType,
-  { label: string; colorKey: string; isWorkday: boolean }
-> = {
-  WORKDAY: { label: '工作日', colorKey: 'workday', isWorkday: true },
-  MAKEUP_WORKDAY: { label: '调休上班', colorKey: 'makeup-work', isWorkday: true },
-  REST_DAY: { label: '休息日', colorKey: 'rest', isWorkday: false },
-  STATUTORY_HOLIDAY: { label: '法定节假日', colorKey: 'holiday', isWorkday: false },
-  MAKEUP_HOLIDAY: { label: '调休放假', colorKey: 'makeup-rest', isWorkday: false },
-  CUSTOM_LEAVE: { label: '自定义休息', colorKey: 'custom', isWorkday: false },
+ *  - `isWorkday` 是**前端本地判定**（拖选浮条与月历格都要用，见下方 `isHrWorkday`）。
+ *
+ *  ⚠️ **本表不放颜色**：日型 → 颜色的映射收在
+ *    `views/hr/schedule/utils/dayType.ts::dayTypeTagType`（6 档 → `el-tag` 的 5 个 `type`），
+ *    配色由 Element Plus 主题给，types 层不反向依赖样式口径。 */
+export const HR_DAY_TYPE_META: Record<HrDayType, { label: string; isWorkday: boolean }> = {
+  WORKDAY: { label: '工作日', isWorkday: true },
+  MAKEUP_WORKDAY: { label: '调休上班', isWorkday: true },
+  REST_DAY: { label: '休息日', isWorkday: false },
+  STATUTORY_HOLIDAY: { label: '法定节假日', isWorkday: false },
+  MAKEUP_HOLIDAY: { label: '调休放假', isWorkday: false },
+  CUSTOM_LEAVE: { label: '自定义休息', isWorkday: false },
 };
 
 /** 2026-10-19 新增：算作「上班」的 2 档日型（`WORKDAY` / `MAKEUP_WORKDAY`）。

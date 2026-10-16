@@ -136,6 +136,17 @@ const GLOBAL_DAYS = {
         }),
       ],
     }),
+    // 2026-10-07：**全局是法定节假日，但白班有覆盖行使其照常上班**（后端 `vo.rs` 点名的场景）：
+    // 日级 `workday = false`，班次级 `is_workday = true`。这条 band 必须活着。
+    dayRow('2026-10-07', {
+      day_type: 'STATUTORY_HOLIDAY',
+      name: '中秋',
+      shift_bands: [
+        bandRow('9000000000000901', { effective_day_type: 'WORKDAY', is_override: true }),
+        bandRow('9000000000000902', { effective_day_type: 'STATUTORY_HOLIDAY', is_workday: false }),
+        bandRow('9000000000000904', { effective_day_type: 'STATUTORY_HOLIDAY', is_workday: false }),
+      ],
+    }),
   ],
 };
 /**
@@ -267,8 +278,8 @@ describe('useScheduleStore — 逐班次色带（端点 1 的 shift_bands）', (
     // ⚠️ 四个班次里有一个那天被覆盖成休息（`is_workday = false`）⇒ **不出段**：
     // 休息班次挂出色带等于「这天它在上班」，是直接说反的。
     expect(bands.map((b) => b.title)).toEqual(['白班', '中班', '晚班']);
-    expect(bands[0]).toEqual({ color: '#1e4d8b', title: '白班' });
-    expect(bands[2]).toEqual({ color: '#2c6cb8', title: '晚班' });
+    expect(bands[0]).toEqual({ color: '#1e4d8b', title: '白班', override: false });
+    expect(bands[2]).toEqual({ color: '#2c6cb8', title: '晚班', override: false });
     // 没填色的班次（中班）走默认色，而不是「无背景色」。
     expect(bands[1]!.color).toBe('var(--primary-lighter)');
   });
@@ -289,6 +300,41 @@ describe('useScheduleStore — 逐班次色带（端点 1 的 shift_bands）', (
     await tick();
     // 10-05 在班次日历里被覆盖成休息（fixture 的 `is_workday: false`）。
     expect(store.query.calendarDays.get('2026-10-05')?.bands).toEqual([]);
+  });
+
+  // ⚠️ `is_override` 进了 schema、进了对账，唯独不进 UI 的话，全局作用域下排班员**完全**
+  //   分辨不了「这天是全局配置」与「这天被某班次覆盖过」。
+  it('B4：band 带上 `override` 标记（被覆盖的那一段给 true，其余给 false）', async () => {
+    const store = await readyStore();
+    expect(store.query.calendarDays.get('2026-10-06')?.bands.map((b) => b.override)).toEqual([
+      false,
+      false,
+      false,
+    ]);
+    // 10-07：白班有覆盖行 ⇒ 这一段 `override: true`。
+    expect(store.query.calendarDays.get('2026-10-07')?.bands).toEqual([
+      { color: '#1e4d8b', title: '白班', override: true },
+    ]);
+  });
+
+  // ⚠️ **本域最有价值的一条信息**：全局是法定节假日，但某班次有覆盖行使其照常上班。
+  //   判据必须是**班次级**的 `shift_bands[].is_workday` —— 拿日级 `workday`（全局口径）再过
+  //   一道会把这条 band 杀掉，用户就永远看不到「白班这天照常上班」。
+  it('B5：**全局休息日 + 某班次覆盖上班 ⇒ 该段照样出**（日级 workday 不得当闸门）', async () => {
+    const store = await readyStore();
+    const day = store.query.calendarDays.get('2026-10-07');
+    // 日级判据确实是休息（所以任何按 `workday` 的二次过滤都会把它清掉）。
+    expect(day?.workday).toBe(false);
+    expect(day?.dayType).toBe('STATUTORY_HOLIDAY');
+    // 班次级判据：白班照常上班 ⇒ 出段；夜班 / 晚班随全局休息 ⇒ 不出段。
+    expect(day?.bands.map((b) => b.title)).toEqual(['白班']);
+  });
+
+  it('B6：全局休息日且**没有**任何班次覆盖上班 ⇒ 一段都不出（band 级判据自洽）', async () => {
+    const store = await readyStore();
+    const day = store.query.calendarDays.get('2026-10-01');
+    expect(day?.workday).toBe(false);
+    expect(day?.bands).toEqual([]);
   });
 });
 

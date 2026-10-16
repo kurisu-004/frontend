@@ -18,7 +18,7 @@
 //     的日期批量写进库，而 invalidate 后的重查不含它 ⇒ 用户看不到任何变化）。
 //  6. **拖动过程中就有实时预览**（2026-10-16 补）：`update:selectedRange` 只在 mouseup 时才
 //     emit，所以拖动全程若只读 `props.selectedRange`，用户从头到尾看不到任何高亮 ——
-//     「我正在选哪几天」这条反馈缺了。
+//     「我正在选哪几天」这条反馈缺了；但**按下瞬间**（还没拖过一格）必须零高亮，那不是选区。
 //
 // EP 用桩而不是真组件：被测的是**拖选状态机**（区间 / 禁用 / 清理 / click 拦截），不复刻
 // el-popover 的内部实现（桩法照 `views/mail/digest/__tests__/MailScheduleSection.spec.ts`）。
@@ -170,6 +170,30 @@ describe('ScheduleMonthGrid — 拖选区间', () => {
 
     await w.setProps({ selectedRange: { from: '2026-10-03', to: '2026-10-05' } });
     expect(cellEl(w, '2026-10-04').classList.contains('is-in-range')).toBe(true);
+  });
+
+  // ⚠️ **单击在本页是「打开单日编辑器」，不是「选中这一天」**：`mousedown` 即置 `dragging` +
+  //   `hoverIso`，若把「anchor === hover」也算成区间，按下瞬间那一格会先拿到 `is-selected` +
+  //   `is-in-range`、松手又被 `update:selectedRange(null)` 清掉 —— 闪的是一条假反馈。
+  it('D16：**按下瞬间（还没拖过一格）零高亮**，拖过一格才现区间预览', async () => {
+    const w = mountGrid();
+    await w.find('[data-date="2026-10-03"]').trigger('mousedown', { button: 0 });
+    await w.vm.$nextTick();
+
+    // 按下即未松手：`from === to` 不构成一次选区，起止格都不得亮。
+    expect(cellEl(w, '2026-10-03').classList.contains('is-selected')).toBe(false);
+    expect(cellEl(w, '2026-10-03').classList.contains('is-in-range')).toBe(false);
+
+    // 拖过一格 ⇒ 预览出现。
+    vi.spyOn(document, 'elementFromPoint').mockReturnValue(cellEl(w, '2026-10-04'));
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: 20, clientY: 20 }));
+    await w.vm.$nextTick();
+    expect(cellEl(w, '2026-10-03').classList.contains('is-selected')).toBe(true);
+    expect(cellEl(w, '2026-10-04').classList.contains('is-in-range')).toBe(true);
+
+    window.dispatchEvent(new MouseEvent('mouseup', { clientX: 20, clientY: 20 }));
+    await w.vm.$nextTick();
+    expect(lastRange(w)).toEqual({ from: '2026-10-03', to: '2026-10-04' });
   });
 });
 

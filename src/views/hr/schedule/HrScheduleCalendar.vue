@@ -17,8 +17,10 @@
       操作的护栏保留；删的只是页面级的重复提示与没人消费的本月统计。
     - 「清空本月覆盖」搬进月历工具栏（它是端点 10 在页面上唯一的入口，删卡就等于删功能）。
     - 整块内容**占满 view 高度**：`.main-content`（MainLayout）是 flex 定高 + `overflow: auto`，
-      本页逐层放行高度（`.hr-schedule` → `el-row` → `el-card__body` → 月历 / 班次栏），
-      少一层整页就退回 auto 高度、月历只占上半屏。
+      本页逐层放行高度（`.hr-schedule` → `el-row` → 列内 `.schedule-col-inner` → `el-card__body`
+      → 月历 / 班次栏），少一层整页就退回 auto 高度、月历只占上半屏。**高度链的 flex 容器放在
+      列内那层 div 上而不是 `el-col` 本身**（`el-col` 自带的 `display` 规则与本页 scoped 规则
+      特异性打平，靠注入顺序取胜的写法会静默失效，理由见该 div 的样式注释）。
 -->
 <template>
   <div v-loading="store.query.loading" class="hr-schedule">
@@ -43,58 +45,62 @@
 
     <el-row v-if="canView" :gutter="12" class="schedule-row">
       <el-col :span="16" class="schedule-col">
-        <el-card shadow="never" class="schedule-card">
-          <ScheduleMonthGrid
-            :cells="store.query.cells"
-            :calendar-days="store.query.calendarDays"
-            :cursor="store.query.cursor"
-            :scope-is-shift="store.query.scopeIsShift"
-            :scope-label="store.query.scopeLabel"
-            :can-edit="canEdit"
-            :writing="store.actions.writing"
-            :selected-range="store.selection.range"
-            @update:selected-range="store.selection.setSelectedRange($event)"
-            @select-day="store.dialogs.activeIso = $event"
-            @day-apply="onDayApply"
-            @day-reset="store.actions.resetDay()"
-            @goto-month="store.actions.gotoMonth($event)"
-            @goto-today="store.actions.gotoThisMonth()"
-            @clear-month-overrides="onClearMonthOverrides"
-          />
+        <div class="schedule-col-inner">
+          <el-card shadow="never" class="schedule-card">
+            <ScheduleMonthGrid
+              :cells="store.query.cells"
+              :calendar-days="store.query.calendarDays"
+              :cursor="store.query.cursor"
+              :scope-is-shift="store.query.scopeIsShift"
+              :scope-label="store.query.scopeLabel"
+              :can-edit="canEdit"
+              :writing="store.actions.writing"
+              :selected-range="store.selection.range"
+              @update:selected-range="store.selection.setSelectedRange($event)"
+              @select-day="store.dialogs.activeIso = $event"
+              @day-apply="onDayApply"
+              @day-reset="store.actions.resetDay()"
+              @goto-month="store.actions.gotoMonth($event)"
+              @goto-today="store.actions.gotoThisMonth()"
+              @clear-month-overrides="onClearMonthOverrides"
+            />
 
-          <!-- 拖选浮条：只读模式下**不出现**（没得批量可做，给一条死浮条只会让人白点）。
-               草稿（日型 / 名称）也走 store：选区的 owner 在 store 那边，「换选区即复位
-               草稿」这条不变式才写在同一个 owner 里。 -->
-          <ScheduleSelectionBar
-            v-if="canEdit"
-            :range="store.selection.range"
-            :count="store.selection.count"
-            :scope-is-shift="store.query.scopeIsShift"
-            :draft-day-type="store.selection.draftDayType"
-            :draft-name="store.selection.draftName"
-            :busy="store.actions.writing"
-            @draft-day-type="store.selection.setDraftDayType($event)"
-            @draft-name="store.selection.setDraftName($event)"
-            @apply="onBatchApply"
-            @clear="store.actions.clearSelected()"
-            @cancel="store.selection.clearSelection()"
-          />
-        </el-card>
+            <!-- 拖选浮条：只读模式下**不出现**（没得批量可做，给一条死浮条只会让人白点）。
+                 草稿（日型 / 名称）也走 store：选区的 owner 在 store 那边，「换选区即复位
+                 草稿」这条不变式才写在同一个 owner 里。 -->
+            <ScheduleSelectionBar
+              v-if="canEdit"
+              :range="store.selection.range"
+              :count="store.selection.count"
+              :scope-is-shift="store.query.scopeIsShift"
+              :draft-day-type="store.selection.draftDayType"
+              :draft-name="store.selection.draftName"
+              :busy="store.actions.writing"
+              @draft-day-type="store.selection.setDraftDayType($event)"
+              @draft-name="store.selection.setDraftName($event)"
+              @apply="onBatchApply"
+              @clear="store.actions.clearSelected()"
+              @cancel="store.selection.clearSelection()"
+            />
+          </el-card>
+        </div>
       </el-col>
 
       <el-col :span="8" class="schedule-col">
-        <el-card shadow="never" class="schedule-card">
-          <ShiftSidebar
-            :shifts="store.query.shifts"
-            :scope="store.query.scope"
-            :can-edit="canEdit"
-            :deactivating-row-id="store.actions.deactivatingRowId"
-            @select="store.actions.selectScope($event)"
-            @edit="store.dialogs.openEditShift($event)"
-            @deactivate="store.actions.deactivate($event)"
-            @create="store.dialogs.openCreateShift()"
-          />
-        </el-card>
+        <div class="schedule-col-inner">
+          <el-card shadow="never" class="schedule-card">
+            <ShiftSidebar
+              :shifts="store.query.shifts"
+              :scope="store.query.scope"
+              :can-edit="canEdit"
+              :deactivating-row-id="store.actions.deactivatingRowId"
+              @select="store.actions.selectScope($event)"
+              @edit="store.dialogs.openEditShift($event)"
+              @deactivate="store.actions.deactivate($event)"
+              @create="store.dialogs.openCreateShift()"
+            />
+          </el-card>
+        </div>
       </el-col>
     </el-row>
 
@@ -194,7 +200,7 @@ onBeforeUnmount(() => {
 }
 
 /* ⚠️ **逐层放行高度，少一层整页就退回 auto 高度**（月历只占上半屏）：
-     `el-row` 拿剩余空间 → `el-col` 自己是 flex 容器且允许收缩 → 卡片与卡片体撑满。
+     `el-row` 拿剩余空间 → 列内这层 div 是 flex 容器 → 卡片与卡片体撑满。
    - `min-height: 0` 不能省：flex 项默认 `min-height: auto`，内容一高就不肯收缩；
    - `el-card__body` 是 Element Plus 的内部结构，**必须 `:deep`** 才能改。 */
 .schedule-row {
@@ -202,8 +208,20 @@ onBeforeUnmount(() => {
   min-height: 0;
 }
 
+/* `el-col` 只是宽度与 gutter 的载体（还要 `min-height: 0`，否则作为 flex 项不肯收缩）。 */
 .schedule-col {
+  min-height: 0;
+}
+
+/* ⚠️ **高度链的 flex 容器是这一层，而不是 `el-col` 本身**：`el-col` 是 Element Plus 的内部
+   结构，它自带一条 `display` 规则（gutter 版为 `block`），与本页 scoped 的
+   `.schedule-col[data-v-x]` 特异性打平（都是 0,2,0），谁生效纯看样式注入顺序 —— 靠注入
+   顺序取胜的写法一旦 Element Plus 改一次默认值就静默失效（月历退回 auto 高度、只占上半屏，
+   且不报任何错）。卡片的高度改成从**本页自己的**这层 div 起算：卡片的父级就是它，无条件 flex。 */
+.schedule-col-inner {
   display: flex;
+  flex-direction: column;
+  height: 100%;
   min-height: 0;
 }
 
@@ -213,6 +231,9 @@ onBeforeUnmount(() => {
   flex-direction: column;
   width: 100%;
   min-height: 0;
+  /* EP 默认 `--el-card-padding: 20px`。42 格月历的纵向预算很紧（见
+     `ScheduleDayCell` 的 `.day-badges` 注释），收到 12px 把这点空间还给格子。 */
+  --el-card-padding: 12px;
 }
 
 .schedule-card :deep(.el-card__body) {
@@ -220,6 +241,11 @@ onBeforeUnmount(() => {
   flex: 1;
   flex-direction: column;
   min-height: 0;
+  /* ⚠️ **必须压掉 EP 默认的 `overflow: auto`**：卡片已被钉到视口高，内容一超出格内预算
+     （窄视口 + 拖选浮条展开）时，`auto` 会让卡片**内部**长出一条滚动条 —— 与「月历占满
+     view 高度、格内裁切」的目标互相打架，页面级滚动由 `.main-content` 的 `overflow: auto`
+     与班次栏的 `overflow-y: auto` 承担。 */
+  overflow: hidden;
 }
 
 /* 批量浮条在月历下方：高度按内容，不许被压扁（月历把剩余空间吃掉即可）。 */

@@ -3,7 +3,7 @@
 // 2026-10-19 新建：日型展示元数据的单测。核心是**防双份定义漂移**：
 // `utils/dayType.ts` 只做展示层取数，6 档的**枚举真源必须仍是 `@/types/hr` 的
 // `HR_DAY_TYPES` / `HR_DAY_TYPE_META` / `isHrWorkday`。本文件把这条钉死 —— 有人在本文件
-// 旁边另抄一份 6 档字面量数组时，下面 T2 / T3 立刻红。
+// 旁边另抄一份 6 档字面量数组时，下面 T2 立刻红。
 
 import { describe, expect, it } from 'vitest';
 import { HR_DAY_TYPE_META, HR_DAY_TYPES, isHrWorkday, type HrDayType } from '@/types/hr';
@@ -33,18 +33,12 @@ describe('HR_DAY_TYPE_OPTIONS — 与 `@/types/hr` 同源', () => {
     ]);
   });
 
-  it('T2：**每个 option 的 label / colorKey 都取自 `HR_DAY_TYPE_META`**（没抄第二份）', () => {
+  it('T2：**每个 option 的 label / workday 都取自 `HR_DAY_TYPE_META`**（没抄第二份）', () => {
     for (const opt of HR_DAY_TYPE_OPTIONS) {
       expect(opt.label).toBe(HR_DAY_TYPE_META[opt.value].label);
-      expect(opt.colorKey).toBe(HR_DAY_TYPE_META[opt.value].colorKey);
+      expect(opt.workday).toBe(HR_DAY_TYPE_META[opt.value].isWorkday);
       expect(opt.label.length).toBeGreaterThan(0);
-      expect(opt.colorKey.length).toBeGreaterThan(0);
     }
-  });
-
-  it('T3：6 个色板键互不相同（否则两类日型在月历里长得一样）', () => {
-    const keys = HR_DAY_TYPE_OPTIONS.map((o) => o.colorKey);
-    expect(new Set(keys).size).toBe(keys.length);
   });
 
   it('T4：6 档中文标签齐全（无空串 / 无英文枚举漏出）', () => {

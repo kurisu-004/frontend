@@ -81,6 +81,10 @@ export interface ShiftBandView {
   color: string;
   /** 班次名：进原生 tooltip，让「多段颜色对应哪些班次」可辨认。 */
   title: string;
+  /** 该段这一天**来自本班次的覆盖行**（`CalendarDayOut.shift_bands[].is_override`）。
+   *  ⚠️ 全局日历里「这天是全局配置」与「这天被某个班次覆盖过」是两回事，不给这个标记
+   *  排班员在全局视图上完全分辨不出来。班次作用域恒 false（那一侧另有格级 `isOverride`）。 */
+  override: boolean;
 }
 
 /** 月历一格归一化后的视图对象。
@@ -108,8 +112,12 @@ export interface ScheduleDayView {
    * 格底色带：**只含这一天上工的班次**（休息班次不出色段，否则整月每格都挂满色带，
    * 反而看不出哪天有班）。班次作用域 0 或 1 条（就是当前这个班次），全局作用域 0 或 N 条。
    *
-   * ⚠️ 后端 `shift_bands` 里 `is_workday = false` 的班次**照样给**（它只过滤停用班次），
-   *   过滤动作在本层做 —— 视图层不该自己判「这条要不要画」。
+   * ⚠️ **判据收在本层，视图层不再二次过滤**（2026-10-16 改）：日级 `workday` 只适用于**班次**
+   *   作用域（那边只有当前这一个班次，日级判定与班次级判定同源）；全局作用域下权威判据是
+   *   **班次级**的 `shift_bands[].is_workday` ——「全局是法定节假日、但某班次有覆盖行使其照常
+   *   上班」正是后端 `vo.rs` 点名的场景，若在这里再按日级 `workday` 过滤一遍，这条 band 会被
+   *   二次杀掉，用户就看不到「这个班次那天照常上班」这条本域最有价值的信息。band 数组非空
+   *   本身就等价于「至少有一个班次在这天上工」。
    */
   bands: ShiftBandView[];
 }
@@ -184,7 +192,13 @@ export const useScheduleStore = defineStore('hr-schedule', () => {
     return m;
   });
 
-  /** 全局作用域：日行的逐班次色带 → 格底色段（**只留上工的**，见 `ScheduleDayView.bands`）。 */
+  /** 全局作用域：日行的逐班次色带 → 格底色段（**只留上工的**，见 `ScheduleDayView.bands`）。
+   *
+   *  ⚠️ **过滤休息班次是本页的展示取舍，不是后端的语义**：后端 `vo.rs::ShiftBandOut` 明写
+   *  「`is_workday = false` 的班次照样出现，只过滤停用班次」—— 它要的是「这天哪些班次在休」
+   *  这份完整口径，滤掉就没有色带了。本页月历格只有一条底边，放满休息班次等于每天都挂一排
+   *  色块、反而看不出哪天有人上班，所以**只渲染上工的**（判据取 band 自己的 `is_workday`，
+   *  休息判定的权威在班次级而非日级，见 `ScheduleDayView.bands` 的注释）。 */
   function bandsOf(rows: HrShiftBandData[]): ShiftBandView[] {
     return rows
       .filter((b) => b.is_workday)
@@ -193,6 +207,7 @@ export const useScheduleStore = defineStore('hr-schedule', () => {
         return {
           color: shift?.color ?? DEFAULT_SHIFT_BAND_COLOR,
           title: shift?.name ?? `班次 ${b.shift_id}`,
+          override: b.is_override,
         };
       });
   }
@@ -213,11 +228,14 @@ export const useScheduleStore = defineStore('hr-schedule', () => {
           derived: d.derived,
           isOverride: false,
           workday: isWorkdayDayType(d.day_type),
+          // ⚠️ 不按日级 `workday` 再过一道：全局休息日 + 某班次覆盖上班正是 `shift_bands`
+          // 要表达的场景，过一遍日级判据就把这条 band 杀掉了（判据见 `bands` 的注释）。
           bands: bandsOf(d.shift_bands),
         });
       } else {
         const d = row as HrShiftCalendarDayData;
-        // 班次作用域只有当前这一个班次 ⇒ 色带 0 或 1 条，判据与全局侧同一条「只给上工的」。
+        // 班次作用域只有当前这一个班次 ⇒ 色带 0 或 1 条，判据就是后端算好的班次级 `is_workday`
+        // （该班次那天不上班 ⇒ 无段）。日级闸门在这一侧与班次级同源，不需要另一套判据。
         map.set(d.cal_date, {
           iso: d.cal_date,
           dayType: d.effective_day_type,
@@ -227,7 +245,7 @@ export const useScheduleStore = defineStore('hr-schedule', () => {
           isOverride: d.is_override,
           workday: d.is_workday,
           bands: d.is_workday
-            ? [{ color: sc.color ?? DEFAULT_SHIFT_BAND_COLOR, title: sc.name }]
+            ? [{ color: sc.color ?? DEFAULT_SHIFT_BAND_COLOR, title: sc.name, override: false }]
             : [],
         });
       }

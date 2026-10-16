@@ -93,7 +93,7 @@ import ScheduleDayCell from './ScheduleDayCell.vue';
 import ScheduleDayEditor from './ScheduleDayEditor.vue';
 import type { MonthCell } from '../utils/monthGrid';
 import { isoMinMax } from '../utils/monthGrid';
-import type { ScheduleDayView } from '../composables/useScheduleStore';
+import type { ShiftBandView, ScheduleDayView } from '../composables/useScheduleStore';
 
 const props = defineProps<{
   cells: MonthCell[];
@@ -141,10 +141,10 @@ function workdayOf(iso: string): boolean {
   return props.calendarDays.get(iso)?.workday ?? false;
 }
 /** 共享的空数组常量：`bandsOf` 每个格子都要返回数组，给同一个引用省掉 42 次分配。 */
-const EMPTY_BANDS: Array<{ color: string; title: string }> = [];
+const EMPTY_BANDS: ShiftBandView[] = [];
 
 /** 格底色带（班次作用域 0 或 1 条、全局作用域 0 或 N 条；休息班次已由 store 滤掉）。 */
-function bandsOf(iso: string): Array<{ color: string; title: string }> {
+function bandsOf(iso: string): ShiftBandView[] {
   return props.calendarDays.get(iso)?.bands ?? EMPTY_BANDS;
 }
 
@@ -253,14 +253,20 @@ onBeforeUnmount(() => {
 // ---- 选区判定 ----
 /**
  * 拖动中的实时选区：拖拽期间用本地 anchor+hover 现算，松手后交回 props。
- *  ⚠️ `selectedRange` 只在 mouseup 时才 emit，拖动中读它永远是上一次的选区
- *  ⇒ 用户看不到「我正在选哪几天」。
+ * ⚠️ `selectedRange` 只在 mouseup 时才 emit，拖动中读它永远是上一次的选区
+ * ⇒ 用户看不到「我正在选哪几天」。
+ *
+ * ⚠️ **按下瞬间（anchor === hover，即「还没拖过一格」）给 `null` 而不是单日区间**：
+ *   单击在本页是「打开单日编辑器」，不是「选中这一天」——若此时就给 `{from,to}` 落成同一格，
+ *   按下与松手之间会闪一次「已选中」高亮，松手又被 `update:selectedRange(null)` 清掉，闪的是
+ *   一条假反馈。拖过至少一格（`anchor !== hover`）才现区间预览。
  *
  * ⚠️ **只管显示，不改 emit 时机与载荷**：`update:selectedRange` 仍然只在 `onWindowMouseUp`
  *   里发一次（松手才落选区 = 拖到一半按 Esc / 切月都不会留下一个没写出的选区）。
  */
 const liveRange = computed(() => {
   if (!dragging.value || !anchorIso.value || !hoverIso.value) return props.selectedRange;
+  if (anchorIso.value === hoverIso.value) return null;
   const [lo, hi] = isoMinMax(anchorIso.value, hoverIso.value);
   return { from: lo, to: hi };
 });

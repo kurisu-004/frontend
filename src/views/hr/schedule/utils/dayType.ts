@@ -1,16 +1,11 @@
 // src/views/hr/schedule/utils/dayType.ts
 //
-// 2026-10-19 新建：6 档日型在本页的展示元数据（中文标签 / 色板键 / 是否工作日 / 班次跨天标注）。
-//
-// 2026-10-16 改：格内日型徽标由手写 `.dt-*` 色块换成 `el-tag` ⇒ 本文件接管「6 档日型 →
-// Element Plus `el-tag` 的 `type`」映射（见 `dayTypeTagType`），`dayTypeColorKey` 与
-// `ScheduleDayCell` 的六档手写色块一并退役（色板键本身仍由 `HR_DAY_TYPE_META` 提供给
-// 下拉选项，两处不再消费）。
+// 2026-10-19 新建：6 档日型在本页的展示元数据（中文标签 / 是否工作日 / 班次跨天标注）。
 //
 // ⚠️ **枚举真源是 `@/types/hr`**：本文件只做「展示层取数」，**不再声明第二份 6 档字面量数组**
 //   ——`HR_DAY_TYPES` 提供顺序（`HR_DAY_TYPE_META` 是无序的对象，字面量键序不该拿来当
-//   展示顺序），标签 / 色板键 / 工作日判定一律从 `HR_DAY_TYPE_META` 读。防漂移由
-//   `__tests__/utils/dayType.spec.ts` 的「逐字相同」那条钉死。
+//   展示顺序），标签 / 工作日判定一律从 `HR_DAY_TYPE_META` 读。防漂移由
+//   `views/hr/schedule/utils/__tests__/dayType.spec.ts` 的「逐字相同」那条钉死。
 //
 // ⚠️ **颜色字面量不在本文件**：`el-tag` 的 5 个 `type`（primary / success / info / warning /
 //   danger）就是颜色口径，本文件只做「日型 → type」的映射，具体配色由 Element Plus 主题给。
@@ -26,8 +21,6 @@ export interface DayTypeOption {
   value: HrDayType;
   /** 中文标签（后端 message 是给日志看的，图例与下拉一律用这个）。 */
   label: string;
-  /** 色板键，对应 `ScheduleDayCell.vue` 里的 `.dt-*` 类。 */
-  colorKey: string;
   /** 是否算上班（= `isHrWorkday(value)`，图例分组与浮条判定同源）。 */
   workday: boolean;
 }
@@ -36,7 +29,6 @@ export interface DayTypeOption {
 export const HR_DAY_TYPE_OPTIONS: readonly DayTypeOption[] = HR_DAY_TYPES.map((value) => ({
   value,
   label: HR_DAY_TYPE_META[value].label,
-  colorKey: HR_DAY_TYPE_META[value].colorKey,
   workday: isHrWorkday(value),
 }));
 
